@@ -512,16 +512,10 @@ class OpenAIAdapter(Adapter):
         for message in messages:
             content: list[dict[str, Any]] = []
 
-            def flush() -> None:
-                if content:
-                    serialized.append(
-                        {
-                            "type": "message",
-                            "role": message["role"],
-                            "content": list(content),
-                        }
-                    )
-                    content.clear()
+            def flush(role: str = message["role"], buf: list[dict[str, Any]] = content) -> None:
+                if buf:
+                    serialized.append({"type": "message", "role": role, "content": list(buf)})
+                    buf.clear()
 
             for block in message["content"]:
                 if block["type"] == "text":

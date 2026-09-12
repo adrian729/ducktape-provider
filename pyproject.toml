@@ -3,12 +3,34 @@ name = "ducktape-provider"
 version = "0.1.0"
 description = "One normalized chat/tool-use interface over Claude, OpenAI, and local Ollama — stdlib only."
 readme = "README.md"
+license = "MIT"
 authors = [
-    { email = "adrian.sanchez.albanell@gmail.com" }
+    { name = "Adrian Sanchez Albanell", email = "adrian.sanchez.albanell@gmail.com" }
 ]
 requires-python = ">=3.12"
 dependencies = []
+keywords = ["llm", "anthropic", "claude", "openai", "ollama", "chat", "tool-use", "ai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/adrian729/ducktape-provider"
+Repository = "https://github.com/adrian729/ducktape-provider"
+Issues = "https://github.com/adrian729/ducktape-provider/issues"
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["ruff>=0.16.7,<0.17"]
