@@ -146,7 +146,7 @@ class OpenAIDeserializeTests(unittest.TestCase):
             ],
             "usage": {"input_tokens": 1, "output_tokens": 2},
         }
-        response = self.adapter._deserialize(data)
+        response = self.adapter._deserialize(data, 0.0)
         self.assertEqual(response["content"], [{"type": "text", "text": "hi"}])
         self.assertEqual(response["stop_reason"], "end_turn")
 
@@ -162,7 +162,7 @@ class OpenAIDeserializeTests(unittest.TestCase):
                 }
             ],
         }
-        response = self.adapter._deserialize(data)
+        response = self.adapter._deserialize(data, 0.0)
         self.assertEqual(
             response["content"],
             [
@@ -182,9 +182,128 @@ class OpenAIDeserializeTests(unittest.TestCase):
             "incomplete_details": {"reason": "max_output_tokens"},
             "output": [],
         }
-        response = self.adapter._deserialize(data)
+        response = self.adapter._deserialize(data, 0.0)
         self.assertEqual(response["stop_reason"], "max_tokens")
         self.assertEqual(response["raw_stop_reason"], "max_output_tokens")
+
+    def test_maps_cache_usage_fields_when_present(self):
+        data = {
+            "status": "completed",
+            "output": [],
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 5,
+                "input_tokens_details": {
+                    "cached_tokens": 100,
+                    "cache_write_tokens": 20,
+                },
+            },
+        }
+        response = self.adapter._deserialize(data, 0.0)
+        self.assertEqual(
+            response["usage"],
+            {
+                "input_tokens": 3,
+                "output_tokens": 5,
+                "cache_read_tokens": 100,
+                "cache_write_tokens": 20,
+            },
+        )
+
+    def test_maps_cache_read_only(self):
+        data = {
+            "status": "completed",
+            "output": [],
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 5,
+                "input_tokens_details": {"cached_tokens": 100},
+            },
+        }
+        response = self.adapter._deserialize(data, 0.0)
+        self.assertEqual(
+            response["usage"],
+            {"input_tokens": 3, "output_tokens": 5, "cache_read_tokens": 100},
+        )
+        self.assertNotIn("cache_write_tokens", response["usage"])
+
+    def test_maps_cache_write_only(self):
+        data = {
+            "status": "completed",
+            "output": [],
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 5,
+                "input_tokens_details": {"cache_write_tokens": 20},
+            },
+        }
+        response = self.adapter._deserialize(data, 0.0)
+        self.assertEqual(
+            response["usage"],
+            {"input_tokens": 3, "output_tokens": 5, "cache_write_tokens": 20},
+        )
+        self.assertNotIn("cache_read_tokens", response["usage"])
+
+    def test_omits_cache_usage_fields_when_absent(self):
+        data = {
+            "status": "completed",
+            "output": [],
+            "usage": {"input_tokens": 3, "output_tokens": 5},
+        }
+        response = self.adapter._deserialize(data, 0.0)
+        self.assertNotIn("cache_read_tokens", response["usage"])
+        self.assertNotIn("cache_write_tokens", response["usage"])
+
+    def test_reasoning_item_produces_thinking_block(self):
+        data = {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "thinking hard"}],
+                }
+            ],
+        }
+        response = self.adapter._deserialize(data, 0.0)
+        self.assertEqual(
+            response["content"],
+            [{"type": "thinking", "thinking": "thinking hard"}],
+        )
+
+    def test_reasoning_item_joins_multiple_summary_parts(self):
+        data = {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "summary": [
+                        {"type": "summary_text", "text": "step one"},
+                        {"type": "summary_text", "text": "step two"},
+                    ],
+                }
+            ],
+        }
+        response = self.adapter._deserialize(data, 0.0)
+        self.assertEqual(
+            response["content"],
+            [{"type": "thinking", "thinking": "step one\nstep two"}],
+        )
+
+    def test_reasoning_item_with_empty_summary_produces_no_thinking_block(self):
+        data = {
+            "status": "completed",
+            "output": [{"type": "reasoning", "summary": []}],
+        }
+        response = self.adapter._deserialize(data, 0.0)
+        self.assertEqual(response["content"], [])
+
+    def test_reasoning_item_with_absent_summary_produces_no_thinking_block(self):
+        data = {
+            "status": "completed",
+            "output": [{"type": "reasoning"}],
+        }
+        response = self.adapter._deserialize(data, 0.0)
+        self.assertEqual(response["content"], [])
 
 
 class OpenAIChatHTTPTests(unittest.TestCase):
@@ -211,6 +330,8 @@ class OpenAIChatHTTPTests(unittest.TestCase):
         )
         self.assertEqual(response["stop_reason"], "tool_use")
         self.assertEqual(response["usage"], {"input_tokens": 12, "output_tokens": 9})
+        self.assertIsInstance(response["latency_ms"], float)
+        self.assertGreaterEqual(response["latency_ms"], 0)
         request = mock_urlopen.call_args.args[0]
         self.assertEqual(request.full_url, OpenAIAdapter._RESPONSES_URL)
         sent = json.loads(request.data)
@@ -262,10 +383,73 @@ class OpenAIStreamChatHTTPTests(unittest.TestCase):
             ],
         )
         final = events[-1]["response"]
-        buffered = self.adapter._deserialize(FINAL_DATA)
+        buffered = self.adapter._deserialize(FINAL_DATA, 0.0)
         self.assertEqual(final["content"], buffered["content"])
         self.assertEqual(final["stop_reason"], buffered["stop_reason"])
         self.assertEqual(final["usage"], buffered["usage"])
+        self.assertIsInstance(final["latency_ms"], float)
+        self.assertGreaterEqual(final["latency_ms"], 0)
+
+    @patch("urllib.request.urlopen")
+    def test_stream_chat_reasoning_summary_deltas_produce_thinking_block(
+        self, mock_urlopen
+    ):
+        events_in = [
+            {
+                "type": "response.output_item.added",
+                "item": {"id": "rs_1", "type": "reasoning"},
+            },
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "summary_index": 0,
+                "delta": "thinking ",
+            },
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "summary_index": 0,
+                "delta": "hard",
+            },
+            {
+                "type": "response.output_item.done",
+                "item": {"id": "rs_1", "type": "reasoning"},
+            },
+            {"type": "response.completed", "response": FINAL_DATA},
+        ]
+        mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events_in))
+
+        events = list(self.adapter.stream_chat("gpt-x", MESSAGES))
+
+        self.assertEqual(
+            [e["type"] for e in events],
+            ["thinking_delta", "thinking_delta", "block_stop", "message_stop"],
+        )
+        self.assertEqual(events[0]["index"], 0)
+        self.assertEqual(events[0]["thinking"], "thinking ")
+        self.assertEqual(events[1]["thinking"], "hard")
+        self.assertEqual(events[2]["index"], 0)
+
+    @patch("urllib.request.urlopen")
+    def test_stream_chat_reasoning_item_without_deltas_emits_no_block_stop(
+        self, mock_urlopen
+    ):
+        events_in = [
+            {
+                "type": "response.output_item.added",
+                "item": {"id": "rs_1", "type": "reasoning"},
+            },
+            {
+                "type": "response.output_item.done",
+                "item": {"id": "rs_1", "type": "reasoning"},
+            },
+            {"type": "response.completed", "response": FINAL_DATA},
+        ]
+        mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events_in))
+
+        events = list(self.adapter.stream_chat("gpt-x", MESSAGES))
+
+        self.assertEqual([e["type"] for e in events], ["message_stop"])
 
     @patch("urllib.request.urlopen")
     def test_stream_chat_raises_server_error_on_500(self, mock_urlopen):

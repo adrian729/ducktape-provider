@@ -95,6 +95,7 @@ StopReason = Literal[
     "stop_sequence",
     "content_filter",
     "refusal",
+    "pause_turn",
     "other",
 ]
 
@@ -102,6 +103,8 @@ StopReason = Literal[
 class Usage(TypedDict):
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: NotRequired[int]
+    cache_write_tokens: NotRequired[int]
 
 
 class Response(TypedDict):
@@ -110,6 +113,7 @@ class Response(TypedDict):
     raw_stop_reason: str
     usage: Usage
     raw: dict[str, Any]
+    latency_ms: float
 
 
 class TextDeltaEvent(TypedDict):

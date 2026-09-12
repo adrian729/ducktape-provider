@@ -14,7 +14,7 @@ from typing import Any
 from .. import errors
 from ..adapter import Adapter
 from ..streaming import _iter_sse
-from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef
+from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef, Usage
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ class OpenAIAdapter(Adapter):
             for t in tools
         ]
 
-    def _deserialize(self, data: dict[str, Any]) -> Response:
+    def _deserialize(self, data: dict[str, Any], latency_ms: float) -> Response:
         blocks: list[Block] = []
         has_refusal = False
         for item in data.get("output", []):
@@ -156,6 +156,14 @@ class OpenAIAdapter(Adapter):
                         "input": args,
                     }
                 )
+            elif item.get("type") == "reasoning":
+                thinking = "\n".join(
+                    part["text"]
+                    for part in item.get("summary", [])
+                    if part.get("type") == "summary_text"
+                )
+                if thinking:
+                    blocks.append({"type": "thinking", "thinking": thinking})
 
         has_tool_use = any(b["type"] == "tool_use" for b in blocks)
         status = data.get("status", "")
@@ -174,15 +182,26 @@ class OpenAIAdapter(Adapter):
             stop_reason = "other"
 
         usage = data.get("usage") or {}
+        normalized_usage: Usage = {
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+        }
+        input_tokens_details = usage.get("input_tokens_details") or {}
+        if "cached_tokens" in input_tokens_details:
+            normalized_usage["cache_read_tokens"] = input_tokens_details[
+                "cached_tokens"
+            ]
+        if "cache_write_tokens" in input_tokens_details:
+            normalized_usage["cache_write_tokens"] = input_tokens_details[
+                "cache_write_tokens"
+            ]
         return {
             "content": blocks,
             "stop_reason": stop_reason,
             "raw_stop_reason": incomplete_reason or status,
-            "usage": {
-                "input_tokens": usage.get("input_tokens", 0),
-                "output_tokens": usage.get("output_tokens", 0),
-            },
+            "usage": normalized_usage,
             "raw": data,
+            "latency_ms": latency_ms,
         }
 
     def _build_request(
@@ -229,6 +248,7 @@ class OpenAIAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=False
         )
+        start = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.load(resp)
@@ -240,7 +260,7 @@ class OpenAIAdapter(Adapter):
             errors.raise_for_connection_error("openai", e)
         if data.get("status") == "failed":
             raise errors.APIError(f"openai chat failed: {data.get('error')}")
-        return self._deserialize(data)
+        return self._deserialize(data, (time.monotonic() - start) * 1000)
 
     def stream_chat(
         self,
@@ -250,12 +270,13 @@ class OpenAIAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
+        start = time.monotonic()
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=True
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                yield from self._stream_events(resp)
+                yield from self._stream_events(resp, start)
         except urllib.error.HTTPError as e:
             errors.raise_for_http_error("openai", e)
         except TimeoutError as e:
@@ -263,7 +284,9 @@ class OpenAIAdapter(Adapter):
         except urllib.error.URLError as e:
             errors.raise_for_connection_error("openai", e)
 
-    def _stream_events(self, resp: http.client.HTTPResponse) -> Iterator[StreamEvent]:
+    def _stream_events(
+        self, resp: http.client.HTTPResponse, start: float
+    ) -> Iterator[StreamEvent]:
         block_index_by_item: dict[str, int] = {}
         next_index = 0
 
@@ -297,9 +320,15 @@ class OpenAIAdapter(Adapter):
                     "index": block_index(event["item_id"]),
                     "partial_json": event["delta"],
                 }
+            elif etype == "response.reasoning_summary_text.delta":
+                yield {
+                    "type": "thinking_delta",
+                    "index": block_index(event["item_id"]),
+                    "thinking": event["delta"],
+                }
             elif etype == "response.output_item.done":
                 item = event["item"]
-                if item.get("type") != "reasoning":
+                if item["id"] in block_index_by_item:
                     yield {"type": "block_stop", "index": block_index(item["id"])}
             elif etype in (
                 "response.completed",
@@ -309,4 +338,9 @@ class OpenAIAdapter(Adapter):
                 data = event["response"]
                 if data.get("status") == "failed":
                     raise errors.APIError(f"openai chat failed: {data.get('error')}")
-                yield {"type": "message_stop", "response": self._deserialize(data)}
+                yield {
+                    "type": "message_stop",
+                    "response": self._deserialize(
+                        data, (time.monotonic() - start) * 1000
+                    ),
+                }

@@ -4,6 +4,7 @@ import http.client
 import json
 import logging
 import os
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -119,7 +120,7 @@ class OllamaLocalAdapter(Adapter):
             for t in tools
         ]
 
-    def _deserialize(self, data: dict[str, Any]) -> Response:
+    def _deserialize(self, data: dict[str, Any], latency_ms: float) -> Response:
         message = data.get("message", {})
         blocks: list[Block] = []
         if thinking := message.get("thinking"):
@@ -163,6 +164,7 @@ class OllamaLocalAdapter(Adapter):
                 "output_tokens": data.get("eval_count", 0),
             },
             "raw": data,
+            "latency_ms": latency_ms,
         }
 
     def _build_request(
@@ -204,6 +206,7 @@ class OllamaLocalAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=False
         )
+        start = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.load(resp)
@@ -213,7 +216,7 @@ class OllamaLocalAdapter(Adapter):
             errors.raise_for_connection_error("ollama", e)
         except urllib.error.URLError as e:
             errors.raise_for_connection_error("ollama", e)
-        return self._deserialize(data)
+        return self._deserialize(data, (time.monotonic() - start) * 1000)
 
     def stream_chat(
         self,
@@ -223,12 +226,13 @@ class OllamaLocalAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
+        start = time.monotonic()
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=True
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                yield from self._stream_events(resp)
+                yield from self._stream_events(resp, start)
         except urllib.error.HTTPError as e:
             errors.raise_for_http_error("ollama", e)
         except TimeoutError as e:
@@ -236,7 +240,9 @@ class OllamaLocalAdapter(Adapter):
         except urllib.error.URLError as e:
             errors.raise_for_connection_error("ollama", e)
 
-    def _stream_events(self, resp: http.client.HTTPResponse) -> Iterator[StreamEvent]:
+    def _stream_events(
+        self, resp: http.client.HTTPResponse, start: float
+    ) -> Iterator[StreamEvent]:
         thinking_index: int | None = None
         text_index: int | None = None
         thinking = ""
@@ -295,4 +301,7 @@ class OllamaLocalAdapter(Adapter):
             "content": text,
             "thinking": thinking,
         }
-        yield {"type": "message_stop", "response": self._deserialize(data)}
+        yield {
+            "type": "message_stop",
+            "response": self._deserialize(data, (time.monotonic() - start) * 1000),
+        }

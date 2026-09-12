@@ -13,7 +13,7 @@ from typing import Any
 from .. import errors
 from ..adapter import Adapter
 from ..streaming import _iter_sse
-from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef
+from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef, Usage
 
 
 class ClaudeAdapter(Adapter):
@@ -137,7 +137,7 @@ class ClaudeAdapter(Adapter):
             for t in tools
         ]
 
-    def _deserialize(self, data: dict[str, Any]) -> Response:
+    def _deserialize(self, data: dict[str, Any], latency_ms: float) -> Response:
         blocks: list[Block] = data.get("content", [])
 
         raw_reason = data.get("stop_reason", "")
@@ -151,19 +151,31 @@ class ClaudeAdapter(Adapter):
             stop_reason = "refusal"
         elif raw_reason == "end_turn":
             stop_reason = "end_turn"
+        elif raw_reason == "pause_turn":
+            stop_reason = "pause_turn"
         else:
             stop_reason = "other"
 
-        usage = data.get("usage", {})
+        usage = data.get("usage") or {}
+        normalized_usage: Usage = {
+            "input_tokens": usage.get("input_tokens", 0)
+            + usage.get("cache_read_input_tokens", 0)
+            + usage.get("cache_creation_input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+        }
+        if "cache_read_input_tokens" in usage:
+            normalized_usage["cache_read_tokens"] = usage["cache_read_input_tokens"]
+        if "cache_creation_input_tokens" in usage:
+            normalized_usage["cache_write_tokens"] = usage[
+                "cache_creation_input_tokens"
+            ]
         return {
             "content": blocks,
             "stop_reason": stop_reason,
             "raw_stop_reason": raw_reason,
-            "usage": {
-                "input_tokens": usage.get("input_tokens", 0),
-                "output_tokens": usage.get("output_tokens", 0),
-            },
+            "usage": normalized_usage,
             "raw": data,
+            "latency_ms": latency_ms,
         }
 
     def _build_request(
@@ -211,6 +223,7 @@ class ClaudeAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=False
         )
+        start = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.load(resp)
@@ -220,7 +233,7 @@ class ClaudeAdapter(Adapter):
             errors.raise_for_connection_error("claude", e)
         except urllib.error.URLError as e:
             errors.raise_for_connection_error("claude", e)
-        return self._deserialize(data)
+        return self._deserialize(data, (time.monotonic() - start) * 1000)
 
     def stream_chat(
         self,
@@ -230,12 +243,13 @@ class ClaudeAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
+        start = time.monotonic()
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=True
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                yield from self._stream_events(resp)
+                yield from self._stream_events(resp, start)
         except urllib.error.HTTPError as e:
             errors.raise_for_http_error("claude", e)
         except TimeoutError as e:
@@ -243,7 +257,9 @@ class ClaudeAdapter(Adapter):
         except urllib.error.URLError as e:
             errors.raise_for_connection_error("claude", e)
 
-    def _stream_events(self, resp: http.client.HTTPResponse) -> Iterator[StreamEvent]:
+    def _stream_events(
+        self, resp: http.client.HTTPResponse, start: float
+    ) -> Iterator[StreamEvent]:
         blocks: list[dict[str, Any]] = []
         json_buffers: dict[int, str] = {}
         message: dict[str, Any] = {}
@@ -310,12 +326,16 @@ class ClaudeAdapter(Adapter):
                     "output_tokens", output_tokens
                 )
             elif etype == "message_stop":
+                stream_usage = dict(message.get("usage") or {})
+                stream_usage["output_tokens"] = output_tokens
                 data = {
                     "content": blocks,
                     "stop_reason": stop_reason,
-                    "usage": {
-                        "input_tokens": message.get("usage", {}).get("input_tokens", 0),
-                        "output_tokens": output_tokens,
-                    },
+                    "usage": stream_usage,
                 }
-                yield {"type": "message_stop", "response": self._deserialize(data)}
+                yield {
+                    "type": "message_stop",
+                    "response": self._deserialize(
+                        data, (time.monotonic() - start) * 1000
+                    ),
+                }

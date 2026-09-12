@@ -132,7 +132,7 @@ class OllamaDeserializeTests(unittest.TestCase):
             "prompt_eval_count": 4,
             "eval_count": 6,
         }
-        response = self.adapter._deserialize(data)
+        response = self.adapter._deserialize(data, 0.0)
         self.assertEqual(response["content"], [{"type": "text", "text": "hi there"}])
         self.assertEqual(response["stop_reason"], "end_turn")
         self.assertEqual(response["usage"], {"input_tokens": 4, "output_tokens": 6})
@@ -147,7 +147,7 @@ class OllamaDeserializeTests(unittest.TestCase):
             },
             "done_reason": "stop",
         }
-        response = self.adapter._deserialize(data)
+        response = self.adapter._deserialize(data, 0.0)
         self.assertEqual(
             response["content"],
             [
@@ -163,7 +163,7 @@ class OllamaDeserializeTests(unittest.TestCase):
 
     def test_length_stop_reason_maps_to_max_tokens(self):
         data = {"message": {"content": "x"}, "done_reason": "length"}
-        response = self.adapter._deserialize(data)
+        response = self.adapter._deserialize(data, 0.0)
         self.assertEqual(response["stop_reason"], "max_tokens")
 
 
@@ -191,6 +191,8 @@ class OllamaChatHTTPTests(unittest.TestCase):
         )
         self.assertEqual(response["stop_reason"], "tool_use")
         self.assertEqual(response["usage"], {"input_tokens": 7, "output_tokens": 5})
+        self.assertIsInstance(response["latency_ms"], float)
+        self.assertGreaterEqual(response["latency_ms"], 0)
         request = mock_urlopen.call_args.args[0]
         self.assertTrue(request.full_url.endswith("/api/chat"))
         sent = json.loads(request.data)
@@ -232,10 +234,12 @@ class OllamaStreamChatHTTPTests(unittest.TestCase):
             ],
         )
         final = events[-1]["response"]
-        buffered = self.adapter._deserialize(FINAL_DATA)
+        buffered = self.adapter._deserialize(FINAL_DATA, 0.0)
         self.assertEqual(final["content"], buffered["content"])
         self.assertEqual(final["stop_reason"], buffered["stop_reason"])
         self.assertEqual(final["usage"], buffered["usage"])
+        self.assertIsInstance(final["latency_ms"], float)
+        self.assertGreaterEqual(final["latency_ms"], 0)
 
     @patch("urllib.request.urlopen")
     def test_stream_chat_raises_server_error_on_500(self, mock_urlopen):
