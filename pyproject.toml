@@ -1,0 +1,14 @@
+[project]
+name = "ducktape-provider"
+version = "0.1.0"
+description = "One normalized chat/tool-use interface over Claude, OpenAI, and local Ollama — stdlib only."
+readme = "README.md"
+authors = [
+    { email = "adrian.sanchez.albanell@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
