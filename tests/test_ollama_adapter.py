@@ -12,7 +12,8 @@ from http_test_utils import (
     ndjson_lines,
 )
 
-from ducktape_provider import OllamaLocalAdapter
+from ducktape_provider import OllamaLocalAdapter, ServerError, UnsupportedBlockError
+from ducktape_provider.adapters import ollama as ollama_module
 
 MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "weather in NYC?"}]}]
 
@@ -196,10 +197,12 @@ class OllamaChatHTTPTests(unittest.TestCase):
         self.assertEqual(sent["stream"], False)
 
     @patch("urllib.request.urlopen")
-    def test_chat_raises_runtime_error_on_http_error(self, mock_urlopen):
-        mock_urlopen.side_effect = http_error("http://127.0.0.1:11434/api/chat", 500, b"boom")
+    def test_chat_raises_server_error_on_500(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            "http://127.0.0.1:11434/api/chat", 500, b"boom"
+        )
 
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(ServerError) as ctx:
             self.adapter.chat("llama3", MESSAGES)
 
         self.assertIn("ollama", str(ctx.exception))
@@ -235,14 +238,89 @@ class OllamaStreamChatHTTPTests(unittest.TestCase):
         self.assertEqual(final["usage"], buffered["usage"])
 
     @patch("urllib.request.urlopen")
-    def test_stream_chat_raises_runtime_error_on_http_error(self, mock_urlopen):
-        mock_urlopen.side_effect = http_error("http://127.0.0.1:11434/api/chat", 500, b"boom")
+    def test_stream_chat_raises_server_error_on_500(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            "http://127.0.0.1:11434/api/chat", 500, b"boom"
+        )
 
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(ServerError) as ctx:
             list(self.adapter.stream_chat("llama3", MESSAGES))
 
         self.assertIn("ollama", str(ctx.exception))
         self.assertIn("500", str(ctx.exception))
+
+
+class OllamaHeaderOverrideTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+
+    def test_config_headers_override_default(self):
+        req, _ = self.adapter._build_request(
+            "llama3",
+            MESSAGES,
+            None,
+            None,
+            {"headers": {"Content-Type": "application/x-custom"}},
+            stream=False,
+        )
+        self.assertEqual(req.get_header("Content-type"), "application/x-custom")
+
+
+class OllamaUnsupportedBlockTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+
+    @patch("urllib.request.urlopen")
+    def test_url_image_block_raises_before_any_network_request(self, mock_urlopen):
+        mock_urlopen.side_effect = AssertionError("urlopen should never be called")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": "url", "url": "https://x/img.png"}
+                ],
+            }
+        ]
+        with self.assertRaises(UnsupportedBlockError):
+            self.adapter.chat("llama3", messages)
+        mock_urlopen.assert_not_called()
+
+    def test_document_block_logs_warning_and_is_dropped(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "see attached"},
+                    {
+                        "type": "document",
+                        "source": "base64",
+                        "media_type": "application/pdf",
+                        "data": "abc",
+                    },
+                ],
+            }
+        ]
+        with self.assertLogs(ollama_module.logger, level="WARNING"):
+            serialized = self.adapter._serialize(messages, system=None)
+        self.assertEqual(serialized, [{"role": "user", "content": "see attached"}])
+
+    def test_document_only_message_produces_no_entry(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": "base64",
+                        "media_type": "application/pdf",
+                        "data": "abc",
+                    }
+                ],
+            }
+        ]
+        with self.assertLogs(ollama_module.logger, level="WARNING"):
+            serialized = self.adapter._serialize(messages, system=None)
+        self.assertEqual(serialized, [])
 
 
 if __name__ == "__main__":

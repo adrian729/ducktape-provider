@@ -2,6 +2,7 @@
 
 import http.client
 import json
+import logging
 import os
 import re
 import time
@@ -10,9 +11,12 @@ import urllib.request
 from collections.abc import Iterator
 from typing import Any
 
+from .. import errors
 from ..adapter import Adapter
 from ..streaming import _iter_sse
 from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIAdapter(Adapter):
@@ -68,20 +72,29 @@ class OpenAIAdapter(Adapter):
         for message in messages:
             content: list[dict[str, Any]] = []
 
-            def flush(role: str = message["role"], buf: list[dict[str, Any]] = content) -> None:
+            def flush(
+                role: str = message["role"], buf: list[dict[str, Any]] = content
+            ) -> None:
                 if buf:
-                    serialized.append({"type": "message", "role": role, "content": list(buf)})
+                    serialized.append(
+                        {"type": "message", "role": role, "content": list(buf)}
+                    )
                     buf.clear()
 
             for block in message["content"]:
                 if block["type"] == "text":
                     content.append({"type": "input_text", "text": block["text"]})
                 elif block["type"] == "image":
-                    content.append(
-                        {
-                            "type": "input_image",
-                            "image_url": f"data:{block['media_type']};base64,{block['data']}",
-                        }
+                    image_url = (
+                        block["url"]
+                        if block["source"] == "url"
+                        else f"data:{block['media_type']};base64,{block['data']}"
+                    )
+                    content.append({"type": "input_image", "image_url": image_url})
+                elif block["type"] == "document":
+                    logger.warning(
+                        "openai adapter does not support document blocks yet — "
+                        "dropping one from the request"
                     )
                 elif block["type"] == "tool_use":
                     flush()
@@ -193,13 +206,15 @@ class OpenAIAdapter(Adapter):
             payload["tools"] = self._serialize_tools(tools)
         payload.update(config or {})
         timeout = payload.pop("timeout", self._CHAT_TIMEOUT)
+        headers = {
+            "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}",
+            "Content-Type": "application/json",
+        }
+        headers.update(payload.pop("headers", {}))
         req = urllib.request.Request(
             self._RESPONSES_URL,
             data=json.dumps(payload).encode(),
-            headers={
-                "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY', '')}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
         return req, timeout
 
@@ -218,10 +233,13 @@ class OpenAIAdapter(Adapter):
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.load(resp)
         except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            raise RuntimeError(f"openai chat failed: {e.code} {body}") from e
+            errors.raise_for_http_error("openai", e)
+        except TimeoutError as e:
+            errors.raise_for_connection_error("openai", e)
+        except urllib.error.URLError as e:
+            errors.raise_for_connection_error("openai", e)
         if data.get("status") == "failed":
-            raise RuntimeError(f"openai chat failed: {data.get('error')}")
+            raise errors.APIError(f"openai chat failed: {data.get('error')}")
         return self._deserialize(data)
 
     def stream_chat(
@@ -239,8 +257,11 @@ class OpenAIAdapter(Adapter):
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 yield from self._stream_events(resp)
         except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            raise RuntimeError(f"openai chat failed: {e.code} {body}") from e
+            errors.raise_for_http_error("openai", e)
+        except TimeoutError as e:
+            errors.raise_for_connection_error("openai", e)
+        except urllib.error.URLError as e:
+            errors.raise_for_connection_error("openai", e)
 
     def _stream_events(self, resp: http.client.HTTPResponse) -> Iterator[StreamEvent]:
         block_index_by_item: dict[str, int] = {}
@@ -287,5 +308,5 @@ class OpenAIAdapter(Adapter):
             ):
                 data = event["response"]
                 if data.get("status") == "failed":
-                    raise RuntimeError(f"openai chat failed: {data.get('error')}")
+                    raise errors.APIError(f"openai chat failed: {data.get('error')}")
                 yield {"type": "message_stop", "response": self._deserialize(data)}

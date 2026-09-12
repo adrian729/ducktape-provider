@@ -11,10 +11,36 @@ type MimeType = str
 type ToolCallId = str
 
 
-class ImageBlock(TypedDict):
+class Base64ImageBlock(TypedDict):
     type: Literal["image"]
+    source: Literal["base64"]
     media_type: MimeType
     data: Base64Str
+
+
+class UrlImageBlock(TypedDict):
+    type: Literal["image"]
+    source: Literal["url"]
+    url: str
+
+
+ImageBlock = Base64ImageBlock | UrlImageBlock
+
+
+class Base64DocumentBlock(TypedDict):
+    type: Literal["document"]
+    source: Literal["base64"]
+    media_type: MimeType
+    data: Base64Str
+
+
+class UrlDocumentBlock(TypedDict):
+    type: Literal["document"]
+    source: Literal["url"]
+    url: str
+
+
+DocumentBlock = Base64DocumentBlock | UrlDocumentBlock
 
 
 class ToolUseBlock(TypedDict):
@@ -38,7 +64,14 @@ class ThinkingBlock(TypedDict):
     signature: NotRequired[str]
 
 
-Block = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock | ThinkingBlock
+Block = (
+    TextBlock
+    | ImageBlock
+    | DocumentBlock
+    | ToolUseBlock
+    | ToolResultBlock
+    | ThinkingBlock
+)
 
 
 class Message(TypedDict):

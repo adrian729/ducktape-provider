@@ -7,14 +7,18 @@ from unittest.mock import patch
 
 from http_test_utils import FakeStreamResponse, buffered_response, http_error, sse_lines
 
-from ducktape_provider import OpenAIAdapter
+from ducktape_provider import APIError, AuthError, OpenAIAdapter, ServerError
+from ducktape_provider.adapters import openai as openai_module
 
 MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "weather in NYC?"}]}]
 
 FINAL_DATA = {
     "status": "completed",
     "output": [
-        {"type": "message", "content": [{"type": "output_text", "text": "Let me check"}]},
+        {
+            "type": "message",
+            "content": [{"type": "output_text", "text": "Let me check"}],
+        },
         {
             "type": "function_call",
             "call_id": "call_1",
@@ -41,7 +45,12 @@ STREAM_EVENTS = [
     },
     {
         "type": "response.output_item.added",
-        "item": {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "get_weather"},
+        "item": {
+            "id": "fc_1",
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "get_weather",
+        },
     },
     {
         "type": "response.function_call_arguments.delta",
@@ -208,22 +217,26 @@ class OpenAIChatHTTPTests(unittest.TestCase):
         self.assertEqual(sent["stream"], False)
 
     @patch("urllib.request.urlopen")
-    def test_chat_raises_runtime_error_on_http_error(self, mock_urlopen):
-        mock_urlopen.side_effect = http_error(OpenAIAdapter._RESPONSES_URL, 401, b"unauthorized")
+    def test_chat_raises_auth_error_on_401(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            OpenAIAdapter._RESPONSES_URL, 401, b"unauthorized"
+        )
 
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(AuthError) as ctx:
             self.adapter.chat("gpt-x", MESSAGES)
 
         self.assertIn("openai", str(ctx.exception))
         self.assertIn("401", str(ctx.exception))
 
     @patch("urllib.request.urlopen")
-    def test_chat_raises_runtime_error_on_failed_status(self, mock_urlopen):
+    def test_chat_raises_api_error_on_failed_status(self, mock_urlopen):
         mock_urlopen.return_value = buffered_response(
-            json.dumps({"status": "failed", "error": {"message": "boom"}, "output": []}).encode()
+            json.dumps(
+                {"status": "failed", "error": {"message": "boom"}, "output": []}
+            ).encode()
         )
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(APIError):
             self.adapter.chat("gpt-x", MESSAGES)
 
 
@@ -255,14 +268,80 @@ class OpenAIStreamChatHTTPTests(unittest.TestCase):
         self.assertEqual(final["usage"], buffered["usage"])
 
     @patch("urllib.request.urlopen")
-    def test_stream_chat_raises_runtime_error_on_http_error(self, mock_urlopen):
-        mock_urlopen.side_effect = http_error(OpenAIAdapter._RESPONSES_URL, 500, b"boom")
+    def test_stream_chat_raises_server_error_on_500(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            OpenAIAdapter._RESPONSES_URL, 500, b"boom"
+        )
 
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(ServerError) as ctx:
             list(self.adapter.stream_chat("gpt-x", MESSAGES))
 
         self.assertIn("openai", str(ctx.exception))
         self.assertIn("500", str(ctx.exception))
+
+
+class OpenAIHeaderOverrideTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OpenAIAdapter()
+
+    def test_config_headers_override_default(self):
+        req, _ = self.adapter._build_request(
+            "gpt-x",
+            MESSAGES,
+            None,
+            None,
+            {"headers": {"Authorization": "Bearer overridden"}},
+            stream=False,
+        )
+        self.assertEqual(req.get_header("Authorization"), "Bearer overridden")
+
+
+class OpenAIBlockShapeTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OpenAIAdapter()
+
+    def test_url_image_block_passes_url_through_as_is(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": "url", "url": "https://x/img.png"}
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(
+            serialized[0]["content"],
+            [{"type": "input_image", "image_url": "https://x/img.png"}],
+        )
+
+    def test_document_block_is_dropped_and_logs_warning(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "see attached"},
+                    {
+                        "type": "document",
+                        "source": "base64",
+                        "media_type": "application/pdf",
+                        "data": "abc",
+                    },
+                ],
+            }
+        ]
+        with self.assertLogs(openai_module.logger, level="WARNING"):
+            serialized = self.adapter._serialize(messages)
+        self.assertEqual(
+            serialized,
+            [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "see attached"}],
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

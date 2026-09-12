@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from http_test_utils import FakeStreamResponse, buffered_response, http_error, sse_lines
 
-from ducktape_provider import ClaudeAdapter
+from ducktape_provider import ClaudeAdapter, RateLimitError, ServerError
 
 MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "weather in NYC?"}]}]
 
@@ -72,7 +72,12 @@ class ClaudeSerializeTests(unittest.TestCase):
             {
                 "role": "user",
                 "content": [
-                    {"type": "image", "media_type": "image/png", "data": "abc"},
+                    {
+                        "type": "image",
+                        "source": "base64",
+                        "media_type": "image/png",
+                        "data": "abc",
+                    },
                     {
                         "type": "tool_result",
                         "tool_use_id": "toolu_1",
@@ -163,10 +168,12 @@ class ClaudeChatHTTPTests(unittest.TestCase):
         self.assertEqual(sent["stream"], False)
 
     @patch("urllib.request.urlopen")
-    def test_chat_raises_runtime_error_on_http_error(self, mock_urlopen):
-        mock_urlopen.side_effect = http_error(ClaudeAdapter._MESSAGES_URL, 429, b"rate limited")
+    def test_chat_raises_rate_limit_error_on_429(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            ClaudeAdapter._MESSAGES_URL, 429, b"rate limited"
+        )
 
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(RateLimitError) as ctx:
             self.adapter.chat("claude-x", MESSAGES)
 
         self.assertIn("claude", str(ctx.exception))
@@ -201,14 +208,99 @@ class ClaudeStreamChatHTTPTests(unittest.TestCase):
         self.assertEqual(final["usage"], buffered["usage"])
 
     @patch("urllib.request.urlopen")
-    def test_stream_chat_raises_runtime_error_on_http_error(self, mock_urlopen):
+    def test_stream_chat_raises_server_error_on_500(self, mock_urlopen):
         mock_urlopen.side_effect = http_error(ClaudeAdapter._MESSAGES_URL, 500, b"boom")
 
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(ServerError) as ctx:
             list(self.adapter.stream_chat("claude-x", MESSAGES))
 
         self.assertIn("claude", str(ctx.exception))
         self.assertIn("500", str(ctx.exception))
+
+
+class ClaudeHeaderOverrideTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = ClaudeAdapter()
+
+    def test_config_headers_override_default(self):
+        req, _ = self.adapter._build_request(
+            "claude-x",
+            MESSAGES,
+            None,
+            None,
+            {"headers": {"anthropic-version": "2099-01-01"}},
+            stream=False,
+        )
+        self.assertEqual(req.get_header("Anthropic-version"), "2099-01-01")
+
+
+class ClaudeBlockShapeTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = ClaudeAdapter()
+
+    def test_url_image_block_serializes_to_nested_url_source(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": "url", "url": "https://x/img.png"}
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(
+            serialized[0]["content"],
+            [{"type": "image", "source": {"type": "url", "url": "https://x/img.png"}}],
+        )
+
+    def test_base64_document_block_serializes_to_nested_base64_source(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": "base64",
+                        "media_type": "application/pdf",
+                        "data": "abc",
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(
+            serialized[0]["content"],
+            [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "abc",
+                    },
+                }
+            ],
+        )
+
+    def test_url_document_block_serializes_to_nested_url_source(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "document", "source": "url", "url": "https://x/doc.pdf"}
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(
+            serialized[0]["content"],
+            [
+                {
+                    "type": "document",
+                    "source": {"type": "url", "url": "https://x/doc.pdf"},
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

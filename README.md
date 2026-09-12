@@ -22,9 +22,13 @@ uv add git+https://github.com/adrian729/ducktape-provider
 from ducktape_provider import Provider
 
 provider = Provider()
-response = provider.chat("claude", "claude-opus-5", [
-    {"role": "user", "content": [{"type": "text", "text": "hi"}]},
-])
+response = provider.chat(
+    "claude",
+    "claude-opus-5",
+    [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+    ],
+)
 ```
 
 `provider` is one of `"claude"`, `"openai"`, or `"ollama-local"` — same `Message`/`Response` shape regardless of which one you call.

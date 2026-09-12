@@ -2,15 +2,19 @@
 
 import http.client
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from typing import Any
 
+from .. import errors
 from ..adapter import Adapter
 from ..streaming import _iter_ndjson
 from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaLocalAdapter(Adapter):
@@ -53,7 +57,14 @@ class OllamaLocalAdapter(Adapter):
         if system:
             serialized.append({"role": "system", "content": system})
         for message in messages:
-            results = [b for b in message["content"] if b["type"] == "tool_result"]
+            for b in message["content"]:
+                if b["type"] == "document":
+                    logger.warning(
+                        "ollama-local adapter does not support document blocks — "
+                        "dropping one from the request"
+                    )
+            content_blocks = [b for b in message["content"] if b["type"] != "document"]
+            results = [b for b in content_blocks if b["type"] == "tool_result"]
             for block in results:
                 content = block["content"]
                 if block.get("is_error"):
@@ -66,15 +77,21 @@ class OllamaLocalAdapter(Adapter):
                         "tool_use_id": block["tool_use_id"],
                     }
                 )
-            uses = [b for b in message["content"] if b["type"] == "tool_use"]
-            images = [b["data"] for b in message["content"] if b["type"] == "image"]
-            if not (uses or images) and len(results) == len(message["content"]):
+            uses = [b for b in content_blocks if b["type"] == "tool_use"]
+            images = []
+            for b in content_blocks:
+                if b["type"] == "image":
+                    if b["source"] == "url":
+                        raise errors.UnsupportedBlockError(
+                            "ollama-local does not support URL image blocks (only base64) — "
+                            "convert to a Base64ImageBlock before calling"
+                        )
+                    images.append(b["data"])
+            if not (uses or images) and len(results) == len(content_blocks):
                 continue
-            text = "\n".join(
-                b["text"] for b in message["content"] if b["type"] == "text"
-            )
+            text = "\n".join(b["text"] for b in content_blocks if b["type"] == "text")
             thinking = "\n".join(
-                b["thinking"] for b in message["content"] if b["type"] == "thinking"
+                b["thinking"] for b in content_blocks if b["type"] == "thinking"
             )
             entry: dict[str, Any] = {"role": message["role"], "content": text}
             if thinking:
@@ -167,10 +184,12 @@ class OllamaLocalAdapter(Adapter):
             payload["tools"] = self._serialize_tools(tools)
         payload.update(config or {})
         timeout = payload.pop("timeout", self._CHAT_TIMEOUT)
+        headers = {"Content-Type": "application/json"}
+        headers.update(payload.pop("headers", {}))
         req = urllib.request.Request(
             f"{self._base_url()}/api/chat",
             data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         )
         return req, timeout
 
@@ -189,8 +208,11 @@ class OllamaLocalAdapter(Adapter):
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.load(resp)
         except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            raise RuntimeError(f"ollama chat failed: {e.code} {body}") from e
+            errors.raise_for_http_error("ollama", e)
+        except TimeoutError as e:
+            errors.raise_for_connection_error("ollama", e)
+        except urllib.error.URLError as e:
+            errors.raise_for_connection_error("ollama", e)
         return self._deserialize(data)
 
     def stream_chat(
@@ -208,8 +230,11 @@ class OllamaLocalAdapter(Adapter):
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 yield from self._stream_events(resp)
         except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            raise RuntimeError(f"ollama chat failed: {e.code} {body}") from e
+            errors.raise_for_http_error("ollama", e)
+        except TimeoutError as e:
+            errors.raise_for_connection_error("ollama", e)
+        except urllib.error.URLError as e:
+            errors.raise_for_connection_error("ollama", e)
 
     def _stream_events(self, resp: http.client.HTTPResponse) -> Iterator[StreamEvent]:
         thinking_index: int | None = None

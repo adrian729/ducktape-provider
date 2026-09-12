@@ -50,5 +50,13 @@ def ndjson_lines(*chunks: dict) -> list[bytes]:
     return [f"{json.dumps(chunk)}\n".encode() for chunk in chunks]
 
 
-def http_error(url: str, code: int, body: bytes = b"boom") -> urllib.error.HTTPError:
-    return urllib.error.HTTPError(url, code, "error", Message(), io.BytesIO(body))
+def http_error(
+    url: str,
+    code: int,
+    body: bytes = b"boom",
+    headers: dict[str, str] | None = None,
+) -> urllib.error.HTTPError:
+    msg = Message()
+    for key, value in (headers or {}).items():
+        msg[key] = value
+    return urllib.error.HTTPError(url, code, "error", msg, io.BytesIO(body))

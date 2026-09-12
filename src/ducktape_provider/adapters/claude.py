@@ -10,6 +10,7 @@ import urllib.request
 from collections.abc import Iterator
 from typing import Any
 
+from .. import errors
 from ..adapter import Adapter
 from ..streaming import _iter_sse
 from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef
@@ -70,22 +71,48 @@ class ClaudeAdapter(Adapter):
         return set(model_ids)
 
     def _serialize(self, messages: list[Message]) -> list[dict[str, Any]]:
-        """text/tool_use/thinking blocks already match Claude's shape; only image and tool_result differ."""
         serialized: list[dict[str, Any]] = []
         for message in messages:
             content: list[dict[str, Any]] = []
             for block in message["content"]:
                 if block["type"] == "image":
-                    content.append(
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": block["media_type"],
-                                "data": block["data"],
-                            },
-                        }
-                    )
+                    if block["source"] == "url":
+                        content.append(
+                            {
+                                "type": "image",
+                                "source": {"type": "url", "url": block["url"]},
+                            }
+                        )
+                    else:
+                        content.append(
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": block["media_type"],
+                                    "data": block["data"],
+                                },
+                            }
+                        )
+                elif block["type"] == "document":
+                    if block["source"] == "url":
+                        content.append(
+                            {
+                                "type": "document",
+                                "source": {"type": "url", "url": block["url"]},
+                            }
+                        )
+                    else:
+                        content.append(
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": block["media_type"],
+                                    "data": block["data"],
+                                },
+                            }
+                        )
                 elif block["type"] == "tool_result":
                     entry: dict[str, Any] = {
                         "type": "tool_result",
@@ -160,14 +187,16 @@ class ClaudeAdapter(Adapter):
             payload["tools"] = self._serialize_tools(tools)
         payload.update(config or {})
         timeout = payload.pop("timeout", self._CHAT_TIMEOUT)
+        headers = {
+            "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        headers.update(payload.pop("headers", {}))
         req = urllib.request.Request(
             self._MESSAGES_URL,
             data=json.dumps(payload).encode(),
-            headers={
-                "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
+            headers=headers,
         )
         return req, timeout
 
@@ -186,8 +215,11 @@ class ClaudeAdapter(Adapter):
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.load(resp)
         except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            raise RuntimeError(f"claude chat failed: {e.code} {body}") from e
+            errors.raise_for_http_error("claude", e)
+        except TimeoutError as e:
+            errors.raise_for_connection_error("claude", e)
+        except urllib.error.URLError as e:
+            errors.raise_for_connection_error("claude", e)
         return self._deserialize(data)
 
     def stream_chat(
@@ -205,8 +237,11 @@ class ClaudeAdapter(Adapter):
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 yield from self._stream_events(resp)
         except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            raise RuntimeError(f"claude chat failed: {e.code} {body}") from e
+            errors.raise_for_http_error("claude", e)
+        except TimeoutError as e:
+            errors.raise_for_connection_error("claude", e)
+        except urllib.error.URLError as e:
+            errors.raise_for_connection_error("claude", e)
 
     def _stream_events(self, resp: http.client.HTTPResponse) -> Iterator[StreamEvent]:
         blocks: list[dict[str, Any]] = []

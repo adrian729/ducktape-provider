@@ -4,11 +4,24 @@ from .adapter import Adapter
 from .adapters.claude import ClaudeAdapter
 from .adapters.ollama import OllamaLocalAdapter
 from .adapters.openai import OpenAIAdapter
+from .errors import (
+    APIError,
+    AuthError,
+    ContextOverflowError,
+    DucktapeError,
+    RateLimitError,
+    RequestTimeoutError,
+    ServerError,
+    UnsupportedBlockError,
+)
 from .provider import Config, Provider
 from .types import (
+    Base64DocumentBlock,
+    Base64ImageBlock,
     Base64Str,
     Block,
     BlockStopEvent,
+    DocumentBlock,
     ImageBlock,
     JsonSchema,
     Message,
@@ -27,16 +40,25 @@ from .types import (
     ToolUseBlock,
     ToolUseDeltaEvent,
     ToolUseStartEvent,
+    UrlDocumentBlock,
+    UrlImageBlock,
     Usage,
 )
 
 __all__ = [
+    "APIError",
     "Adapter",
+    "AuthError",
+    "Base64DocumentBlock",
+    "Base64ImageBlock",
     "Base64Str",
     "Block",
     "BlockStopEvent",
     "ClaudeAdapter",
     "Config",
+    "ContextOverflowError",
+    "DocumentBlock",
+    "DucktapeError",
     "ImageBlock",
     "JsonSchema",
     "Message",
@@ -45,7 +67,10 @@ __all__ = [
     "OllamaLocalAdapter",
     "OpenAIAdapter",
     "Provider",
+    "RateLimitError",
+    "RequestTimeoutError",
     "Response",
+    "ServerError",
     "StopReason",
     "StreamEvent",
     "TextBlock",
@@ -58,5 +83,8 @@ __all__ = [
     "ToolUseBlock",
     "ToolUseDeltaEvent",
     "ToolUseStartEvent",
+    "UnsupportedBlockError",
+    "UrlDocumentBlock",
+    "UrlImageBlock",
     "Usage",
 ]
