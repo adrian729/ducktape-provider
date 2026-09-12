@@ -1,5 +1,5 @@
-"""HTTP-path tests for OllamaLocalAdapter: chat() and stream_chat() with
-urllib.request.urlopen mocked out. No real network call is ever made."""
+"""Tests for OllamaLocalAdapter: _serialize/_deserialize plus chat() and stream_chat()
+with urllib.request.urlopen mocked out. No real network call is ever made."""
 
 import json
 import unittest
@@ -118,6 +118,52 @@ class OllamaSerializeTests(unittest.TestCase):
                 }
             ],
         )
+
+
+class OllamaDeserializeTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+
+    def test_plain_text_response(self):
+        data = {
+            "message": {"content": "hi there"},
+            "done_reason": "stop",
+            "prompt_eval_count": 4,
+            "eval_count": 6,
+        }
+        response = self.adapter._deserialize(data)
+        self.assertEqual(response["content"], [{"type": "text", "text": "hi there"}])
+        self.assertEqual(response["stop_reason"], "end_turn")
+        self.assertEqual(response["usage"], {"input_tokens": 4, "output_tokens": 6})
+
+    def test_tool_call_arguments_parsed_from_json_string(self):
+        data = {
+            "message": {
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "search", "arguments": '{"q": "cats"}'}}
+                ],
+            },
+            "done_reason": "stop",
+        }
+        response = self.adapter._deserialize(data)
+        self.assertEqual(
+            response["content"],
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call_0",
+                    "name": "search",
+                    "input": {"q": "cats"},
+                }
+            ],
+        )
+        self.assertEqual(response["stop_reason"], "tool_use")
+
+    def test_length_stop_reason_maps_to_max_tokens(self):
+        data = {"message": {"content": "x"}, "done_reason": "length"}
+        response = self.adapter._deserialize(data)
+        self.assertEqual(response["stop_reason"], "max_tokens")
 
 
 class OllamaChatHTTPTests(unittest.TestCase):

@@ -1,5 +1,5 @@
-"""HTTP-path tests for ClaudeAdapter: chat() and stream_chat() with
-urllib.request.urlopen mocked out. No real network call is ever made."""
+"""Tests for ClaudeAdapter: _serialize/_deserialize plus chat() and stream_chat()
+with urllib.request.urlopen mocked out. No real network call is ever made."""
 
 import json
 import unittest
@@ -115,6 +115,31 @@ class ClaudeSerializeTests(unittest.TestCase):
             self.adapter._serialize_tools(tools),
             [{"name": "get_weather", "description": "...", "input_schema": {"a": 1}}],
         )
+
+
+class ClaudeDeserializeTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = ClaudeAdapter()
+
+    def test_maps_known_stop_reason(self):
+        data = {
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3, "output_tokens": 5},
+        }
+        response = self.adapter._deserialize(data)
+        self.assertEqual(response["stop_reason"], "end_turn")
+        self.assertEqual(response["raw_stop_reason"], "end_turn")
+        self.assertEqual(response["usage"], {"input_tokens": 3, "output_tokens": 5})
+        self.assertEqual(response["content"], data["content"])
+        self.assertIs(response["raw"], data)
+
+    def test_unknown_stop_reason_falls_back_to_other(self):
+        data = {"content": [], "stop_reason": "weird", "usage": {}}
+        response = self.adapter._deserialize(data)
+        self.assertEqual(response["stop_reason"], "other")
+        self.assertEqual(response["raw_stop_reason"], "weird")
+        self.assertEqual(response["usage"], {"input_tokens": 0, "output_tokens": 0})
 
 
 class ClaudeChatHTTPTests(unittest.TestCase):

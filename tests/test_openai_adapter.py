@@ -1,5 +1,5 @@
-"""HTTP-path tests for OpenAIAdapter: chat() and stream_chat() with
-urllib.request.urlopen mocked out. No real network call is ever made."""
+"""Tests for OpenAIAdapter: _serialize/_deserialize plus chat() and stream_chat()
+with urllib.request.urlopen mocked out. No real network call is ever made."""
 
 import json
 import unittest
@@ -123,6 +123,59 @@ class OpenAISerializeTests(unittest.TestCase):
                 }
             ],
         )
+
+
+class OpenAIDeserializeTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OpenAIAdapter()
+
+    def test_text_message_completed(self):
+        data = {
+            "status": "completed",
+            "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 2},
+        }
+        response = self.adapter._deserialize(data)
+        self.assertEqual(response["content"], [{"type": "text", "text": "hi"}])
+        self.assertEqual(response["stop_reason"], "end_turn")
+
+    def test_function_call_sets_tool_use_stop_reason(self):
+        data = {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city": "NYC"}',
+                }
+            ],
+        }
+        response = self.adapter._deserialize(data)
+        self.assertEqual(
+            response["content"],
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call_1",
+                    "name": "get_weather",
+                    "input": {"city": "NYC"},
+                }
+            ],
+        )
+        self.assertEqual(response["stop_reason"], "tool_use")
+
+    def test_incomplete_max_output_tokens(self):
+        data = {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [],
+        }
+        response = self.adapter._deserialize(data)
+        self.assertEqual(response["stop_reason"], "max_tokens")
+        self.assertEqual(response["raw_stop_reason"], "max_output_tokens")
 
 
 class OpenAIChatHTTPTests(unittest.TestCase):
