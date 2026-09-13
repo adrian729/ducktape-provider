@@ -1,19 +1,44 @@
 """Adapter for Anthropic's Claude Messages API."""
 
-import http.client
 import json
+import logging
 import os
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from .. import errors
-from ..adapter import Adapter
-from ..streaming import _iter_sse
+from ..adapter import Adapter, _merge_config, _validate_headers
+from ..streaming import (
+    _PROBE_ERRORS,
+    _iter_sse,
+    _read_json,
+    _request_json,
+    _shape_checked,
+    _stream_request,
+    _StreamTimer,
+)
 from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef, Usage
+
+logger = logging.getLogger(__name__)
+
+# HTTP status Anthropic documents for each error type, so mid-stream error
+# events map to the same exception class as the equivalent HTTP error.
+_ERROR_TYPE_STATUS = {
+    "invalid_request_error": 400,
+    "authentication_error": 401,
+    "billing_error": 402,
+    "permission_error": 403,
+    "not_found_error": 404,
+    "conflict_error": 409,
+    "request_too_large": 413,
+    "rate_limit_error": 429,
+    "api_error": 500,
+    "timeout_error": 504,
+    "overloaded_error": 529,
+}
 
 
 class ClaudeAdapter(Adapter):
@@ -22,6 +47,7 @@ class ClaudeAdapter(Adapter):
     _MODELS_TTL = 60
     _CHAT_TIMEOUT = 120
     _MAX_TOKENS = 4096
+    _RESERVED_CONFIG = frozenset({"model", "messages", "stream"})
 
     def __init__(self):
         self._models_cache: set[str] | None = None
@@ -49,7 +75,7 @@ class ClaudeAdapter(Adapter):
                     },
                 )
                 with urllib.request.urlopen(req, timeout=3) as resp:
-                    data = json.load(resp)
+                    data = _read_json(resp, "claude")
                 model_ids.update(m["id"] for m in data.get("data", []))
                 next_after_id = data.get("last_id")
                 if not data.get("has_more") or not next_after_id:
@@ -57,14 +83,7 @@ class ClaudeAdapter(Adapter):
                 if next_after_id == after_id:
                     break
                 after_id = next_after_id
-        except (
-            OSError,
-            ValueError,
-            AttributeError,
-            KeyError,
-            TypeError,
-            http.client.HTTPException,
-        ):
+        except _PROBE_ERRORS:
             return set()
         self._models_cache = model_ids
         self._cache_time = now
@@ -72,8 +91,10 @@ class ClaudeAdapter(Adapter):
 
     def _serialize(self, messages: list[Message]) -> list[dict[str, Any]]:
         serialized: list[dict[str, Any]] = []
+        dropped_thinking = 0
         for message in messages:
             content: list[dict[str, Any]] = []
+            dropped_before = dropped_thinking
             for block in message["content"]:
                 if block["type"] == "image":
                     if block["source"] == "url":
@@ -122,9 +143,23 @@ class ClaudeAdapter(Adapter):
                     if block.get("is_error"):
                         entry["is_error"] = True
                     content.append(entry)
+                elif block["type"] == "thinking" and not block.get("signature"):
+                    # Only Claude-issued thinking blocks carry a signature, and the
+                    # API rejects unsigned ones (e.g. OpenAI/Ollama reasoning).
+                    dropped_thinking += 1
                 else:
                     content.append(dict(block))
+            # The API rejects empty content, and dropping the message instead is
+            # safe because it merges the consecutive same-role turns this leaves.
+            if not content and dropped_thinking > dropped_before:
+                continue
             serialized.append({"role": message["role"], "content": content})
+        if dropped_thinking:
+            logger.warning(
+                "claude adapter cannot send unsigned thinking blocks — "
+                "dropping %d from the request",
+                dropped_thinking,
+            )
         return serialized
 
     def _serialize_tools(self, tools: list[ToolDef]) -> list[dict[str, Any]]:
@@ -137,10 +172,12 @@ class ClaudeAdapter(Adapter):
             for t in tools
         ]
 
-    def _deserialize(self, data: dict[str, Any], latency_ms: float) -> Response:
+    def _deserialize(
+        self, data: dict[str, Any], latency_ms: float, ttft_ms: float | None = None
+    ) -> Response:
         blocks: list[Block] = data.get("content", [])
 
-        raw_reason = data.get("stop_reason", "")
+        raw_reason = data.get("stop_reason") or ""
         if raw_reason == "tool_use":
             stop_reason: StopReason = "tool_use"
         elif raw_reason == "max_tokens":
@@ -157,19 +194,19 @@ class ClaudeAdapter(Adapter):
             stop_reason = "other"
 
         usage = data.get("usage") or {}
+        cache_read = usage.get("cache_read_input_tokens")
+        cache_write = usage.get("cache_creation_input_tokens")
         normalized_usage: Usage = {
-            "input_tokens": usage.get("input_tokens", 0)
-            + usage.get("cache_read_input_tokens", 0)
-            + usage.get("cache_creation_input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
+            "input_tokens": (usage.get("input_tokens") or 0)
+            + (cache_read or 0)
+            + (cache_write or 0),
+            "output_tokens": usage.get("output_tokens") or 0,
         }
-        if "cache_read_input_tokens" in usage:
-            normalized_usage["cache_read_tokens"] = usage["cache_read_input_tokens"]
-        if "cache_creation_input_tokens" in usage:
-            normalized_usage["cache_write_tokens"] = usage[
-                "cache_creation_input_tokens"
-            ]
-        return {
+        if cache_read is not None:
+            normalized_usage["cache_read_tokens"] = cache_read
+        if cache_write is not None:
+            normalized_usage["cache_write_tokens"] = cache_write
+        response: Response = {
             "content": blocks,
             "stop_reason": stop_reason,
             "raw_stop_reason": raw_reason,
@@ -177,6 +214,9 @@ class ClaudeAdapter(Adapter):
             "raw": data,
             "latency_ms": latency_ms,
         }
+        if ttft_ms is not None:
+            response["ttft_ms"] = ttft_ms
+        return response
 
     def _build_request(
         self,
@@ -186,7 +226,7 @@ class ClaudeAdapter(Adapter):
         tools: list[ToolDef] | None,
         config: dict[str, Any] | None,
         stream: bool,
-    ) -> tuple[urllib.request.Request, float]:
+    ) -> tuple[urllib.request.Request, float | None]:
         payload: dict[str, Any] = {
             "model": model,
             "messages": self._serialize(messages),
@@ -197,14 +237,16 @@ class ClaudeAdapter(Adapter):
             payload["system"] = system
         if tools:
             payload["tools"] = self._serialize_tools(tools)
-        payload.update(config or {})
-        timeout = payload.pop("timeout", self._CHAT_TIMEOUT)
+        timeout, extra_headers = _merge_config(
+            "claude", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
+        )
         headers = {
             "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
-        headers.update(payload.pop("headers", {}))
+        headers.update(extra_headers)
+        _validate_headers("claude", headers)
         req = urllib.request.Request(
             self._MESSAGES_URL,
             data=json.dumps(payload).encode(),
@@ -223,17 +265,9 @@ class ClaudeAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=False
         )
-        start = time.monotonic()
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.load(resp)
-        except urllib.error.HTTPError as e:
-            errors.raise_for_http_error("claude", e)
-        except TimeoutError as e:
-            errors.raise_for_connection_error("claude", e)
-        except urllib.error.URLError as e:
-            errors.raise_for_connection_error("claude", e)
-        return self._deserialize(data, (time.monotonic() - start) * 1000)
+        data, latency_ms = _request_json("claude", req, timeout)
+        with _shape_checked("claude"):
+            return self._deserialize(data, latency_ms)
 
     def stream_chat(
         self,
@@ -243,99 +277,122 @@ class ClaudeAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
-        start = time.monotonic()
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=True
         )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                yield from self._stream_events(resp, start)
-        except urllib.error.HTTPError as e:
-            errors.raise_for_http_error("claude", e)
-        except TimeoutError as e:
-            errors.raise_for_connection_error("claude", e)
-        except urllib.error.URLError as e:
-            errors.raise_for_connection_error("claude", e)
+        yield from _stream_request(
+            "claude",
+            req,
+            timeout,
+            frames=_iter_sse,
+            handler=self._stream_handler,
+            terminal="message_stop",
+        )
 
-    def _stream_events(
-        self, resp: http.client.HTTPResponse, start: float
-    ) -> Iterator[StreamEvent]:
-        blocks: list[dict[str, Any]] = []
+    def _stream_handler(
+        self, timer: _StreamTimer
+    ) -> Callable[[dict[str, Any]], Iterator[StreamEvent]]:
+        # Keyed by wire index, so a delta for a block that never started is a
+        # KeyError (malformed) rather than silently growing a padded list.
+        blocks: dict[int, dict[str, Any]] = {}
         json_buffers: dict[int, str] = {}
-        message: dict[str, Any] = {}
+        # Indices that produced a start or delta event; only those get block_stop,
+        # so a block the caller never saw (e.g. server_tool_use) has no lone stop.
+        surfaced: set[int] = set()
+        stream_usage: dict[str, Any] = {}
         stop_reason = ""
-        output_tokens = 0
 
-        for event in _iter_sse(resp):
+        def handle(event: dict[str, Any]) -> Iterator[StreamEvent]:
+            nonlocal stream_usage, stop_reason
             etype = event.get("type")
             if etype == "message_start":
-                message = event["message"]
+                stream_usage = dict(event["message"].get("usage") or {})
             elif etype == "content_block_start":
                 index = event["index"]
-                while len(blocks) <= index:
-                    blocks.append({})
-                blocks[index] = dict(event["content_block"])
-                if blocks[index]["type"] == "tool_use":
+                block = blocks[index] = dict(event["content_block"])
+                # server_tool_use/mcp_tool_use stream their input the same way.
+                if "input" in block:
                     json_buffers[index] = ""
+                if block["type"] == "tool_use":
+                    surfaced.add(index)
                     yield {
                         "type": "tool_use_start",
                         "index": index,
-                        "id": blocks[index]["id"],
-                        "name": blocks[index]["name"],
+                        "id": block["id"],
+                        "name": block["name"],
                     }
             elif etype == "content_block_delta":
                 index = event["index"]
+                block = blocks[index]
                 delta = event["delta"]
                 dtype = delta.get("type")
                 if dtype == "text_delta":
-                    blocks[index]["text"] = (
-                        blocks[index].get("text", "") + delta["text"]
-                    )
+                    block["text"] = block.get("text", "") + delta["text"]
+                    surfaced.add(index)
                     yield {"type": "text_delta", "index": index, "text": delta["text"]}
                 elif dtype == "thinking_delta":
-                    blocks[index]["thinking"] = (
-                        blocks[index].get("thinking", "") + delta["thinking"]
-                    )
+                    block["thinking"] = block.get("thinking", "") + delta["thinking"]
+                    surfaced.add(index)
                     yield {
                         "type": "thinking_delta",
                         "index": index,
                         "thinking": delta["thinking"],
                     }
                 elif dtype == "signature_delta":
-                    blocks[index]["signature"] = (
-                        blocks[index].get("signature", "") + delta["signature"]
-                    )
+                    block["signature"] = block.get("signature", "") + delta["signature"]
                 elif dtype == "input_json_delta":
-                    json_buffers[index] += delta["partial_json"]
-                    yield {
-                        "type": "tool_use_delta",
-                        "index": index,
-                        "partial_json": delta["partial_json"],
-                    }
+                    json_buffers[index] = (
+                        json_buffers.get(index, "") + delta["partial_json"]
+                    )
+                    # Server-executed tool calls aren't the caller's to run, so
+                    # only client tool_use blocks surface as tool_use events.
+                    if block.get("type") == "tool_use":
+                        yield {
+                            "type": "tool_use_delta",
+                            "index": index,
+                            "partial_json": delta["partial_json"],
+                        }
             elif etype == "content_block_stop":
                 index = event["index"]
-                if index in json_buffers:
+                block = blocks[index]
+                if json_buffers.get(index):
                     try:
-                        blocks[index]["input"] = json.loads(json_buffers[index] or "{}")
+                        block["input"] = json.loads(json_buffers[index])
                     except json.JSONDecodeError:
-                        blocks[index]["input"] = {}
-                yield {"type": "block_stop", "index": index}
+                        block["input"] = {}
+                if index in surfaced:
+                    yield {"type": "block_stop", "index": index}
             elif etype == "message_delta":
                 stop_reason = event["delta"].get("stop_reason") or stop_reason
-                output_tokens = event.get("usage", {}).get(
-                    "output_tokens", output_tokens
+                # message_delta usage is cumulative and, with server tools, also
+                # revises input/cache counts — not just output_tokens.
+                stream_usage.update(
+                    {
+                        k: v
+                        for k, v in (event.get("usage") or {}).items()
+                        if v is not None
+                    }
+                )
+            elif etype == "error":
+                error = event.get("error") or {}
+                error_type = error.get("type") or ""
+                errors.raise_for_vendor_error(
+                    "claude",
+                    f"{error_type}: {error.get('message', '')}",
+                    status=_ERROR_TYPE_STATUS.get(error_type),
+                    body=json.dumps(event),
                 )
             elif etype == "message_stop":
-                stream_usage = dict(message.get("usage") or {})
-                stream_usage["output_tokens"] = output_tokens
                 data = {
-                    "content": blocks,
+                    "content": [blocks[i] for i in sorted(blocks)],
                     "stop_reason": stop_reason,
                     "usage": stream_usage,
                 }
                 yield {
                     "type": "message_stop",
                     "response": self._deserialize(
-                        data, (time.monotonic() - start) * 1000
+                        data, timer.latency_ms(), timer.ttft_ms()
                     ),
                 }
+
+        return handle

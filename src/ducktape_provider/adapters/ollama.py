@@ -5,21 +5,76 @@ import json
 import logging
 import os
 import time
-import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from .. import errors
-from ..adapter import Adapter
-from ..streaming import _iter_ndjson
-from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef
+from ..adapter import Adapter, _merge_config, _validate_headers
+from ..streaming import (
+    _PROBE_ERRORS,
+    _iter_ndjson,
+    _read_json,
+    _request_json,
+    _shape_checked,
+    _stream_request,
+    _StreamTimer,
+)
+from ..types import (
+    Block,
+    Message,
+    Response,
+    StopReason,
+    StreamEvent,
+    ToolDef,
+    ToolUseBlock,
+)
 
 logger = logging.getLogger(__name__)
 
 
+def _stream_error_status(message: str) -> int:
+    """Best-effort HTTP status for an error chunk, which unlike Ollama's HTTP
+    errors carries no status code of its own.
+
+    Ollama answers these failures with 400 (input exceeds the context length),
+    404 (model not found), or 500 (anything else, e.g. a crashed runner) when they
+    happen before streaming starts, so the stream maps to the same classes.
+    """
+    lowered = message.lower()
+    if any(m in lowered for m in errors._CONTEXT_OVERFLOW_MARKERS):
+        return 400
+    if "not found" in lowered:
+        return 404
+    return 500
+
+
+def _tool_use_block(index: int, call: dict[str, Any]) -> ToolUseBlock:
+    fn = call.get("function") or {}
+    args = fn.get("arguments")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+    return {
+        "type": "tool_use",
+        "id": f"call_{index}",
+        "name": fn.get("name", ""),
+        "input": args,
+    }
+
+
 class OllamaLocalAdapter(Adapter):
     _CHAT_TIMEOUT = 300
+    _MODELS_TTL = 60
+    _RESERVED_CONFIG = frozenset({"model", "messages", "stream"})
+
+    def __init__(self):
+        self._models_cache: set[str] | None = None
+        self._cache_time = 0.0
 
     def _base_url(self) -> str:
         host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
@@ -35,21 +90,20 @@ class OllamaLocalAdapter(Adapter):
             return False
 
     def models(self) -> set[str]:
+        now = time.monotonic()
+        if self._models_cache is not None and now - self._cache_time < self._MODELS_TTL:
+            return set(self._models_cache)
         try:
             with urllib.request.urlopen(
                 f"{self._base_url()}/api/tags", timeout=0.5
             ) as resp:
-                data = json.load(resp)
-            return {m["name"] for m in data.get("models", [])}
-        except (
-            OSError,
-            ValueError,
-            AttributeError,
-            KeyError,
-            TypeError,
-            http.client.HTTPException,
-        ):
+                data = _read_json(resp, "ollama")
+            model_ids = {m["name"] for m in data.get("models", [])}
+        except _PROBE_ERRORS:
             return set()
+        self._models_cache = model_ids
+        self._cache_time = now
+        return set(model_ids)
 
     def _serialize(
         self, messages: list[Message], system: str | None
@@ -120,33 +174,25 @@ class OllamaLocalAdapter(Adapter):
             for t in tools
         ]
 
-    def _deserialize(self, data: dict[str, Any], latency_ms: float) -> Response:
-        message = data.get("message", {})
-        blocks: list[Block] = []
-        if thinking := message.get("thinking"):
-            blocks.append({"type": "thinking", "thinking": thinking})
-        if content := message.get("content"):
-            blocks.append({"type": "text", "text": content})
-        for i, call in enumerate(message.get("tool_calls") or []):
-            fn = call.get("function", {})
-            args = fn.get("arguments")
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except (json.JSONDecodeError, TypeError):
-                    args = {}
-            if not isinstance(args, dict):
-                args = {}
-            blocks.append(
-                {
-                    "type": "tool_use",
-                    "id": f"call_{i}",
-                    "name": fn.get("name", ""),
-                    "input": args,
-                }
-            )
+    def _deserialize(
+        self,
+        data: dict[str, Any],
+        latency_ms: float,
+        ttft_ms: float | None = None,
+        blocks: list[Block] | None = None,
+    ) -> Response:
+        """`blocks`, when given, is the content already assembled in streamed order."""
+        if blocks is None:
+            message = data.get("message") or {}
+            blocks = []
+            if thinking := message.get("thinking"):
+                blocks.append({"type": "thinking", "thinking": thinking})
+            if content := message.get("content"):
+                blocks.append({"type": "text", "text": content})
+            for i, call in enumerate(message.get("tool_calls") or []):
+                blocks.append(_tool_use_block(i, call))
         has_tool_use = any(b["type"] == "tool_use" for b in blocks)
-        raw_reason = data.get("done_reason", "")
+        raw_reason = data.get("done_reason") or ""
         if raw_reason == "length":
             stop_reason: StopReason = "max_tokens"
         elif has_tool_use:
@@ -155,17 +201,20 @@ class OllamaLocalAdapter(Adapter):
             stop_reason = "end_turn"
         else:
             stop_reason = "other"
-        return {
+        response: Response = {
             "content": blocks,
             "stop_reason": stop_reason,
             "raw_stop_reason": raw_reason,
             "usage": {
-                "input_tokens": data.get("prompt_eval_count", 0),
-                "output_tokens": data.get("eval_count", 0),
+                "input_tokens": data.get("prompt_eval_count") or 0,
+                "output_tokens": data.get("eval_count") or 0,
             },
             "raw": data,
             "latency_ms": latency_ms,
         }
+        if ttft_ms is not None:
+            response["ttft_ms"] = ttft_ms
+        return response
 
     def _build_request(
         self,
@@ -175,7 +224,7 @@ class OllamaLocalAdapter(Adapter):
         tools: list[ToolDef] | None,
         config: dict[str, Any] | None,
         stream: bool,
-    ) -> tuple[urllib.request.Request, float]:
+    ) -> tuple[urllib.request.Request, float | None]:
         payload: dict[str, Any] = {
             "model": model,
             "messages": self._serialize(messages, system),
@@ -184,10 +233,12 @@ class OllamaLocalAdapter(Adapter):
         }
         if tools:
             payload["tools"] = self._serialize_tools(tools)
-        payload.update(config or {})
-        timeout = payload.pop("timeout", self._CHAT_TIMEOUT)
+        timeout, extra_headers = _merge_config(
+            "ollama", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
+        )
         headers = {"Content-Type": "application/json"}
-        headers.update(payload.pop("headers", {}))
+        headers.update(extra_headers)
+        _validate_headers("ollama", headers)
         req = urllib.request.Request(
             f"{self._base_url()}/api/chat",
             data=json.dumps(payload).encode(),
@@ -206,17 +257,9 @@ class OllamaLocalAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=False
         )
-        start = time.monotonic()
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.load(resp)
-        except urllib.error.HTTPError as e:
-            errors.raise_for_http_error("ollama", e)
-        except TimeoutError as e:
-            errors.raise_for_connection_error("ollama", e)
-        except urllib.error.URLError as e:
-            errors.raise_for_connection_error("ollama", e)
-        return self._deserialize(data, (time.monotonic() - start) * 1000)
+        data, latency_ms = _request_json("ollama", req, timeout)
+        with _shape_checked("ollama"):
+            return self._deserialize(data, latency_ms)
 
     def stream_chat(
         self,
@@ -226,82 +269,110 @@ class OllamaLocalAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
-        start = time.monotonic()
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=True
         )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                yield from self._stream_events(resp, start)
-        except urllib.error.HTTPError as e:
-            errors.raise_for_http_error("ollama", e)
-        except TimeoutError as e:
-            errors.raise_for_connection_error("ollama", e)
-        except urllib.error.URLError as e:
-            errors.raise_for_connection_error("ollama", e)
+        yield from _stream_request(
+            "ollama",
+            req,
+            timeout,
+            frames=_iter_ndjson,
+            handler=self._stream_handler,
+            terminal="a done chunk",
+        )
 
-    def _stream_events(
-        self, resp: http.client.HTTPResponse, start: float
-    ) -> Iterator[StreamEvent]:
-        thinking_index: int | None = None
-        text_index: int | None = None
-        thinking = ""
-        text = ""
-        last: dict[str, Any] = {}
+    def _stream_handler(
+        self, timer: _StreamTimer
+    ) -> Callable[[dict[str, Any]], Iterator[StreamEvent]]:
+        """Synthesizes a block lifecycle from Ollama's flat chunks: a new block index
+        is allocated whenever the kind of streamed content changes, and each tool
+        call is emitted as its own complete block as soon as its chunk arrives. The
+        final content holds one block per streamed index, in that order."""
+        blocks: list[Block] = []
+        open_kind: str | None = None
+        tool_calls: list[dict[str, Any]] = []
 
-        for chunk in _iter_ndjson(resp):
-            last = chunk
-            message = chunk.get("message", {})
-            if delta := message.get("thinking"):
-                if thinking_index is None:
-                    thinking_index = 0
-                thinking += delta
+        def handle(chunk: dict[str, Any]) -> Iterator[StreamEvent]:
+            nonlocal open_kind
+            if "error" in chunk:
+                message = str(chunk["error"])
+                errors.raise_for_vendor_error(
+                    "ollama",
+                    message,
+                    status=_stream_error_status(message),
+                    body=json.dumps(chunk),
+                )
+            message = chunk.get("message") or {}
+            for kind, delta in (
+                ("thinking", message.get("thinking")),
+                ("text", message.get("content")),
+            ):
+                if not delta:
+                    continue
+                if not isinstance(delta, str):
+                    raise TypeError(f"{kind} must be a string")
+                if open_kind != kind:
+                    if open_kind is not None:
+                        yield {"type": "block_stop", "index": len(blocks) - 1}
+                    open_kind = kind
+                    if kind == "thinking":
+                        blocks.append({"type": "thinking", "thinking": ""})
+                    else:
+                        blocks.append({"type": "text", "text": ""})
+                index = len(blocks) - 1
+                block = blocks[index]
+                if block["type"] == "thinking":
+                    block["thinking"] += delta
+                    yield {"type": "thinking_delta", "index": index, "thinking": delta}
+                elif block["type"] == "text":
+                    block["text"] += delta
+                    yield {"type": "text_delta", "index": index, "text": delta}
+
+            # Recent Ollama versions send tool calls in a done:false chunk, older
+            # ones in the final chunk, so collect them from every chunk.
+            for call in message.get("tool_calls") or []:
+                if open_kind is not None:
+                    yield {"type": "block_stop", "index": len(blocks) - 1}
+                    open_kind = None
+                block = _tool_use_block(len(tool_calls), call)
+                index = len(blocks)
+                blocks.append(block)
+                tool_calls.append(call)
                 yield {
-                    "type": "thinking_delta",
-                    "index": thinking_index,
-                    "thinking": delta,
+                    "type": "tool_use_start",
+                    "index": index,
+                    "id": block["id"],
+                    "name": block["name"],
                 }
-            if delta := message.get("content"):
-                if text_index is None:
-                    if thinking_index is not None:
-                        yield {"type": "block_stop", "index": thinking_index}
-                    text_index = 1 if thinking_index is not None else 0
-                text += delta
-                yield {"type": "text_delta", "index": text_index, "text": delta}
+                # Re-encoded from the parsed input rather than passed through, so
+                # missing or unparseable arguments stream as the same {} the final
+                # block carries.
+                yield {
+                    "type": "tool_use_delta",
+                    "index": index,
+                    "partial_json": json.dumps(block["input"]),
+                }
+                yield {"type": "block_stop", "index": index}
+
             if chunk.get("done"):
-                break
+                if open_kind is not None:
+                    yield {"type": "block_stop", "index": len(blocks) - 1}
+                data = dict(chunk)
+                data["message"] = {
+                    **message,
+                    "content": "".join(
+                        b["text"] for b in blocks if b["type"] == "text"
+                    ),
+                    "thinking": "".join(
+                        b["thinking"] for b in blocks if b["type"] == "thinking"
+                    ),
+                    "tool_calls": tool_calls,
+                }
+                yield {
+                    "type": "message_stop",
+                    "response": self._deserialize(
+                        data, timer.latency_ms(), timer.ttft_ms(), blocks
+                    ),
+                }
 
-        if text_index is not None:
-            yield {"type": "block_stop", "index": text_index}
-        elif thinking_index is not None:
-            yield {"type": "block_stop", "index": thinking_index}
-
-        next_index = sum(x is not None for x in (thinking_index, text_index))
-        tool_calls = last.get("message", {}).get("tool_calls") or []
-        for i, call in enumerate(tool_calls):
-            index = next_index + i
-            fn = call.get("function", {})
-            args = fn.get("arguments")
-            yield {
-                "type": "tool_use_start",
-                "index": index,
-                "id": f"call_{i}",
-                "name": fn.get("name", ""),
-            }
-            yield {
-                "type": "tool_use_delta",
-                "index": index,
-                "partial_json": args if isinstance(args, str) else json.dumps(args),
-            }
-            yield {"type": "block_stop", "index": index}
-
-        data = dict(last)
-        data["message"] = {
-            **last.get("message", {}),
-            "content": text,
-            "thinking": thinking,
-        }
-        yield {
-            "type": "message_stop",
-            "response": self._deserialize(data, (time.monotonic() - start) * 1000),
-        }
+        return handle

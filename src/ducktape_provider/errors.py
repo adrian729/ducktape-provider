@@ -1,5 +1,31 @@
+import http.client
 import urllib.error
 from typing import NoReturn
+
+from .types import (
+    APIError,
+    AuthError,
+    ContextOverflowError,
+    DucktapeError,
+    MalformedResponseError,
+    RateLimitError,
+    RequestTimeoutError,
+    ServerError,
+    UnsupportedBlockError,
+)
+
+# Re-exported so existing `errors.X` references keep working.
+__all__ = [
+    "APIError",
+    "AuthError",
+    "ContextOverflowError",
+    "DucktapeError",
+    "MalformedResponseError",
+    "RateLimitError",
+    "RequestTimeoutError",
+    "ServerError",
+    "UnsupportedBlockError",
+]
 
 _CONTEXT_OVERFLOW_MARKERS = (
     "context_length_exceeded",
@@ -9,58 +35,12 @@ _CONTEXT_OVERFLOW_MARKERS = (
     "too many tokens",
 )
 
-
-class DucktapeError(Exception):
-    pass
-
-
-class APIError(DucktapeError):
-    def __init__(self, message: str, *, status: int | None = None, body: str = ""):
-        super().__init__(message)
-        self.status = status
-        self.body = body
-
-
-class AuthError(APIError):
-    pass
-
-
-class RateLimitError(APIError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        status: int | None = None,
-        body: str = "",
-        retry_after: float | None = None,
-    ):
-        super().__init__(message, status=status, body=body)
-        self.retry_after = retry_after
-
-
-class ServerError(APIError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        status: int | None = None,
-        body: str = "",
-        retry_after: float | None = None,
-    ):
-        super().__init__(message, status=status, body=body)
-        self.retry_after = retry_after
-
-
-class ContextOverflowError(APIError):
-    pass
-
-
-class RequestTimeoutError(APIError):
-    pass
-
-
-class UnsupportedBlockError(DucktapeError):
-    pass
+# An error body only needs to be long enough to classify and explain the failure;
+# a misbehaving server must not make us buffer an unbounded one.
+_MAX_ERROR_BODY_BYTES = 64 * 1024
+# How much of a body or vendor message is quoted in an exception's message, so a
+# log line stays readable; the full (capped) body is still on `APIError.body`.
+_MAX_MESSAGE_DETAIL_CHARS = 2048
 
 
 def _parse_retry_after(e: urllib.error.HTTPError) -> float | None:
@@ -73,22 +53,58 @@ def _parse_retry_after(e: urllib.error.HTTPError) -> float | None:
         return None
 
 
+def _classify(
+    message: str, status: int | None, body: str, retry_after: float | None = None
+) -> APIError:
+    if status in (401, 403):
+        return AuthError(message, status=status, body=body)
+    if status == 429:
+        return RateLimitError(
+            message, status=status, body=body, retry_after=retry_after
+        )
+    if status is not None and status >= 500:
+        return ServerError(message, status=status, body=body, retry_after=retry_after)
+    if status in (400, None) and any(
+        m in body.lower() for m in _CONTEXT_OVERFLOW_MARKERS
+    ):
+        return ContextOverflowError(message, status=status, body=body)
+    return APIError(message, status=status, body=body)
+
+
+def _truncate(text: str) -> str:
+    if len(text) <= _MAX_MESSAGE_DETAIL_CHARS:
+        return text
+    return f"{text[:_MAX_MESSAGE_DETAIL_CHARS]}... [truncated]"
+
+
 def raise_for_http_error(vendor: str, e: urllib.error.HTTPError) -> NoReturn:
-    body = e.read().decode(errors="replace")
-    message = f"{vendor} chat failed: {e.code} {body}"
-    if e.code in (401, 403):
-        raise AuthError(message, status=e.code, body=body) from e
-    if e.code == 429:
-        raise RateLimitError(
-            message, status=e.code, body=body, retry_after=_parse_retry_after(e)
-        ) from e
-    if e.code >= 500:
-        raise ServerError(
-            message, status=e.code, body=body, retry_after=_parse_retry_after(e)
-        ) from e
-    if e.code == 400 and any(m in body.lower() for m in _CONTEXT_OVERFLOW_MARKERS):
-        raise ContextOverflowError(message, status=e.code, body=body) from e
-    raise APIError(message, status=e.code, body=body) from e
+    # The status alone still classifies the error, so a body that can't be read
+    # (timeout, connection dropped) must not replace it with a raw socket error.
+    try:
+        body = e.read(_MAX_ERROR_BODY_BYTES).decode(errors="replace")
+    except (OSError, http.client.HTTPException, ValueError):
+        body = ""
+    finally:
+        e.close()
+    raise _classify(
+        f"{vendor} chat failed: {e.code} {_truncate(body)}",
+        e.code,
+        body,
+        _parse_retry_after(e),
+    ) from e
+
+
+def raise_for_vendor_error(
+    vendor: str, message: str, *, status: int | None = None, body: str = ""
+) -> NoReturn:
+    """Raises for an error the vendor reported inside a 200 response body or stream.
+
+    `status` is the HTTP code the vendor documents for the same error type when
+    returned outside a stream, so both paths land on the same exception class.
+    """
+    raise _classify(
+        f"{vendor} chat failed: {_truncate(message)}", status, body or message
+    )
 
 
 def raise_for_connection_error(vendor: str, e: BaseException) -> NoReturn:
@@ -96,5 +112,23 @@ def raise_for_connection_error(vendor: str, e: BaseException) -> NoReturn:
         isinstance(e, urllib.error.URLError) and isinstance(e.reason, TimeoutError)
     ):
         raise RequestTimeoutError(f"{vendor} chat timed out") from e
+    if isinstance(e, http.client.IncompleteRead):
+        raise APIError(f"{vendor} chat failed: connection closed mid-response") from e
     reason = e.reason if isinstance(e, urllib.error.URLError) else e
-    raise APIError(f"{vendor} chat failed: {reason}") from e
+    raise APIError(
+        f"{vendor} chat failed: {str(reason) or type(reason).__name__}"
+    ) from e
+
+
+def raise_for_malformed_response(vendor: str, e: BaseException) -> NoReturn:
+    # A bare KeyError/IndexError message is just the key, e.g. "'index'".
+    detail = f"{type(e).__name__}: {e}" if isinstance(e, LookupError) else str(e)
+    raise MalformedResponseError(
+        f"{vendor} chat failed: malformed response: {_truncate(detail)}"
+    ) from e
+
+
+def raise_for_truncated_stream(vendor: str, terminal: str) -> NoReturn:
+    # A plain APIError, not MalformedResponseError: what did arrive parsed fine,
+    # so this is the connection ending early, which a retry can fix.
+    raise APIError(f"{vendor} chat failed: stream ended before {terminal}")

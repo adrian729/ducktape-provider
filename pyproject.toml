@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "One normalized chat/tool-use interface over Claude, OpenAI, and local Ollama — stdlib only."
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Adrian Sanchez Albanell", email = "adrian.sanchez.albanell@gmail.com" }
 ]

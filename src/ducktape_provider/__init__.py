@@ -1,33 +1,32 @@
 """One normalized chat/tool-use interface over Claude, OpenAI, and local Ollama."""
 
-from .adapter import Adapter
 from .adapters.claude import ClaudeAdapter
 from .adapters.ollama import OllamaLocalAdapter
 from .adapters.openai import OpenAIAdapter
-from .errors import (
+from .provider import Provider
+from .types import (
+    Adapter,
     APIError,
     AuthError,
-    ContextOverflowError,
-    DucktapeError,
-    RateLimitError,
-    RequestTimeoutError,
-    ServerError,
-    UnsupportedBlockError,
-)
-from .provider import Config, Provider
-from .types import (
     Base64DocumentBlock,
     Base64ImageBlock,
     Base64Str,
     Block,
     BlockStopEvent,
+    Config,
+    ContextOverflowError,
     DocumentBlock,
+    DucktapeError,
     ImageBlock,
     JsonSchema,
+    MalformedResponseError,
     Message,
     MessageStopEvent,
     MimeType,
+    RateLimitError,
+    RequestTimeoutError,
     Response,
+    ServerError,
     StopReason,
     StreamEvent,
     TextBlock,
@@ -40,6 +39,7 @@ from .types import (
     ToolUseBlock,
     ToolUseDeltaEvent,
     ToolUseStartEvent,
+    UnsupportedBlockError,
     UrlDocumentBlock,
     UrlImageBlock,
     Usage,
@@ -61,6 +61,7 @@ __all__ = [
     "DucktapeError",
     "ImageBlock",
     "JsonSchema",
+    "MalformedResponseError",
     "Message",
     "MessageStopEvent",
     "MimeType",

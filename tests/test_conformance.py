@@ -1,5 +1,7 @@
 import json
 import unittest
+from collections.abc import Generator
+from typing import cast
 from unittest.mock import patch
 
 from http_test_utils import (
@@ -9,13 +11,27 @@ from http_test_utils import (
     sse_lines,
 )
 
-from ducktape_provider import ClaudeAdapter, OllamaLocalAdapter, OpenAIAdapter, Provider
+from ducktape_provider import (
+    Adapter,
+    APIError,
+    ClaudeAdapter,
+    MalformedResponseError,
+    Message,
+    OllamaLocalAdapter,
+    OpenAIAdapter,
+    Provider,
+    StreamEvent,
+    ToolDef,
+    streaming,
+)
 
-TEXT_MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "hi there"}]}]
-TOOL_MESSAGES = [
+TEXT_MESSAGES: list[Message] = [
+    {"role": "user", "content": [{"type": "text", "text": "hi there"}]}
+]
+TOOL_MESSAGES: list[Message] = [
     {"role": "user", "content": [{"type": "text", "text": "weather in NYC?"}]}
 ]
-WEATHER_TOOL = [
+WEATHER_TOOL: list[ToolDef] = [
     {
         "name": "get_weather",
         "description": "Get the weather for a city",
@@ -146,7 +162,7 @@ class PlainTextChatTests(_ConformanceBase):
             json.dumps(CLAUDE_TEXT_DATA).encode()
         )
         provider = Provider(adapters={"claude": ClaudeAdapter()})
-        response = provider.chat("claude", "claude-x", TEXT_MESSAGES)
+        response = provider.chat("claude-x", TEXT_MESSAGES, provider="claude")
         self._assert_valid(response)
 
     @patch("urllib.request.urlopen")
@@ -155,7 +171,7 @@ class PlainTextChatTests(_ConformanceBase):
             json.dumps(OPENAI_TEXT_DATA).encode()
         )
         provider = Provider(adapters={"openai": OpenAIAdapter()})
-        response = provider.chat("openai", "gpt-x", TEXT_MESSAGES)
+        response = provider.chat("gpt-x", TEXT_MESSAGES, provider="openai")
         self._assert_valid(response)
 
     @patch("urllib.request.urlopen")
@@ -164,7 +180,7 @@ class PlainTextChatTests(_ConformanceBase):
             json.dumps(OLLAMA_TEXT_DATA).encode()
         )
         provider = Provider(adapters={"ollama-local": OllamaLocalAdapter()})
-        response = provider.chat("ollama-local", "llama3", TEXT_MESSAGES)
+        response = provider.chat("llama3", TEXT_MESSAGES, provider="ollama-local")
         self._assert_valid(response)
 
 
@@ -183,7 +199,7 @@ class ToolUseRoundTripTests(_ConformanceBase):
         )
         provider = Provider(adapters={"claude": ClaudeAdapter()})
         response = provider.chat(
-            "claude", "claude-x", TOOL_MESSAGES, tools=WEATHER_TOOL
+            "claude-x", TOOL_MESSAGES, tools=WEATHER_TOOL, provider="claude"
         )
         self._assert_tool_use(response)
 
@@ -193,7 +209,9 @@ class ToolUseRoundTripTests(_ConformanceBase):
             json.dumps(OPENAI_TOOL_DATA).encode()
         )
         provider = Provider(adapters={"openai": OpenAIAdapter()})
-        response = provider.chat("openai", "gpt-x", TOOL_MESSAGES, tools=WEATHER_TOOL)
+        response = provider.chat(
+            "gpt-x", TOOL_MESSAGES, tools=WEATHER_TOOL, provider="openai"
+        )
         self._assert_tool_use(response)
 
     @patch("urllib.request.urlopen")
@@ -203,7 +221,7 @@ class ToolUseRoundTripTests(_ConformanceBase):
         )
         provider = Provider(adapters={"ollama-local": OllamaLocalAdapter()})
         response = provider.chat(
-            "ollama-local", "llama3", TOOL_MESSAGES, tools=WEATHER_TOOL
+            "llama3", TOOL_MESSAGES, tools=WEATHER_TOOL, provider="ollama-local"
         )
         self._assert_tool_use(response)
 
@@ -214,19 +232,25 @@ class StreamingChatTests(_ConformanceBase):
         final = [e for e in events if e["type"] == "message_stop"]
         self.assertEqual(len(final), 1)
         self._assert_valid(final[0]["response"])
+        self.assertIsInstance(final[0]["response"]["ttft_ms"], float)
+        self.assertLessEqual(
+            final[0]["response"]["ttft_ms"], final[0]["response"]["latency_ms"]
+        )
 
     @patch("urllib.request.urlopen")
     def test_claude(self, mock_urlopen):
         mock_urlopen.return_value = FakeStreamResponse(sse_lines(*CLAUDE_STREAM_EVENTS))
         provider = Provider(adapters={"claude": ClaudeAdapter()})
-        events = list(provider.stream_chat("claude", "claude-x", TEXT_MESSAGES))
+        events = list(
+            provider.stream_chat("claude-x", TEXT_MESSAGES, provider="claude")
+        )
         self._assert_stream(events)
 
     @patch("urllib.request.urlopen")
     def test_openai(self, mock_urlopen):
         mock_urlopen.return_value = FakeStreamResponse(sse_lines(*OPENAI_STREAM_EVENTS))
         provider = Provider(adapters={"openai": OpenAIAdapter()})
-        events = list(provider.stream_chat("openai", "gpt-x", TEXT_MESSAGES))
+        events = list(provider.stream_chat("gpt-x", TEXT_MESSAGES, provider="openai"))
         self._assert_stream(events)
 
     @patch("urllib.request.urlopen")
@@ -235,8 +259,180 @@ class StreamingChatTests(_ConformanceBase):
             ndjson_lines(*OLLAMA_STREAM_CHUNKS)
         )
         provider = Provider(adapters={"ollama-local": OllamaLocalAdapter()})
-        events = list(provider.stream_chat("ollama-local", "llama3", TEXT_MESSAGES))
+        events = list(
+            provider.stream_chat("llama3", TEXT_MESSAGES, provider="ollama-local")
+        )
         self._assert_stream(events)
+
+
+ADAPTERS = {
+    "claude": (ClaudeAdapter, "ANTHROPIC_API_KEY"),
+    "openai": (OpenAIAdapter, "OPENAI_API_KEY"),
+    "ollama-local": (OllamaLocalAdapter, None),
+}
+
+
+def _calls(adapter, config):
+    return {
+        "chat": lambda: adapter.chat("m", TEXT_MESSAGES, config=config),
+        "stream_chat": lambda: list(
+            adapter.stream_chat("m", TEXT_MESSAGES, config=config)
+        ),
+    }
+
+
+class RequestValidationTests(unittest.TestCase):
+    """Client-side mistakes surface as ValueError before any request, on every
+    backend, and never quote a header value (which may be a credential)."""
+
+    @patch("urllib.request.urlopen")
+    def test_invalid_config_raises_value_error_not_api_error(self, mock_urlopen):
+        configs = {
+            "negative timeout": {"timeout": -1},
+            "zero timeout": {"timeout": 0},
+            "string timeout": {"timeout": "5"},
+            "bool timeout": {"timeout": True},
+            "infinite timeout": {"timeout": float("inf")},
+            "NaN timeout": {"timeout": float("nan")},
+            # Finite, but overflows the socket layer's clock inside urlopen.
+            "huge timeout": {"timeout": 1e300},
+            "huge int timeout": {"timeout": 10**400},
+            "newline in header": {"headers": {"x-token": "SECRET\ninjected: 1"}},
+            "trailing CRLF": {"headers": {"x-token": "SECRET\r\n"}},
+            "non-latin-1 header": {"headers": {"x-token": "SECRET\u2603"}},
+            "bad header name": {"headers": {"x token:": "SECRET"}},
+        }
+        for name, (cls, _) in ADAPTERS.items():
+            for label, config in configs.items():
+                for call_name, call in _calls(cls(), config).items():
+                    with self.subTest(name, label=label, call=call_name):
+                        with self.assertRaises(ValueError) as ctx:
+                            call()
+                        self.assertNotIsInstance(ctx.exception, APIError)
+                        self.assertNotIn("SECRET", str(ctx.exception))
+                        self.assertIsNone(ctx.exception.__context__)
+        mock_urlopen.assert_not_called()
+
+    def test_timeout_none_means_no_timeout_and_absent_means_default(self):
+        for name, (cls, _) in ADAPTERS.items():
+            adapter = cls()
+            for config, expected in (
+                ({"timeout": None}, None),
+                ({}, cls._CHAT_TIMEOUT),
+                ({"timeout": 2.5}, 2.5),
+            ):
+                with self.subTest(name, config=config):
+                    _, timeout = adapter._build_request(
+                        "m", TEXT_MESSAGES, None, None, config, stream=False
+                    )
+                    self.assertEqual(timeout, expected)
+
+    @patch("urllib.request.urlopen")
+    def test_timeout_none_reaches_urlopen(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(OLLAMA_TEXT_DATA).encode()
+        )
+        OllamaLocalAdapter().chat("m", TEXT_MESSAGES, config={"timeout": None})
+        self.assertIsNone(mock_urlopen.call_args.kwargs["timeout"])
+
+
+STREAM_FIXTURES: dict[str, tuple[Adapter, list[bytes]]] = {
+    "claude": (ClaudeAdapter(), sse_lines(*CLAUDE_STREAM_EVENTS)),
+    "openai": (OpenAIAdapter(), sse_lines(*OPENAI_STREAM_EVENTS)),
+    "ollama-local": (OllamaLocalAdapter(), ndjson_lines(*OLLAMA_STREAM_CHUNKS)),
+}
+
+
+class ConsumerExceptionTests(unittest.TestCase):
+    """An exception the consumer throws into a stream is the consumer's, so it
+    propagates unchanged rather than being relabeled as a vendor failure."""
+
+    def test_thrown_exceptions_propagate_unchanged(self):
+        for name, (adapter, lines) in STREAM_FIXTURES.items():
+            for thrown in (ConnectionResetError("consumer"), KeyError("consumer")):
+                with (
+                    self.subTest(name, thrown=type(thrown).__name__),
+                    patch("urllib.request.urlopen") as mock_urlopen,
+                ):
+                    mock_urlopen.return_value = FakeStreamResponse(lines)
+                    # Concrete adapters return generators; the Adapter ABC only
+                    # promises an Iterator, which has no throw().
+                    stream = cast(
+                        Generator[StreamEvent],
+                        adapter.stream_chat("m", TEXT_MESSAGES),
+                    )
+                    next(stream)
+                    with self.assertRaises(type(thrown)) as ctx:
+                        stream.throw(thrown)
+                    self.assertIs(ctx.exception, thrown)
+
+
+class MalformedBodyTests(unittest.TestCase):
+    """Unparseable bodies raise MalformedResponseError on every backend and path,
+    never a raw RecursionError or an unbounded read."""
+
+    def test_deeply_nested_json(self):
+        deep = b"[" * 200_000 + b"]" * 200_000
+        for name, (adapter, _) in STREAM_FIXTURES.items():
+            with (
+                self.subTest(name, path="chat"),
+                patch("urllib.request.urlopen", return_value=buffered_response(deep)),
+                self.assertRaises(MalformedResponseError),
+            ):
+                adapter.chat("m", TEXT_MESSAGES)
+            with (
+                self.subTest(name, path="stream_chat"),
+                patch(
+                    "urllib.request.urlopen",
+                    return_value=FakeStreamResponse(
+                        [b"data: " + deep + b"\n\n" if name != "ollama-local" else deep]
+                    ),
+                ),
+                self.assertRaises(MalformedResponseError),
+            ):
+                list(adapter.stream_chat("m", TEXT_MESSAGES))
+
+    def test_oversized_chat_body(self):
+        for name, (adapter, _) in STREAM_FIXTURES.items():
+            body = buffered_response(json.dumps({"pad": "x" * 1000}).encode())
+            with (
+                self.subTest(name),
+                patch("urllib.request.urlopen", return_value=body),
+                patch.object(streaming, "_MAX_EVENT_BYTES", 100),
+                self.assertRaises(MalformedResponseError) as ctx,
+            ):
+                adapter.chat("m", TEXT_MESSAGES)
+            self.assertIn("exceeds", str(ctx.exception))
+
+
+class TruncatedStreamTests(unittest.TestCase):
+    """A stream cut off before its terminal event must raise on every backend,
+    never end with a message_stop built from partial data."""
+
+    def _assert_raises(self, provider_name, adapter, model, lines):
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = FakeStreamResponse(lines)
+            provider = Provider(adapters={provider_name: adapter})
+            with self.assertRaises(APIError):
+                list(provider.stream_chat(model, TEXT_MESSAGES, provider=provider_name))
+
+    def test_claude(self):
+        self._assert_raises(
+            "claude", ClaudeAdapter(), "claude-x", sse_lines(*CLAUDE_STREAM_EVENTS[:-1])
+        )
+
+    def test_openai(self):
+        self._assert_raises(
+            "openai", OpenAIAdapter(), "gpt-x", sse_lines(*OPENAI_STREAM_EVENTS[:-1])
+        )
+
+    def test_ollama(self):
+        self._assert_raises(
+            "ollama-local",
+            OllamaLocalAdapter(),
+            "llama3",
+            ndjson_lines(*OLLAMA_STREAM_CHUNKS[:-1]),
+        )
 
 
 if __name__ == "__main__":
