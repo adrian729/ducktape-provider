@@ -14,6 +14,7 @@ from ..adapter import Adapter, _merge_config, _validate_headers
 from ..streaming import (
     _PROBE_ERRORS,
     _iter_sse,
+    _loads_tool_input,
     _read_json,
     _request_json,
     _shape_checked,
@@ -88,6 +89,12 @@ class ClaudeAdapter(Adapter):
         self._models_cache = model_ids
         self._cache_time = now
         return set(model_ids)
+
+    def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
+        # A 404 means the model itself is gone, so Provider's auto-match must not
+        # keep re-picking this adapter off a stale models() list for up to _MODELS_TTL.
+        if e.status == 404:
+            self._models_cache = None
 
     def _serialize(self, messages: list[Message]) -> list[dict[str, Any]]:
         serialized: list[dict[str, Any]] = []
@@ -265,9 +272,13 @@ class ClaudeAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=False
         )
-        data, latency_ms = _request_json("claude", req, timeout)
-        with _shape_checked("claude"):
-            return self._deserialize(data, latency_ms)
+        try:
+            data, latency_ms = _request_json("claude", req, timeout)
+            with _shape_checked("claude"):
+                return self._deserialize(data, latency_ms)
+        except errors.APIError as e:
+            self._invalidate_models_cache_on_404(e)
+            raise
 
     def stream_chat(
         self,
@@ -280,14 +291,18 @@ class ClaudeAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=True
         )
-        yield from _stream_request(
-            "claude",
-            req,
-            timeout,
-            frames=_iter_sse,
-            handler=self._stream_handler,
-            terminal="message_stop",
-        )
+        try:
+            yield from _stream_request(
+                "claude",
+                req,
+                timeout,
+                frames=_iter_sse,
+                handler=self._stream_handler,
+                terminal="message_stop",
+            )
+        except errors.APIError as e:
+            self._invalidate_models_cache_on_404(e)
+            raise
 
     def _stream_handler(
         self, timer: _StreamTimer
@@ -295,12 +310,33 @@ class ClaudeAdapter(Adapter):
         # Keyed by wire index, so a delta for a block that never started is a
         # KeyError (malformed) rather than silently growing a padded list.
         blocks: dict[int, dict[str, Any]] = {}
-        json_buffers: dict[int, str] = {}
+        # Deltas collected per block and joined once at content_block_stop, rather
+        # than accumulated with `+=` on every delta: str concatenation on a dict
+        # value isn't CPython's in-place-append fast path, so `+=` here is O(n^2)
+        # over a long stream.
+        text_parts: dict[int, list[str]] = {}
+        thinking_parts: dict[int, list[str]] = {}
+        signature_parts: dict[int, list[str]] = {}
+        json_buffers: dict[int, list[str]] = {}
         # Indices that produced a start or delta event; only those get block_stop,
         # so a block the caller never saw (e.g. server_tool_use) has no lone stop.
         surfaced: set[int] = set()
         stream_usage: dict[str, Any] = {}
         stop_reason = ""
+
+        def flush(index: int) -> None:
+            # Shared by content_block_stop and message_stop, since a stream can
+            # end mid-block (no content_block_stop) and its buffered deltas
+            # must still land in the final response rather than vanish.
+            block = blocks[index]
+            if index in text_parts:
+                block["text"] = "".join(text_parts.pop(index))
+            if index in thinking_parts:
+                block["thinking"] = "".join(thinking_parts.pop(index))
+            if index in signature_parts:
+                block["signature"] = "".join(signature_parts.pop(index))
+            if json_buffers.get(index):
+                block["input"] = _loads_tool_input("".join(json_buffers.pop(index)))
 
         def handle(event: dict[str, Any]) -> Iterator[StreamEvent]:
             nonlocal stream_usage, stop_reason
@@ -312,7 +348,7 @@ class ClaudeAdapter(Adapter):
                 block = blocks[index] = dict(event["content_block"])
                 # server_tool_use/mcp_tool_use stream their input the same way.
                 if "input" in block:
-                    json_buffers[index] = ""
+                    json_buffers[index] = []
                 if block["type"] == "tool_use":
                     surfaced.add(index)
                     yield {
@@ -327,11 +363,11 @@ class ClaudeAdapter(Adapter):
                 delta = event["delta"]
                 dtype = delta.get("type")
                 if dtype == "text_delta":
-                    block["text"] = block.get("text", "") + delta["text"]
+                    text_parts.setdefault(index, []).append(delta["text"])
                     surfaced.add(index)
                     yield {"type": "text_delta", "index": index, "text": delta["text"]}
                 elif dtype == "thinking_delta":
-                    block["thinking"] = block.get("thinking", "") + delta["thinking"]
+                    thinking_parts.setdefault(index, []).append(delta["thinking"])
                     surfaced.add(index)
                     yield {
                         "type": "thinking_delta",
@@ -339,11 +375,9 @@ class ClaudeAdapter(Adapter):
                         "thinking": delta["thinking"],
                     }
                 elif dtype == "signature_delta":
-                    block["signature"] = block.get("signature", "") + delta["signature"]
+                    signature_parts.setdefault(index, []).append(delta["signature"])
                 elif dtype == "input_json_delta":
-                    json_buffers[index] = (
-                        json_buffers.get(index, "") + delta["partial_json"]
-                    )
+                    json_buffers.setdefault(index, []).append(delta["partial_json"])
                     # Server-executed tool calls aren't the caller's to run, so
                     # only client tool_use blocks surface as tool_use events.
                     if block.get("type") == "tool_use":
@@ -354,12 +388,7 @@ class ClaudeAdapter(Adapter):
                         }
             elif etype == "content_block_stop":
                 index = event["index"]
-                block = blocks[index]
-                if json_buffers.get(index):
-                    try:
-                        block["input"] = json.loads(json_buffers[index])
-                    except json.JSONDecodeError:
-                        block["input"] = {}
+                flush(index)
                 if index in surfaced:
                     yield {"type": "block_stop", "index": index}
             elif etype == "message_delta":
@@ -383,6 +412,8 @@ class ClaudeAdapter(Adapter):
                     body=json.dumps(event),
                 )
             elif etype == "message_stop":
+                for index in blocks:
+                    flush(index)
                 data = {
                     "content": [blocks[i] for i in sorted(blocks)],
                     "stop_reason": stop_reason,

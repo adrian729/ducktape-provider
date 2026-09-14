@@ -2,6 +2,7 @@
 with urllib.request.urlopen mocked out. No real network call is ever made."""
 
 import json
+import time
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -25,6 +26,7 @@ from ducktape_provider import (
     UnsupportedBlockError,
 )
 from ducktape_provider.adapters import ollama as ollama_module
+from ducktape_provider.streaming import _StreamTimer
 
 MESSAGES: list[Message] = [
     {"role": "user", "content": [{"type": "text", "text": "weather in NYC?"}]}
@@ -650,6 +652,144 @@ class OllamaReservedConfigTests(unittest.TestCase):
                 adapter.chat("llama3", MESSAGES, config={key: True})
             self.assertIn(key, str(ctx.exception))
         mock_urlopen.assert_not_called()
+
+
+class OllamaInvalidToolArgsTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+
+    @patch("urllib.request.urlopen")
+    def test_unparseable_arguments_string_falls_back_to_empty_input_in_chat(
+        self, mock_urlopen
+    ):
+        data = {
+            "message": {
+                "content": "",
+                "tool_calls": [{"function": {"name": "f", "arguments": "{oops"}}],
+            },
+            "done_reason": "stop",
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(data).encode())
+        response = self.adapter.chat("llama3", MESSAGES)
+        self.assertEqual(
+            response["content"],
+            [{"type": "tool_use", "id": "call_0", "name": "f", "input": {}}],
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_deeply_nested_arguments_fall_back_to_empty_input_in_chat(
+        self, mock_urlopen
+    ):
+        deep = "[" * 200_000 + "]" * 200_000
+        data = {
+            "message": {
+                "content": "",
+                "tool_calls": [{"function": {"name": "f", "arguments": deep}}],
+            },
+            "done_reason": "stop",
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(data).encode())
+        response = self.adapter.chat("llama3", MESSAGES)
+        self.assertEqual(
+            response["content"],
+            [{"type": "tool_use", "id": "call_0", "name": "f", "input": {}}],
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_deeply_nested_arguments_fall_back_to_empty_input_in_stream(
+        self, mock_urlopen
+    ):
+        deep = "[" * 200_000 + "]" * 200_000
+        chunk = {
+            "message": {"tool_calls": [{"function": {"name": "f", "arguments": deep}}]},
+            **FINAL_CHUNK_STATS,
+        }
+        mock_urlopen.return_value = FakeStreamResponse(ndjson_lines(chunk))
+        response = final_response(list(self.adapter.stream_chat("llama3", MESSAGES)))
+        self.assertEqual(
+            response["content"],
+            [{"type": "tool_use", "id": "call_0", "name": "f", "input": {}}],
+        )
+
+
+class OllamaStreamAccumulationTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+
+    def test_long_streams_accumulate_in_linear_time(self):
+        # Few large deltas, so quadratic accumulation copies tens of GiB (~45 s
+        # measured at this size) while linear takes ~30 ms: a wide margin either way.
+        n, delta = 4000, "x" * 16 * 1024
+        for field, block_type in [("thinking", "thinking"), ("content", "text")]:
+            with self.subTest(field):
+                handle = self.adapter._stream_handler(_StreamTimer())
+                chunk = {"message": {"role": "assistant", field: delta}, "done": False}
+                start = time.perf_counter()
+                for _ in range(n):
+                    list(handle(chunk))
+                response = final_response(
+                    list(
+                        handle(
+                            {
+                                "message": {"role": "assistant", "content": ""},
+                                "done": True,
+                            }
+                        )
+                    )
+                )
+                self.assertLess(time.perf_counter() - start, 1.0)
+                [block] = response["content"]
+                self.assertEqual(block["type"], block_type)
+
+    def test_accumulated_text_is_correct(self):
+        n = 1000
+        handle = self.adapter._stream_handler(_StreamTimer())
+        for _ in range(n):
+            list(
+                handle(
+                    {"message": {"role": "assistant", "content": "ab"}, "done": False}
+                )
+            )
+        response = final_response(
+            list(
+                handle({"message": {"role": "assistant", "content": ""}, "done": True})
+            )
+        )
+        self.assertEqual(response["content"], [{"type": "text", "text": "ab" * n}])
+
+
+class OllamaModelsCacheInvalidationTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+        self.adapter._models_cache = {"llama-old"}
+        self.adapter._cache_time = time.monotonic()
+
+    @patch("urllib.request.urlopen")
+    def test_chat_404_invalidates_models_cache(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            "http://127.0.0.1:11434/api/chat", 404, b"not found"
+        )
+        with self.assertRaises(APIError):
+            self.adapter.chat("llama3", MESSAGES)
+        self.assertIsNone(self.adapter._models_cache)
+
+    @patch("urllib.request.urlopen")
+    def test_stream_chat_404_invalidates_models_cache(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            "http://127.0.0.1:11434/api/chat", 404, b"not found"
+        )
+        with self.assertRaises(APIError):
+            list(self.adapter.stream_chat("llama3", MESSAGES))
+        self.assertIsNone(self.adapter._models_cache)
+
+    @patch("urllib.request.urlopen")
+    def test_non_404_error_leaves_models_cache_untouched(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            "http://127.0.0.1:11434/api/chat", 500, b"boom"
+        )
+        with self.assertRaises(APIError):
+            self.adapter.chat("llama3", MESSAGES)
+        self.assertEqual(self.adapter._models_cache, {"llama-old"})
 
 
 if __name__ == "__main__":

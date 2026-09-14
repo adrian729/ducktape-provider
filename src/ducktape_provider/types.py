@@ -9,8 +9,8 @@ from collections.abc import Iterator
 from typing import Any, Literal, NotRequired, TypedDict
 
 # --- 1. Interface types -------------------------------------------------------
-# What `Provider` methods take and return. Adapters receive and return the same
-# types, so a third-party adapter needs nothing else from this section.
+# What `Provider` methods take and return. A third-party adapter's `chat`/`stream_chat`
+# take and return these same types (see section 3).
 
 # Inputs: `messages`, `tools` and `config` arguments.
 
@@ -89,7 +89,10 @@ class ToolResultBlock(TypedDict):
 
 
 class ThinkingBlock(TypedDict):
-    """Model reasoning. Send it back unchanged in follow-up turns."""
+    """Model reasoning. Send it back unchanged in follow-up turns.
+
+    The OpenAI adapter drops thinking blocks given to it: it has no equivalent input field.
+    """
 
     type: Literal["thinking"]
     thinking: str
@@ -119,7 +122,7 @@ class Config(TypedDict, total=False):
 
     Call sites accept `Config | Mapping[str, Any]`, since a closed TypedDict would
     reject vendor fields like `temperature` (PEP 728's `extra_items` would keep both,
-    but mypy doesn't support it yet).
+    but not all type checkers support it yet).
     """
 
     timeout: float | None
@@ -148,7 +151,7 @@ class Response(TypedDict):
     ttft_ms: NotRequired[float]
 
 
-StopReason = Literal[
+type StopReason = Literal[
     "end_turn",
     "tool_use",
     "max_tokens",

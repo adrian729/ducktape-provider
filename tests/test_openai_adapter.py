@@ -2,6 +2,7 @@
 with urllib.request.urlopen mocked out. No real network call is ever made."""
 
 import json
+import time
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -1060,6 +1061,171 @@ class OpenAIReservedConfigTests(unittest.TestCase):
             "gpt-x", MESSAGES, None, None, {"store": True}, stream=False
         )
         self.assertIs(request_body(req)["store"], True)
+
+
+class OpenAIInvalidToolArgsTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OpenAIAdapter()
+
+    def test_deeply_nested_arguments_fall_back_to_empty_input_in_chat(self):
+        deep = "[" * 200_000 + "]" * 200_000
+        data = {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": deep,
+                }
+            ],
+        }
+        response = self.adapter._deserialize(data, 0.0)
+        self.assertEqual(
+            response["content"],
+            [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}],
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_deeply_nested_arguments_fall_back_to_empty_input_in_stream(
+        self, mock_urlopen
+    ):
+        deep = "[" * 200_000 + "]" * 200_000
+        final = {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": deep,
+                }
+            ],
+        }
+        events = [
+            {
+                "type": "response.output_item.added",
+                "item": {"id": "fc_1", "type": "function_call"},
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "delta": deep,
+            },
+            {"type": "response.completed", "response": final},
+        ]
+        mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events))
+        response = final_response(list(self.adapter.stream_chat("gpt-x", MESSAGES)))
+        self.assertEqual(
+            response["content"],
+            [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}],
+        )
+
+    def test_non_object_arguments_fall_back_to_empty_input_in_chat(self):
+        for arguments in ("[1,2,3]", "1", "null"):
+            with self.subTest(arguments=arguments):
+                data = {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "get_weather",
+                            "arguments": arguments,
+                        }
+                    ],
+                }
+                response = self.adapter._deserialize(data, 0.0)
+                self.assertEqual(
+                    response["content"],
+                    [
+                        {
+                            "type": "tool_use",
+                            "id": "call_1",
+                            "name": "get_weather",
+                            "input": {},
+                        }
+                    ],
+                )
+
+    @patch("urllib.request.urlopen")
+    def test_non_object_arguments_fall_back_to_empty_input_in_stream(
+        self, mock_urlopen
+    ):
+        for arguments in ("[1,2,3]", "1", "null"):
+            with self.subTest(arguments=arguments):
+                final = {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "get_weather",
+                            "arguments": arguments,
+                        }
+                    ],
+                }
+                events = [
+                    {
+                        "type": "response.output_item.added",
+                        "item": {"id": "fc_1", "type": "function_call"},
+                    },
+                    {
+                        "type": "response.function_call_arguments.delta",
+                        "item_id": "fc_1",
+                        "delta": arguments,
+                    },
+                    {"type": "response.completed", "response": final},
+                ]
+                mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events))
+                response = final_response(
+                    list(self.adapter.stream_chat("gpt-x", MESSAGES))
+                )
+                self.assertEqual(
+                    response["content"],
+                    [
+                        {
+                            "type": "tool_use",
+                            "id": "call_1",
+                            "name": "get_weather",
+                            "input": {},
+                        }
+                    ],
+                )
+
+
+class OpenAIModelsCacheInvalidationTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OpenAIAdapter()
+        self.adapter._models_cache = {"gpt-old"}
+        self.adapter._cache_time = time.monotonic()
+
+    @patch("urllib.request.urlopen")
+    def test_chat_404_invalidates_models_cache(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            OpenAIAdapter._RESPONSES_URL, 404, b"no such model"
+        )
+        with self.assertRaises(APIError):
+            self.adapter.chat("gpt-x", MESSAGES)
+        self.assertIsNone(self.adapter._models_cache)
+
+    @patch("urllib.request.urlopen")
+    def test_stream_chat_404_invalidates_models_cache(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            OpenAIAdapter._RESPONSES_URL, 404, b"no such model"
+        )
+        with self.assertRaises(APIError):
+            list(self.adapter.stream_chat("gpt-x", MESSAGES))
+        self.assertIsNone(self.adapter._models_cache)
+
+    @patch("urllib.request.urlopen")
+    def test_non_404_error_leaves_models_cache_untouched(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            OpenAIAdapter._RESPONSES_URL, 500, b"boom"
+        )
+        with self.assertRaises(APIError):
+            self.adapter.chat("gpt-x", MESSAGES)
+        self.assertEqual(self.adapter._models_cache, {"gpt-old"})
 
 
 if __name__ == "__main__":

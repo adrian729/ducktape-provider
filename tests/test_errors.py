@@ -66,6 +66,17 @@ class RaiseForHttpErrorTests(unittest.TestCase):
             errors.raise_for_http_error("test", e)
         self.assertIsNone(ctx.exception.retry_after)
 
+    def test_429_with_non_finite_or_negative_retry_after_leaves_none(self):
+        # nan/inf/negative would reach a caller's time.sleep(retry_after) and raise.
+        for value in ("nan", "inf", "-inf", "-1"):
+            with self.subTest(value=value):
+                e = http_error(
+                    "http://x", 429, b"slow down", headers={"Retry-After": value}
+                )
+                with self.assertRaises(errors.RateLimitError) as ctx:
+                    errors.raise_for_http_error("test", e)
+                self.assertIsNone(ctx.exception.retry_after)
+
     def test_error_body_is_closed_after_reading(self):
         e = http_error("http://x", 500, b"boom")
         with self.assertRaises(errors.ServerError):
@@ -163,6 +174,18 @@ class RaiseForVendorErrorTests(unittest.TestCase):
             errors.raise_for_vendor_error("test", "boom", body='{"x": 1}')
         self.assertIs(type(ctx.exception), errors.APIError)
         self.assertEqual(ctx.exception.body, '{"x": 1}')
+
+    def test_oversized_body_is_capped_like_an_http_error_body(self):
+        body = "x" * (16 * 1024 * 1024)
+        with self.assertRaises(errors.APIError) as ctx:
+            errors.raise_for_vendor_error("test", "boom", body=body)
+        self.assertEqual(len(ctx.exception.body), errors._MAX_ERROR_BODY_BYTES)
+
+    def test_oversized_message_used_as_body_is_also_capped(self):
+        message = "x" * (16 * 1024 * 1024)
+        with self.assertRaises(errors.APIError) as ctx:
+            errors.raise_for_vendor_error("test", message)
+        self.assertEqual(len(ctx.exception.body), errors._MAX_ERROR_BODY_BYTES)
 
 
 class RaiseForReadErrorTests(unittest.TestCase):

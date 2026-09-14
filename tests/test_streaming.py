@@ -63,7 +63,7 @@ class IterNDJSONTests(unittest.TestCase):
 
 
 class OversizeAndMalformedTests(unittest.TestCase):
-    def test_oversize_line_raises_api_error_before_buffering_it_whole(self):
+    def test_oversize_line_raises_malformed_before_buffering_it_whole(self):
         resp = FakeStreamResponse([b"data: " + b"x" * 100 + b"\n"])
         with (
             patch.object(streaming, "_MAX_EVENT_BYTES", 32),
@@ -74,7 +74,7 @@ class OversizeAndMalformedTests(unittest.TestCase):
         # only limit + 1 bytes were read from the endless line
         self.assertEqual(len(resp._lines[0]), 100 + 7 - 33)
 
-    def test_oversize_multi_line_event_raises_api_error(self):
+    def test_oversize_multi_line_event_raises_malformed(self):
         lines = _lines(*["data: " + "x" * 20] * 3, "")
         with (
             patch.object(streaming, "_MAX_EVENT_BYTES", 64),
@@ -82,14 +82,14 @@ class OversizeAndMalformedTests(unittest.TestCase):
         ):
             list(_iter_sse(lines, "test"))
 
-    def test_oversize_ndjson_line_raises_api_error(self):
+    def test_oversize_ndjson_line_raises_malformed(self):
         with (
             patch.object(streaming, "_MAX_EVENT_BYTES", 8),
             self.assertRaises(MalformedResponseError),
         ):
             list(_iter_ndjson(_lines('{"a": "long value"}'), "test"))
 
-    def test_invalid_utf8_raises_api_error(self):
+    def test_invalid_utf8_raises_malformed(self):
         resp = FakeStreamResponse([b"data: \xff\n", b"\n"])
         with self.assertRaises(MalformedResponseError) as ctx:
             list(_iter_sse(resp, "test"))

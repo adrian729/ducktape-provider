@@ -1,4 +1,5 @@
 import http.client
+import math
 import urllib.error
 from typing import NoReturn
 
@@ -48,9 +49,13 @@ def _parse_retry_after(e: urllib.error.HTTPError) -> float | None:
     if header_value is None:
         return None
     try:
-        return float(header_value)
+        value = float(header_value)
     except ValueError:
         return None
+    # nan/inf/negative would reach a caller's time.sleep(retry_after) and raise there.
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
 
 
 def _classify(
@@ -75,6 +80,12 @@ def _truncate(text: str) -> str:
     if len(text) <= _MAX_MESSAGE_DETAIL_CHARS:
         return text
     return f"{text[:_MAX_MESSAGE_DETAIL_CHARS]}... [truncated]"
+
+
+def _cap_body(body: str) -> str:
+    # Same cap as an HTTP error body (raise_for_http_error reads at most this many
+    # bytes); a vendor error's body is already str, so bound length instead of bytes.
+    return body[:_MAX_ERROR_BODY_BYTES]
 
 
 def raise_for_http_error(vendor: str, e: urllib.error.HTTPError) -> NoReturn:
@@ -103,7 +114,9 @@ def raise_for_vendor_error(
     returned outside a stream, so both paths land on the same exception class.
     """
     raise _classify(
-        f"{vendor} chat failed: {_truncate(message)}", status, body or message
+        f"{vendor} chat failed: {_truncate(message)}",
+        status,
+        _cap_body(body or message),
     )
 
 

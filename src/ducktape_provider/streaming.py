@@ -66,6 +66,18 @@ def _loads(payload: str | bytes, vendor: str) -> Any:
         errors.raise_for_malformed_response(vendor, e)
 
 
+def _loads_tool_input(payload: str) -> dict[str, Any]:
+    # Models do emit invalid tool arguments, and valid-JSON-but-non-object ones
+    # (e.g. "[1,2,3]"). Either way an empty input lets the caller answer with an
+    # error tool_result and the model retry, instead of violating the dict input
+    # type or losing the reply.
+    try:
+        parsed = json.loads(payload)
+    except (ValueError, RecursionError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _iter_sse(resp: _LineReader, vendor: str) -> Iterator[Any]:
     data_lines: list[str] = []
     size = 0

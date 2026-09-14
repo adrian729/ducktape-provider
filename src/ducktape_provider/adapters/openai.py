@@ -14,6 +14,7 @@ from ..adapter import Adapter, _merge_config, _validate_headers
 from ..streaming import (
     _PROBE_ERRORS,
     _iter_sse,
+    _loads_tool_input,
     _read_json,
     _request_json,
     _shape_checked,
@@ -85,6 +86,12 @@ class OpenAIAdapter(Adapter):
         self._models_cache = model_ids
         self._cache_time = now
         return set(model_ids)
+
+    def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
+        # A 404 means the model itself is gone, so Provider's auto-match must not
+        # keep re-picking this adapter off a stale models() list for up to _MODELS_TTL.
+        if e.status == 404:
+            self._models_cache = None
 
     def _serialize(self, messages: list[Message]) -> list[dict[str, Any]]:
         """The Responses API's "input" is a flat, order-significant list of items, not messages
@@ -179,10 +186,7 @@ class OpenAIAdapter(Adapter):
                         blocks.append({"type": "text", "text": part["refusal"]})
                         has_refusal = True
             elif item.get("type") == "function_call":
-                try:
-                    args = json.loads(item["arguments"])
-                except json.JSONDecodeError:
-                    args = {}
+                args = _loads_tool_input(item["arguments"])
                 blocks.append(
                     {
                         "type": "tool_use",
@@ -296,11 +300,15 @@ class OpenAIAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=False
         )
-        data, latency_ms = _request_json("openai", req, timeout)
-        with _shape_checked("openai"):
-            if data.get("status") == "failed":
-                self._raise_for_error(data.get("error"))
-            return self._deserialize(data, latency_ms)
+        try:
+            data, latency_ms = _request_json("openai", req, timeout)
+            with _shape_checked("openai"):
+                if data.get("status") == "failed":
+                    self._raise_for_error(data.get("error"))
+                return self._deserialize(data, latency_ms)
+        except errors.APIError as e:
+            self._invalidate_models_cache_on_404(e)
+            raise
 
     def stream_chat(
         self,
@@ -313,14 +321,18 @@ class OpenAIAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=True
         )
-        yield from _stream_request(
-            "openai",
-            req,
-            timeout,
-            frames=_iter_sse,
-            handler=self._stream_handler,
-            terminal="response.completed",
-        )
+        try:
+            yield from _stream_request(
+                "openai",
+                req,
+                timeout,
+                frames=_iter_sse,
+                handler=self._stream_handler,
+                terminal="response.completed",
+            )
+        except errors.APIError as e:
+            self._invalidate_models_cache_on_404(e)
+            raise
 
     def _stream_handler(
         self, timer: _StreamTimer

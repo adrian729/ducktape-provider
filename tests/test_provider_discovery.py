@@ -122,17 +122,22 @@ class TestProviderDiscovery(unittest.TestCase):
         )
 
     @patch(ENTRY_POINTS)
-    def test_same_name_across_dists_resolves_by_dist_order(self, mock_entry_points):
+    def test_same_name_across_dists_neither_gets_plain_name(self, mock_entry_points):
         mock_entry_points.return_value = [
             FakeEntryPoint("shared", adapter_class("from-beta"), dist="beta-dist"),
             FakeEntryPoint("shared", adapter_class("from-alpha"), dist="alpha-dist"),
         ]
-        with self.assertLogs(LOGGER, "WARNING"):
+        with self.assertLogs(LOGGER, "WARNING") as logs:
             provider = Provider(adapters={}, autodiscover=True)
+        # Neither wins the plain name: which one would depend on dist sort
+        # order, and a later install could silently reroute an existing
+        # provider="shared" call to a different vendor.
         self.assertEqual(
             provider.models(),
-            {"shared": ["from-alpha"], "beta-dist:shared": ["from-beta"]},
+            {"alpha-dist:shared": ["from-alpha"], "beta-dist:shared": ["from-beta"]},
         )
+        self.assertIn("alpha-dist", logs.output[0])
+        self.assertIn("beta-dist", logs.output[0])
 
     @patch(ENTRY_POINTS)
     def test_double_collision_skips_without_loading(self, mock_entry_points):
@@ -175,7 +180,12 @@ class TestProviderDiscovery(unittest.TestCase):
                 autodiscover={"wanted", "beta-dist:shared", "missing", "nope:shared"},
             )
 
-        self.assertEqual(provider.models(), {"wanted": ["wanted"], "shared": ["beta"]})
+        # "beta-dist:shared" was requested in qualified form, so it registers
+        # under that exact name rather than the plain one.
+        self.assertEqual(
+            provider.models(),
+            {"wanted": ["wanted"], "beta-dist:shared": ["beta"]},
+        )
         self.assertEqual(excluded.load_calls, 0)
         self.assertEqual(other_dist.load_calls, 0)
         self.assertEqual(len(logs.output), 1)
@@ -190,6 +200,19 @@ class TestProviderDiscovery(unittest.TestCase):
             Provider(adapters={}, autodiscover={"wanted"})
 
     @patch(ENTRY_POINTS)
+    def test_allowlist_generator_is_not_exhausted_by_validation(
+        self, mock_entry_points
+    ):
+        # autodiscover is iterated once to type-check entries and again to build
+        # the allowlist; a generator must survive both, not just the first.
+        mock_entry_points.return_value = [
+            FakeEntryPoint("wanted", adapter_class("wanted"))
+        ]
+        generator: Any = (name for name in ("wanted",))
+        provider = Provider(adapters={}, autodiscover=generator)
+        self.assertEqual(provider.models(), {"wanted": ["wanted"]})
+
+    @patch(ENTRY_POINTS)
     def test_distribution_names_are_normalized(self, mock_entry_points):
         mock_entry_points.return_value = [
             FakeEntryPoint("claude", adapter_class("plugin"), dist="Acme_LLM.Tools"),
@@ -201,12 +224,14 @@ class TestProviderDiscovery(unittest.TestCase):
                 adapters=explicit,
                 autodiscover={"acme-llm-tools:claude", "OTHER.dist:other"},
             )
+        # "other" was also requested in qualified form ("OTHER.dist:other"), so
+        # it registers as "other-dist:other" even though nothing collides.
         self.assertEqual(
             provider.models(),
             {
                 "claude": ["explicit"],
                 "acme-llm-tools:claude": ["plugin"],
-                "other": ["other"],
+                "other-dist:other": ["other"],
             },
         )
 
@@ -225,6 +250,78 @@ class TestProviderDiscovery(unittest.TestCase):
     def test_allowlist_rejects_bare_string(self):
         with self.assertRaises(TypeError):
             Provider(adapters={}, autodiscover="myvendor")
+
+    def test_allowlist_rejects_bytes(self):
+        bogus: Any = b"myvendor"
+        with self.assertRaises(TypeError):
+            Provider(adapters={}, autodiscover=bogus)
+
+    def test_allowlist_rejects_bytearray(self):
+        bogus: Any = bytearray(b"myvendor")
+        with self.assertRaises(TypeError):
+            Provider(adapters={}, autodiscover=bogus)
+
+    def test_allowlist_rejects_non_str_elements(self):
+        bogus: Any = {"wanted", 5}
+        with self.assertRaises(TypeError):
+            Provider(adapters={}, autodiscover=bogus)
+
+    @patch(ENTRY_POINTS)
+    def test_two_same_name_plugins_get_no_plain_name(self, mock_entry_points):
+        mock_entry_points.return_value = [
+            FakeEntryPoint("shared", adapter_class("from-yak"), dist="yak"),
+            FakeEntryPoint("shared", adapter_class("from-zed"), dist="zed"),
+        ]
+        with self.assertLogs(LOGGER, "WARNING"):
+            provider = Provider(adapters={}, autodiscover=True)
+        self.assertNotIn("shared", provider.models())
+        self.assertEqual(
+            provider.models(),
+            {"yak:shared": ["from-yak"], "zed:shared": ["from-zed"]},
+        )
+
+    @patch(ENTRY_POINTS)
+    def test_qualified_allowlist_entry_registers_under_qualified_name(
+        self, mock_entry_points
+    ):
+        mock_entry_points.return_value = [
+            FakeEntryPoint("tool", adapter_class("tool"), dist="vendor")
+        ]
+        with self.assertNoLogs(LOGGER, "WARNING"):
+            provider = Provider(adapters={}, autodiscover={"vendor:tool"})
+        # No collision at all, but the allowlist entry was qualified, so that
+        # is the name registered — not the plain "tool".
+        self.assertEqual(provider.models(), {"vendor:tool": ["tool"]})
+
+    @patch(ENTRY_POINTS)
+    def test_plain_allowlist_entry_colliding_with_builtin_registers_qualified(
+        self, mock_entry_points
+    ):
+        mock_entry_points.return_value = [
+            FakeEntryPoint("claude", adapter_class("plugin"), dist="acme-llm")
+        ]
+        explicit = {"claude": adapter_class("explicit")()}
+        with self.assertLogs(LOGGER, "WARNING"):
+            provider = Provider(adapters=explicit, autodiscover={"claude"})
+        self.assertEqual(
+            provider.models(),
+            {"claude": ["explicit"], "acme-llm:claude": ["plugin"]},
+        )
+
+    @patch(ENTRY_POINTS)
+    def test_ambiguous_plain_name_keyerror_names_qualified_alternatives(
+        self, mock_entry_points
+    ):
+        mock_entry_points.return_value = [
+            FakeEntryPoint("shared", adapter_class("from-yak"), dist="yak"),
+            FakeEntryPoint("shared", adapter_class("from-zed"), dist="zed"),
+        ]
+        with self.assertLogs(LOGGER, "WARNING"):
+            provider = Provider(adapters={}, autodiscover=True)
+        with self.assertRaisesRegex(
+            KeyError, "yak:shared.*zed:shared|zed:shared.*yak:shared"
+        ):
+            provider.chat("model", [], provider="shared")
 
     @patch(ENTRY_POINTS)
     def test_non_adapter_entry_point_is_skipped(self, mock_entry_points):
@@ -281,7 +378,9 @@ class TestProviderDiscovery(unittest.TestCase):
             Provider(adapters={}, autodiscover=True)
 
     @patch(ENTRY_POINTS)
-    def test_failed_instantiation_frees_name_for_later_plugin(self, mock_entry_points):
+    def test_failed_instantiation_of_contested_plugin_still_qualifies_survivor(
+        self, mock_entry_points
+    ):
         class FailsOnInit(StubAdapter):
             def __init__(self):
                 raise RuntimeError("bad config")
@@ -292,7 +391,10 @@ class TestProviderDiscovery(unittest.TestCase):
         ]
         with self.assertLogs(LOGGER, "WARNING"):
             provider = Provider(adapters={}, autodiscover=True)
-        self.assertEqual(provider.models(), {"shared": ["beta"]})
+        # The plain name stays unclaimed even though the entry contesting it
+        # failed to instantiate: the collision was about the two discovered
+        # entry points sharing a name, decided before either was loaded.
+        self.assertEqual(provider.models(), {"beta:shared": ["beta"]})
 
     @patch(ENTRY_POINTS)
     def test_discovery_is_cached_but_adapters_are_fresh(self, mock_entry_points):

@@ -2,7 +2,7 @@
 
 Simple AI chat provider to normalize usage of different APIs.
 
-Claude, OpenAI and local Ollama adapters included. Extensible via extendign the `Adapter` interface.
+Claude, OpenAI and local Ollama adapters included. Extensible by subclassing `Adapter`.
 
 Stdlib only, no dependencies.
 
@@ -72,14 +72,14 @@ response = provider.chat(
 - `system`: optional system prompt.
 - `tools`: optional `list[ToolDef]` the model may call.
 - `config`: optional per-call settings and vendor request fields, see [Configuration](#configuration).
-- `provider`: optional, keyword-only adapter name, e.g. `"claude"`, `"openai"`, `"ollama-local"`. If omitted, the first reachable provider that serves `model` is used and a warning is logged; the match is cached per `Provider`.
+- `provider`: optional, keyword-only adapter name, e.g. `"claude"`, `"openai"`, `"ollama-local"`. If omitted, the first available provider that serves `model` is used and a warning is logged; the match is cached per `Provider` and dropped if a call through it fails with a 404, `AuthError`, or if the provider can't be reached.
 
 ### Other methods
 
 | Method | Description | Returns |
 |---|---|---|
-| `providers()` | Configured providers and whether each is reachable | `dict[str, bool]` |
-| `models()` | Model ids of each reachable provider | `dict[str, list[str]]` |
+| `providers()` | Configured providers and whether each is available (configured; for Ollama, running) | `dict[str, bool]` |
+| `models()` | Model ids of each available provider | `dict[str, list[str]]` |
 | `async_providers()` | `await`able `providers` | `dict[str, bool]` |
 | `async_models()` | `await`able `models` | `dict[str, list[str]]` |
 
@@ -100,6 +100,8 @@ provider.chat(
 ```
 
 `providers` holds per-provider config that overrides the rest for that provider; its fields are the same as that vendor's API.
+
+`headers` merge key by key: a per-provider header adds to the call's headers rather than replacing them. Keys the call already sets (`model`, `messages`/`input`, `stream`) raise `ValueError`.
 
 ## Streaming
 
@@ -151,7 +153,7 @@ Import them from `ducktape_provider`. Streams raise the same errors as `chat`.
 - `APIError` is the base of the six above it; it has `status` (HTTP status or `None`) and `body`.
 - `RateLimitError` and `ServerError` have `retry_after` (seconds or `None`).
 - `DucktapeError` is the base of all of them.
-- Invalid arguments raise `ValueError`/`TypeError` before any request is sent.
+- Invalid arguments raise `ValueError`/`TypeError` before any request is sent; an unknown `provider`, or no provider serving `model`, raises `KeyError`.
 
 ## Third-party adapters
 
@@ -183,7 +185,7 @@ Or ship it as a plugin, registered in your package's `pyproject.toml` (the class
 myvendor = "my_package.adapter:MyVendorAdapter"
 ```
 
-Users load plugins with `Provider(autodiscover=True)`, or only some with `Provider(autodiscover={"myvendor"})`. If the name is already taken, the plugin registers as `<package>:<name>` (e.g. `my-package:myvendor`).
+Users load plugins with `Provider(autodiscover=True)`, or only some with `Provider(autodiscover={"myvendor"})` — the allowlist accepts either the plain name or a qualified `"my-package:myvendor"`. A plugin whose name collides with a built-in, a passed adapter, or another plugin registers as `<package>:<name>` instead; if that qualified name is also taken, it's skipped with a warning.
 
 ## Async
 

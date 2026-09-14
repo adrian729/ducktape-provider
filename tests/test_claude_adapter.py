@@ -3,6 +3,7 @@ with urllib.request.urlopen mocked out. No real network call is ever made."""
 
 import http.client
 import json
+import time
 import unittest
 from collections.abc import Generator
 from typing import Any, cast
@@ -31,6 +32,7 @@ from ducktape_provider import (
     ToolDef,
 )
 from ducktape_provider.adapters import claude as claude_module
+from ducktape_provider.streaming import _StreamTimer
 
 MESSAGES: list[Message] = [
     {"role": "user", "content": [{"type": "text", "text": "weather in NYC?"}]}
@@ -734,6 +736,126 @@ class ClaudeStreamContentTests(unittest.TestCase):
         self.assertEqual(final["stop_reason"], "end_turn")
 
 
+class ClaudeStreamFlushOnMessageStopTests(unittest.TestCase):
+    """A block still open at message_stop (no content_block_stop for it) must
+    still contribute its buffered deltas to the final response."""
+
+    def setUp(self):
+        self.adapter = ClaudeAdapter()
+
+    @patch("urllib.request.urlopen")
+    def test_text_without_content_block_stop_is_kept(self, mock_urlopen):
+        mock_urlopen.return_value = FakeStreamResponse(
+            sse_lines(
+                {"type": "message_start", "message": {"usage": {"input_tokens": 1}}},
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "Let me check"},
+                },
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {"output_tokens": 4},
+                },
+                {"type": "message_stop"},
+            )
+        )
+        response = final_response(list(self.adapter.stream_chat("claude-x", MESSAGES)))
+        self.assertEqual(
+            response["content"], [{"type": "text", "text": "Let me check"}]
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_thinking_and_signature_without_content_block_stop_are_kept(
+        self, mock_urlopen
+    ):
+        mock_urlopen.return_value = FakeStreamResponse(
+            sse_lines(
+                {"type": "message_start", "message": {"usage": {"input_tokens": 1}}},
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "thinking",
+                        "thinking": "",
+                        "signature": "",
+                    },
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "let me think"},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "signature_delta", "signature": "EqQB"},
+                },
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {"output_tokens": 4},
+                },
+                {"type": "message_stop"},
+            )
+        )
+        response = final_response(list(self.adapter.stream_chat("claude-x", MESSAGES)))
+        self.assertEqual(
+            response["content"],
+            [{"type": "thinking", "thinking": "let me think", "signature": "EqQB"}],
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_tool_use_input_without_content_block_stop_is_kept(self, mock_urlopen):
+        mock_urlopen.return_value = FakeStreamResponse(
+            sse_lines(
+                {"type": "message_start", "message": {"usage": {"input_tokens": 1}}},
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "get_weather",
+                        "input": {},
+                    },
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": '{"city": "NYC"}',
+                    },
+                },
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"output_tokens": 4},
+                },
+                {"type": "message_stop"},
+            )
+        )
+        response = final_response(list(self.adapter.stream_chat("claude-x", MESSAGES)))
+        self.assertEqual(
+            response["content"],
+            [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "get_weather",
+                    "input": {"city": "NYC"},
+                }
+            ],
+        )
+
+
 class ClaudeStreamErrorTests(unittest.TestCase):
     def setUp(self):
         self.adapter = ClaudeAdapter()
@@ -936,6 +1058,190 @@ class ClaudeReservedConfigTests(unittest.TestCase):
         self.assertNotIn("headers", sent)
         self.assertEqual(sent["max_tokens"], 10)
         self.assertEqual(req.get_header("X-extra"), "1")
+
+
+class ClaudeStreamAccumulationTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = ClaudeAdapter()
+
+    def test_long_streams_accumulate_in_linear_time(self):
+        # Few large deltas, so quadratic accumulation copies tens of GiB (~45 s
+        # measured at this size) while linear takes ~30 ms: a wide margin either way.
+        n, delta = 4000, "x" * 16 * 1024
+        cases = [
+            ("thinking", "thinking_delta", "thinking"),
+            ("thinking", "signature_delta", "signature"),
+            ("text", "text_delta", "text"),
+            ("tool_use", "input_json_delta", "partial_json"),
+        ]
+        for block_type, delta_type, field in cases:
+            with self.subTest(field):
+                handle = self.adapter._stream_handler(_StreamTimer())
+                list(handle({"type": "message_start", "message": {"usage": {}}}))
+                block: dict[str, Any] = {"type": block_type}
+                if block_type == "tool_use":
+                    block |= {"id": "t1", "name": "f", "input": {}}
+                list(
+                    handle(
+                        {
+                            "type": "content_block_start",
+                            "index": 0,
+                            "content_block": block,
+                        }
+                    )
+                )
+                event = {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": delta_type, field: delta},
+                }
+                start = time.perf_counter()
+                for _ in range(n):
+                    list(handle(event))
+                list(handle({"type": "content_block_stop", "index": 0}))
+                self.assertLess(time.perf_counter() - start, 1.0)
+
+    def test_accumulated_text_and_thinking_are_correct(self):
+        n = 1000
+        handle = self.adapter._stream_handler(_StreamTimer())
+        list(handle({"type": "message_start", "message": {"usage": {}}}))
+        list(
+            handle(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                }
+            )
+        )
+        for _ in range(n):
+            list(
+                handle(
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": "ab"},
+                    }
+                )
+            )
+        list(handle({"type": "content_block_stop", "index": 0}))
+        list(
+            handle(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {},
+                }
+            )
+        )
+        response = final_response(list(handle({"type": "message_stop"})))
+        self.assertEqual(response["content"], [{"type": "text", "text": "ab" * n}])
+
+
+class ClaudeInvalidToolArgsTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = ClaudeAdapter()
+
+    @patch("urllib.request.urlopen")
+    def test_deeply_nested_partial_json_falls_back_to_empty_input(self, mock_urlopen):
+        deep = "[" * 200_000 + "]" * 200_000
+        events = [
+            {"type": "message_start", "message": {"usage": {"input_tokens": 1}}},
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": "f",
+                    "input": {},
+                },
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": deep},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_stop"},
+        ]
+        mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events))
+        response = final_response(list(self.adapter.stream_chat("claude-x", MESSAGES)))
+        self.assertEqual(
+            response["content"][0],
+            {"type": "tool_use", "id": "t1", "name": "f", "input": {}},
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_non_object_json_falls_back_to_empty_input(self, mock_urlopen):
+        for partial_json in ("[1,2,3]", "1", "null"):
+            with self.subTest(partial_json=partial_json):
+                events = [
+                    {
+                        "type": "message_start",
+                        "message": {"usage": {"input_tokens": 1}},
+                    },
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "f",
+                            "input": {},
+                        },
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": partial_json,
+                        },
+                    },
+                    {"type": "content_block_stop", "index": 0},
+                    {"type": "message_stop"},
+                ]
+                mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events))
+                response = final_response(
+                    list(self.adapter.stream_chat("claude-x", MESSAGES))
+                )
+                self.assertEqual(
+                    response["content"][0],
+                    {"type": "tool_use", "id": "t1", "name": "f", "input": {}},
+                )
+
+
+class ClaudeModelsCacheInvalidationTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = ClaudeAdapter()
+        self.adapter._models_cache = {"claude-old"}
+        self.adapter._cache_time = time.monotonic()
+
+    @patch("urllib.request.urlopen")
+    def test_chat_404_invalidates_models_cache(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            ClaudeAdapter._MESSAGES_URL, 404, b"no such model"
+        )
+        with self.assertRaises(APIError):
+            self.adapter.chat("claude-x", MESSAGES)
+        self.assertIsNone(self.adapter._models_cache)
+
+    @patch("urllib.request.urlopen")
+    def test_stream_chat_404_invalidates_models_cache(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            ClaudeAdapter._MESSAGES_URL, 404, b"no such model"
+        )
+        with self.assertRaises(APIError):
+            list(self.adapter.stream_chat("claude-x", MESSAGES))
+        self.assertIsNone(self.adapter._models_cache)
+
+    @patch("urllib.request.urlopen")
+    def test_non_404_error_leaves_models_cache_untouched(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(ClaudeAdapter._MESSAGES_URL, 500, b"boom")
+        with self.assertRaises(APIError):
+            self.adapter.chat("claude-x", MESSAGES)
+        self.assertEqual(self.adapter._models_cache, {"claude-old"})
 
 
 if __name__ == "__main__":

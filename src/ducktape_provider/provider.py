@@ -7,6 +7,7 @@ import importlib.metadata
 import logging
 import re
 import threading
+import urllib.error
 from collections.abc import AsyncGenerator, Callable, Collection, Iterator, Mapping
 from typing import Any, Literal, TypeVar
 
@@ -14,7 +15,7 @@ from .adapter import Adapter, _validate_timeout
 from .adapters.claude import ClaudeAdapter
 from .adapters.ollama import OllamaLocalAdapter
 from .adapters.openai import OpenAIAdapter
-from .errors import APIError
+from .errors import APIError, AuthError
 from .types import Config, Message, Response, StreamEvent, ToolDef
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,47 @@ def _dist_name(entry_point: importlib.metadata.EntryPoint) -> str | None:
 def _normalize_allowlist_entry(entry: str) -> str:
     dist, sep, name = entry.partition(":")
     return f"{_normalize_dist(dist)}:{name}" if sep else entry
+
+
+def _probe_available(name: str, adapter: Adapter) -> bool:
+    """adapter.is_available(), treating a raise the same as a False return."""
+    try:
+        return adapter.is_available()
+    except Exception:
+        logger.warning("provider %r raised from is_available()", name, exc_info=True)
+        return False
+
+
+def _usable_models(name: str, adapter: Adapter) -> list[str] | None:
+    """Sorted adapter.models(), or None if the adapter is unavailable or raises."""
+    if not _probe_available(name, adapter):
+        return None
+    try:
+        return sorted(adapter.models())
+    except Exception:
+        logger.warning("provider %r raised while listing models", name, exc_info=True)
+        return None
+
+
+def _should_evict_cache(exc: APIError) -> bool:
+    """Whether an auto-matched call's failure means the cached provider is bad,
+    not just the request. A 404 means the model moved off that provider; an
+    AuthError means the provider itself rejected us. A plain status-None
+    APIError also covers truncated streams, mid-response IncompleteRead, and
+    unmapped vendor error events — all cases where the provider was reached and
+    answered, just badly — so those evict only when the underlying failure was
+    a connect/DNS/TLS-handshake URLError (raise_for_connection_error's `from e`),
+    meaning the provider was never actually reached.
+    """
+    if exc.status == 404:
+        return True
+    if isinstance(exc, AuthError):
+        return True
+    return (
+        type(exc) is APIError
+        and exc.status is None
+        and isinstance(exc.__cause__, urllib.error.URLError)
+    )
 
 
 @functools.cache
@@ -129,10 +171,24 @@ class Provider:
                 "ollama-local": OllamaLocalAdapter(),
             }
         )
-        if isinstance(autodiscover, str):
+        if isinstance(autodiscover, (str, bytes, bytearray)):
             raise TypeError(
-                "autodiscover must be a bool or a collection of names, not a str"
+                "autodiscover must be a bool or a collection of str names, not a"
+                f" {type(autodiscover).__name__}"
             )
+        if not isinstance(autodiscover, bool):
+            # Materialized once: a generator would be exhausted by this validation
+            # pass, leaving nothing for frozenset() below to register.
+            autodiscover = tuple(autodiscover)
+            for entry in autodiscover:
+                if not isinstance(entry, str):
+                    raise TypeError(
+                        f"autodiscover entries must be str, got {type(entry).__name__}"
+                    )
+        # A plain name a plugin lost to a collision, mapped to the qualified
+        # name(s) it registered under instead — used to make an unknown-provider
+        # KeyError on that plain name point at its qualified alternatives.
+        self._plain_name_alternatives: dict[str, list[str]] = {}
         if autodiscover:
             self._register_plugins(
                 None if autodiscover is True else frozenset(autodiscover)
@@ -154,6 +210,14 @@ class Provider:
             if allowed is not None
             else {}
         )
+
+        # (entry_point, dist, qualified) for every candidate, plus whether it was
+        # selected via a dist-qualified allowlist entry (e.g. "beta-dist:shared")
+        # rather than a plain one — a qualified match always registers under
+        # that exact qualified name, so it never competes for the plain one.
+        candidates: list[
+            tuple[importlib.metadata.EntryPoint, str | None, str | None, bool]
+        ] = []
         for entry_point in _scan_entry_points():
             dist = _dist_name(entry_point)
             qualified = f"{dist}:{entry_point.name}" if dist is not None else None
@@ -166,18 +230,69 @@ class Provider:
                 if not matches:
                     continue
                 unmatched -= matches
+                qualified_match = any(":" in entry for entry in matches)
+            else:
+                qualified_match = False
+            candidates.append((entry_point, dist, qualified, qualified_match))
 
-            name = entry_point.name
-            if name in self._adapters:
-                if qualified is None or qualified in self._adapters:
+        # A name two or more plugins would otherwise both plainly want is
+        # ambiguous — which one gets it would depend on install order or dist
+        # sort, and a new install could silently reroute an existing plain-name
+        # call to a different vendor. So none of them gets it.
+        plain_name_counts: dict[str, int] = {}
+        for entry_point, _dist, _qualified, qualified_match in candidates:
+            if not qualified_match:
+                plain_name_counts[entry_point.name] = (
+                    plain_name_counts.get(entry_point.name, 0) + 1
+                )
+        contested = {name for name, count in plain_name_counts.items() if count > 1}
+        for name in sorted(contested):
+            dists = sorted(
+                (_dist_name(ep) or "?")
+                for ep, _dist, _qualified, qm in candidates
+                if not qm and ep.name == name
+            )
+            logger.warning(
+                "Multiple third-party adapters named %r discovered (from %s);"
+                " none will use the plain name",
+                name,
+                ", ".join(dists),
+            )
+
+        for entry_point, dist, qualified, qualified_match in candidates:
+            collision_reason: str | None = None
+            if qualified_match:
+                name = qualified
+                if name is None or name in self._adapters:
                     logger.warning(
-                        "Skipping third-party adapter %r from %s: name already taken"
-                        " and no free distribution-prefixed name",
+                        "Skipping third-party adapter %r from %s: requested"
+                        " name %r is unavailable",
                         entry_point.name,
                         dist,
+                        qualified,
                     )
                     continue
-                name = qualified
+                # The plain name was asked for in qualified form, so it never
+                # competes for the plain name — but if a built-in or explicit
+                # adapter already holds the plain name, still say so.
+                if entry_point.name in self._adapters:
+                    collision_reason = "collides with an existing provider"
+            else:
+                name = entry_point.name
+                if name in self._adapters:
+                    collision_reason = "collides with an existing provider"
+                elif name in contested:
+                    collision_reason = "shares its name with another discovered adapter"
+                if collision_reason is not None:
+                    if qualified is None or qualified in self._adapters:
+                        logger.warning(
+                            "Skipping third-party adapter %r from %s: name already"
+                            " taken and no free distribution-prefixed name",
+                            entry_point.name,
+                            dist,
+                        )
+                        continue
+                    name = qualified
 
             adapter_class = _load_adapter_class(entry_point)
             if adapter_class is None:
@@ -193,13 +308,16 @@ class Provider:
                 )
                 continue
 
-            if name != entry_point.name:
+            if collision_reason is not None:
                 logger.warning(
-                    "Third-party adapter %r from %s collides with an existing"
-                    " provider; registered as %r",
+                    "Third-party adapter %r from %s %s; registered as %r",
                     entry_point.name,
                     dist,
+                    collision_reason,
                     name,
+                )
+                self._plain_name_alternatives.setdefault(entry_point.name, []).append(
+                    name
                 )
             self._adapters[name] = adapter
 
@@ -214,9 +332,16 @@ class Provider:
             return self._adapters[provider]
         except KeyError:
             configured = ", ".join(repr(name) for name in self._adapters) or "none"
-            raise KeyError(
+            message = (
                 f"unknown provider {provider!r}; configured providers: {configured}"
-            ) from None
+            )
+            alternatives = self._plain_name_alternatives.get(provider)
+            if alternatives:
+                message += (
+                    f"; {provider!r} is ambiguous among multiple third-party"
+                    f" adapters, registered as: {', '.join(repr(n) for n in alternatives)}"
+                )
+            raise KeyError(message) from None
 
     def _resolve_provider(
         self, provider: str | None, model: str
@@ -233,14 +358,12 @@ class Provider:
         with self._auto_match_lock:
             cached_name = self._auto_match_cache.get(model)
             if cached_name is not None:
-                cached_adapter = self._adapters.get(cached_name)
-                if cached_adapter is not None:
-                    return cached_name, cached_adapter
-                # The cached provider was since removed from self._adapters.
-                del self._auto_match_cache[model]
+                # self._adapters never changes after __init__, so a cached name
+                # is always still in it.
+                return cached_name, self._adapters[cached_name]
         checked: list[str] = []
         for name, adapter in self._adapters.items():
-            if not adapter.is_available():
+            if not _probe_available(name, adapter):
                 continue
             checked.append(name)
             try:
@@ -257,9 +380,9 @@ class Provider:
                 continue
             if model in models:
                 with self._auto_match_lock:
-                    # Only the fill that wins the race logs, so two concurrent
-                    # first calls don't double-warn (not a hard guarantee, just
-                    # what the lock happens to buy us for free).
+                    # The lock makes two concurrent first-fills log only once; a
+                    # second log happens only if the entry was evicted between
+                    # one fill and the next.
                     first_fill = model not in self._auto_match_cache
                     self._auto_match_cache[model] = name
                 if first_fill:
@@ -275,20 +398,26 @@ class Provider:
         )
 
     def _evict_auto_match(self, model: str, resolved_name: str) -> None:
-        """Drops a stale cache entry after a 404 through it (model gone from that provider)."""
+        """Drops a stale cache entry after a call through it fails in a way that
+        implicates the provider itself, not just the request (see `_should_evict_cache`)."""
         with self._auto_match_lock:
             if self._auto_match_cache.get(model) == resolved_name:
                 del self._auto_match_cache[model]
 
+    def _maybe_evict_auto_match(
+        self, exc: APIError, model: str, resolved_name: str
+    ) -> None:
+        if _should_evict_cache(exc):
+            self._evict_auto_match(model, resolved_name)
+
     def _evict_on_error(
         self, stream: Iterator[StreamEvent], model: str, resolved_name: str
     ) -> Iterator[StreamEvent]:
-        """Wraps an auto-matched stream so a 404 that reaches the consumer evicts the cache entry."""
+        """Wraps an auto-matched stream so an error that reaches the consumer can evict the cache entry."""
         try:
             yield from stream
         except APIError as exc:
-            if exc.status == 404:
-                self._evict_auto_match(model, resolved_name)
+            self._maybe_evict_auto_match(exc, model, resolved_name)
             raise
 
     async def _run_off_loop(self, func: Callable[[], _T]) -> _T:
@@ -300,36 +429,36 @@ class Provider:
     def providers(self) -> dict[str, bool]:
         """Configured providers, available or not."""
         return {
-            name: adapter.is_available() for name, adapter in self._adapters.items()
+            name: _probe_available(name, adapter)
+            for name, adapter in self._adapters.items()
         }
 
     def models(self) -> dict[str, list[str]]:
         """Usable model ids by provider; nothing from unreachable vendors."""
         return {
-            name: sorted(adapter.models())
+            name: models
             for name, adapter in self._adapters.items()
-            if adapter.is_available()
+            if (models := _usable_models(name, adapter)) is not None
         }
 
     async def async_providers(self) -> dict[str, bool]:
         """providers(), probing every adapter concurrently off the event loop."""
         adapters = list(self._adapters.items())
         results = await asyncio.gather(
-            *(self._run_off_loop(adapter.is_available) for _, adapter in adapters)
+            *(
+                self._run_off_loop(functools.partial(_probe_available, name, adapter))
+                for name, adapter in adapters
+            )
         )
         return {name: result for (name, _), result in zip(adapters, results)}
 
     async def async_models(self) -> dict[str, list[str]]:
         """models(), querying every adapter concurrently off the event loop."""
-
-        def usable_models(adapter: Adapter) -> list[str] | None:
-            return sorted(adapter.models()) if adapter.is_available() else None
-
         adapters = list(self._adapters.items())
         results = await asyncio.gather(
             *(
-                self._run_off_loop(functools.partial(usable_models, adapter))
-                for _, adapter in adapters
+                self._run_off_loop(functools.partial(_usable_models, name, adapter))
+                for name, adapter in adapters
             )
         )
         return {
@@ -381,8 +510,8 @@ class Provider:
                 self._resolve_config(resolved_name, config),
             )
         except APIError as exc:
-            if provider is None and exc.status == 404:
-                self._evict_auto_match(model, resolved_name)
+            if provider is None:
+                self._maybe_evict_auto_match(exc, model, resolved_name)
             raise
 
     def stream_chat(
@@ -426,8 +555,8 @@ class Provider:
                     self._resolve_config(resolved_name, config),
                 )
             except APIError as exc:
-                if provider is None and exc.status == 404:
-                    self._evict_auto_match(model, resolved_name)
+                if provider is None:
+                    self._maybe_evict_auto_match(exc, model, resolved_name)
                 raise
 
         return await self._run_off_loop(call)

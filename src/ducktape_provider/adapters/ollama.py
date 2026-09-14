@@ -14,6 +14,7 @@ from ..adapter import Adapter, _merge_config, _validate_headers
 from ..streaming import (
     _PROBE_ERRORS,
     _iter_ndjson,
+    _loads_tool_input,
     _read_json,
     _request_json,
     _shape_checked,
@@ -53,11 +54,11 @@ def _tool_use_block(index: int, call: dict[str, Any]) -> ToolUseBlock:
     fn = call.get("function") or {}
     args = fn.get("arguments")
     if isinstance(args, str):
-        try:
-            args = json.loads(args)
-        except json.JSONDecodeError:
-            args = {}
-    if not isinstance(args, dict):
+        args = _loads_tool_input(args)
+    elif not isinstance(args, dict):
+        # Non-string, non-dict arguments (None, a list, ...) have no parse step
+        # of their own to fall back to {} — _loads_tool_input already does that
+        # for the string case.
         args = {}
     return {
         "type": "tool_use",
@@ -104,6 +105,12 @@ class OllamaLocalAdapter(Adapter):
         self._models_cache = model_ids
         self._cache_time = now
         return set(model_ids)
+
+    def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
+        # A 404 means the model itself is gone, so Provider's auto-match must not
+        # keep re-picking this adapter off a stale models() list for up to _MODELS_TTL.
+        if e.status == 404:
+            self._models_cache = None
 
     def _serialize(
         self, messages: list[Message], system: str | None
@@ -257,9 +264,13 @@ class OllamaLocalAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=False
         )
-        data, latency_ms = _request_json("ollama", req, timeout)
-        with _shape_checked("ollama"):
-            return self._deserialize(data, latency_ms)
+        try:
+            data, latency_ms = _request_json("ollama", req, timeout)
+            with _shape_checked("ollama"):
+                return self._deserialize(data, latency_ms)
+        except errors.APIError as e:
+            self._invalidate_models_cache_on_404(e)
+            raise
 
     def stream_chat(
         self,
@@ -272,14 +283,18 @@ class OllamaLocalAdapter(Adapter):
         req, timeout = self._build_request(
             model, messages, system, tools, config, stream=True
         )
-        yield from _stream_request(
-            "ollama",
-            req,
-            timeout,
-            frames=_iter_ndjson,
-            handler=self._stream_handler,
-            terminal="a done chunk",
-        )
+        try:
+            yield from _stream_request(
+                "ollama",
+                req,
+                timeout,
+                frames=_iter_ndjson,
+                handler=self._stream_handler,
+                terminal="a done chunk",
+            )
+        except errors.APIError as e:
+            self._invalidate_models_cache_on_404(e)
+            raise
 
     def _stream_handler(
         self, timer: _StreamTimer
@@ -289,8 +304,23 @@ class OllamaLocalAdapter(Adapter):
         call is emitted as its own complete block as soon as its chunk arrives. The
         final content holds one block per streamed index, in that order."""
         blocks: list[Block] = []
+        # Deltas collected per open block and joined once it closes, rather than
+        # accumulated with `+=` on every delta: str concatenation on a list item
+        # isn't CPython's in-place-append fast path, so `+=` here is O(n^2) over a
+        # long stream.
+        parts: dict[int, list[str]] = {}
         open_kind: str | None = None
         tool_calls: list[dict[str, Any]] = []
+
+        def close_open_block() -> int:
+            index = len(blocks) - 1
+            block = blocks[index]
+            joined = "".join(parts.pop(index, ()))
+            if block["type"] == "thinking":
+                block["thinking"] = joined
+            elif block["type"] == "text":
+                block["text"] = joined
+            return index
 
         def handle(chunk: dict[str, Any]) -> Iterator[StreamEvent]:
             nonlocal open_kind
@@ -313,26 +343,25 @@ class OllamaLocalAdapter(Adapter):
                     raise TypeError(f"{kind} must be a string")
                 if open_kind != kind:
                     if open_kind is not None:
-                        yield {"type": "block_stop", "index": len(blocks) - 1}
+                        yield {"type": "block_stop", "index": close_open_block()}
                     open_kind = kind
                     if kind == "thinking":
                         blocks.append({"type": "thinking", "thinking": ""})
                     else:
                         blocks.append({"type": "text", "text": ""})
+                    parts[len(blocks) - 1] = []
                 index = len(blocks) - 1
-                block = blocks[index]
-                if block["type"] == "thinking":
-                    block["thinking"] += delta
+                parts[index].append(delta)
+                if blocks[index]["type"] == "thinking":
                     yield {"type": "thinking_delta", "index": index, "thinking": delta}
-                elif block["type"] == "text":
-                    block["text"] += delta
+                elif blocks[index]["type"] == "text":
                     yield {"type": "text_delta", "index": index, "text": delta}
 
             # Recent Ollama versions send tool calls in a done:false chunk, older
             # ones in the final chunk, so collect them from every chunk.
             for call in message.get("tool_calls") or []:
                 if open_kind is not None:
-                    yield {"type": "block_stop", "index": len(blocks) - 1}
+                    yield {"type": "block_stop", "index": close_open_block()}
                     open_kind = None
                 block = _tool_use_block(len(tool_calls), call)
                 index = len(blocks)
@@ -356,7 +385,7 @@ class OllamaLocalAdapter(Adapter):
 
             if chunk.get("done"):
                 if open_kind is not None:
-                    yield {"type": "block_stop", "index": len(blocks) - 1}
+                    yield {"type": "block_stop", "index": close_open_block()}
                 data = dict(chunk)
                 data["message"] = {
                     **message,
