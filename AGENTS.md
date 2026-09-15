@@ -1,0 +1,1 @@
+- The @README.md target audience is the user of our library. That means it should contain ONLY information the user may need to use it. Not internals, not how it works. Clear, comprehensive and short information. Prefer tables/lists when it applies. Link to the proper files to guide the user when they may need to check in detail (e.g. to check the available types we use).

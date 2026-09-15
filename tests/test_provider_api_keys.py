@@ -398,7 +398,10 @@ class KeyedAdapterTests(unittest.TestCase):
 
         for case in KEYED:
             for attr, call in (
-                (case.chat_url_attr, lambda a: a.chat(case.model, MESSAGES)),  # noqa: B023
+                (
+                    case.chat_url_attr,
+                    lambda a, model=case.model: a.chat(model, MESSAGES),
+                ),
                 ("_MODELS_URL", lambda a: a.models()),
             ):
                 with self.subTest(case.name, attr=attr, order="checked https first"):
@@ -681,8 +684,8 @@ class FrameLocalsTests(unittest.TestCase):
                     "chat": functools.partial(
                         adapter.chat, case.model, MESSAGES, config=config
                     ),
-                    "stream_chat": lambda: list(
-                        adapter.stream_chat(case.model, MESSAGES, config=config)  # noqa: B023
+                    "stream_chat": lambda adapter=adapter, model=case.model, config=config: (
+                        list(adapter.stream_chat(model, MESSAGES, config=config))
                     ),
                 }
                 for call_name, call in calls.items():
@@ -698,7 +701,7 @@ class FrameLocalsTests(unittest.TestCase):
                 exc = raised(
                     self,
                     ValueError,
-                    lambda: case.cls(api_key=f"{SENTINEL}\r\n"),  # noqa: B023
+                    lambda cls=case.cls: cls(api_key=f"{SENTINEL}\r\n"),
                 )
                 assert_no_sentinel_in_frames(self, exc)
             del os.environ[case.env_var]
@@ -713,8 +716,8 @@ class FrameLocalsTests(unittest.TestCase):
             model, name = case.model, case.name
             calls: dict[str, Callable[[], object]] = {
                 "chat": functools.partial(adapter.chat, model, MESSAGES),
-                "stream_chat": lambda: list(
-                    adapter.stream_chat(model, MESSAGES)  # noqa: B023
+                "stream_chat": lambda adapter=adapter, model=model: list(
+                    adapter.stream_chat(model, MESSAGES)
                 ),
                 "models": adapter.models,
                 "Provider.chat": functools.partial(
@@ -741,19 +744,21 @@ class FrameLocalsTests(unittest.TestCase):
             provider = Provider(adapters={case.name: adapter})
             model, name = case.model, case.name
 
-            async def consume_stream(model: str = model, name: str = name) -> None:
-                async for _ in provider.async_stream_chat(  # noqa: B023
+            async def consume_stream(
+                provider: Provider = provider, model: str = model, name: str = name
+            ) -> None:
+                async for _ in provider.async_stream_chat(
                     model, MESSAGES, provider=name
                 ):
                     pass
 
             calls: dict[str, Callable[[], object]] = {
                 "chat": functools.partial(adapter.chat, model, MESSAGES),
-                "stream_chat": lambda: list(
-                    adapter.stream_chat(model, MESSAGES)  # noqa: B023
+                "stream_chat": lambda adapter=adapter, model=model: list(
+                    adapter.stream_chat(model, MESSAGES)
                 ),
-                "async_chat": lambda: asyncio.run(
-                    provider.async_chat(model, MESSAGES, provider=name)  # noqa: B023
+                "async_chat": lambda provider=provider, model=model, name=name: (
+                    asyncio.run(provider.async_chat(model, MESSAGES, provider=name))
                 ),
                 "async_stream_chat": lambda: asyncio.run(consume_stream()),
             }

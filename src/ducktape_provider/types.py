@@ -1,11 +1,21 @@
 """Every public type of ducktape_provider: what you pass in, what you get back, what
-can be raised, and the `Adapter` base class for adding providers."""
+can be raised, and the `Adapter` base class for adding providers.
+
+Lazy annotations let types read top-down (a type first, then what it's built from)."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any, Literal, NotRequired, TypedDict
+
+"""1. Interface types
+
+What `Provider` methods take and return. A third-party adapter's `chat`/`stream_chat`
+take and return these same types (see section 3).
+
+Inputs: `messages`, `tools` and `config` arguments.
+"""
 
 
 class Message(TypedDict):
@@ -123,6 +133,9 @@ class Config(TypedDict, total=False):
     providers: dict[str, dict[str, Any]]
 
 
+"""Outputs: what `chat` returns and what `stream_chat` yields."""
+
+
 class Response(TypedDict):
     """A complete model turn, from `chat()` or a stream's final `message_stop` event.
 
@@ -211,6 +224,13 @@ class MessageStopEvent(TypedDict):
     response: Response
 
 
+"""2. Errors
+
+Everything raised by `Provider` calls, streams included. Catch `DucktapeError` for
+all of them. Adapters should raise these too, so every provider fails the same way.
+"""
+
+
 class DucktapeError(Exception):
     """Base of every error below."""
 
@@ -278,6 +298,13 @@ class UnsupportedBlockError(DucktapeError):
 
     Raised before any request is sent.
     """
+
+
+"""3. Everything else: extending
+
+Subclass `Adapter` to add a provider, then pass it to `Provider(adapters=...)` or
+register it as a plugin (see the README's "Third-party adapters").
+"""
 
 
 class Adapter(ABC):
