@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from .. import errors
-from ..adapter import Adapter, _merge_config, _validate_headers
+from ..adapter import Adapter, _merge_config, _new_request, _validate_headers
 from ..streaming import (
     _PROBE_ERRORS,
     _iter_ndjson,
@@ -96,7 +96,7 @@ class OllamaLocalAdapter(Adapter):
             return set(self._models_cache)
         try:
             with urllib.request.urlopen(
-                f"{self._base_url()}/api/tags", timeout=0.5
+                _new_request(f"{self._base_url()}/api/tags"), timeout=0.5
             ) as resp:
                 data = _read_json(resp, "ollama")
             model_ids = {m["name"] for m in data.get("models", [])}
@@ -243,13 +243,12 @@ class OllamaLocalAdapter(Adapter):
         timeout, extra_headers = _merge_config(
             "ollama", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
         )
-        headers = {"Content-Type": "application/json"}
-        headers.update(extra_headers)
-        _validate_headers("ollama", headers)
-        req = urllib.request.Request(
+        _validate_headers("ollama", extra_headers)
+        req = _new_request(
             f"{self._base_url()}/api/chat",
-            data=json.dumps(payload).encode(),
-            headers=headers,
+            json.dumps(payload).encode(),
+            {"Content-Type": "application/json"},
+            extra_headers,
         )
         return req, timeout
 

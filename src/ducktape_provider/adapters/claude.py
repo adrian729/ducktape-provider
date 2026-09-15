@@ -10,9 +10,19 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from .. import errors
-from ..adapter import Adapter, _merge_config, _validate_headers
+from ..adapter import (
+    Adapter,
+    _current_key,
+    _key_url_allowed,
+    _merge_config,
+    _new_request,
+    _request_key,
+    _Secret,
+    _validate_headers,
+)
 from ..streaming import (
     _PROBE_ERRORS,
+    _clear_tracebacks,
     _iter_sse,
     _loads_tool_input,
     _read_json,
@@ -49,31 +59,60 @@ class ClaudeAdapter(Adapter):
     _CHAT_TIMEOUT = 120
     _MAX_TOKENS = 4096
     _RESERVED_CONFIG = frozenset({"model", "messages", "stream"})
+    _key_source: _Secret | None = None
 
-    def __init__(self):
+    def __init__(self, api_key: str | Callable[[], str | None] | None = None):
+        """`api_key` is the key, or a function called for it on every request.
+
+        Either way `ANTHROPIC_API_KEY` is then never read (fall back to it with
+        `lambda: vault_key() or os.environ.get("ANTHROPIC_API_KEY")`); left out,
+        that env var is read per request. A function may be called from several
+        threads at once: `Provider`'s async executor workers and stream reader
+        threads, and concurrent `async_models()` probes. A subclass overriding
+        `_build_request` or `models()` must send the key itself.
+        """
+        source = None if api_key is None else _Secret(api_key)
+        api_key = None
         self._models_cache: set[str] | None = None
         self._cache_time = 0.0
+        if source is not None:
+            source.validate("claude")
+            self._key_source = source
 
     def is_available(self) -> bool:
+        # A key source counts as configured without calling it, since this is
+        # probed often and the source may be a remote vault.
+        if self._key_source is not None:
+            return True
         return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
     def models(self) -> set[str]:
         now = time.monotonic()
         if self._models_cache is not None and now - self._cache_time < self._MODELS_TTL:
             return set(self._models_cache)
+        # Read once, so the URL the key is checked against is the one it goes to,
+        # even if a subclass property returns different values.
+        base = self._MODELS_URL
+        if not _key_url_allowed(base):
+            return set()
+        # Resolved once for every page, and outside the probe-error handler so a
+        # failing key source raises instead of passing for "unreachable".
+        key = _current_key(self._key_source, "ANTHROPIC_API_KEY")
+        try:
+            key.check("claude")
+        except (errors.AuthError, TypeError, ValueError):
+            return set()
         model_ids: set[str] = set()
         after_id = None
         try:
             while True:
-                url = self._MODELS_URL
+                url = base
                 if after_id:
                     url = f"{url}?{urllib.parse.urlencode({'after_id': after_id})}"
-                req = urllib.request.Request(
+                req = _new_request(
                     url,
-                    headers={
-                        "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
-                        "anthropic-version": "2023-06-01",
-                    },
+                    defaults={"anthropic-version": "2023-06-01"},
+                    auth=("x-api-key", "", lambda: key),
                 )
                 with urllib.request.urlopen(req, timeout=3) as resp:
                     data = _read_json(resp, "claude")
@@ -86,6 +125,11 @@ class ClaudeAdapter(Adapter):
                 after_id = next_after_id
         except _PROBE_ERRORS:
             return set()
+        # Anything else (e.g. KeyboardInterrupt mid-request) propagates, and its
+        # traceback holds urllib's frames with the key in their header dict.
+        except BaseException as e:
+            _clear_tracebacks(e)
+            raise
         self._models_cache = model_ids
         self._cache_time = now
         return set(model_ids)
@@ -247,17 +291,21 @@ class ClaudeAdapter(Adapter):
         timeout, extra_headers = _merge_config(
             "claude", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
         )
-        headers = {
-            "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        headers.update(extra_headers)
-        _validate_headers("claude", headers)
-        req = urllib.request.Request(
-            self._MESSAGES_URL,
-            data=json.dumps(payload).encode(),
-            headers=headers,
+        _validate_headers("claude", extra_headers)
+        # Read once: the transport check and the request must see the same URL.
+        url = self._MESSAGES_URL
+        req = _new_request(
+            url,
+            json.dumps(payload).encode(),
+            {"anthropic-version": "2023-06-01", "content-type": "application/json"},
+            extra_headers,
+            auth=(
+                "x-api-key",
+                "",
+                lambda: _request_key(
+                    "claude", url, self._key_source, "ANTHROPIC_API_KEY"
+                ),
+            ),
         )
         return req, timeout
 

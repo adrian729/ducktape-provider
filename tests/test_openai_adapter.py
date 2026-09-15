@@ -5,7 +5,7 @@ import json
 import time
 import unittest
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from http_test_utils import (
     FakeStreamResponse,
@@ -88,7 +88,7 @@ STREAM_EVENTS = [
 
 class OpenAISerializeTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     def test_serialize_interleaves_function_call_and_output(self):
         messages: list[Message] = [
@@ -159,7 +159,7 @@ class OpenAISerializeTests(unittest.TestCase):
 
 class OpenAIDeserializeTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     def test_text_message_completed(self):
         data = {
@@ -331,7 +331,7 @@ class OpenAIDeserializeTests(unittest.TestCase):
 
 class OpenAIChatHTTPTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_chat_returns_deserialized_response(self, mock_urlopen):
@@ -386,7 +386,7 @@ class OpenAIChatHTTPTests(unittest.TestCase):
 
 class OpenAIStreamChatHTTPTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_stream_chat_yields_expected_event_sequence(self, mock_urlopen):
@@ -493,7 +493,7 @@ class OpenAIStreamChatHTTPTests(unittest.TestCase):
 
 class OpenAIHeaderOverrideTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     def test_config_headers_override_default(self):
         req, _ = self.adapter._build_request(
@@ -506,10 +506,50 @@ class OpenAIHeaderOverrideTests(unittest.TestCase):
         )
         self.assertEqual(req.get_header("Authorization"), "Bearer overridden")
 
+    @patch("urllib.request.urlopen")
+    def test_no_header_follows_a_redirect(self, mock_urlopen):
+        calls = {
+            "chat": (
+                lambda: self.adapter.chat("gpt-x", MESSAGES),
+                lambda: buffered_response(json.dumps(FINAL_DATA).encode()),
+            ),
+            "stream_chat": (
+                lambda: list(self.adapter.stream_chat("gpt-x", MESSAGES)),
+                lambda: FakeStreamResponse(sse_lines(*STREAM_EVENTS)),
+            ),
+            "models": (
+                self.adapter.models,
+                lambda: buffered_response(b'{"data": [{"id": "gpt-x"}]}'),
+            ),
+        }
+        for label, (call, reply) in calls.items():
+            with self.subTest(label):
+                mock_urlopen.return_value = reply()
+                call()
+                req = mock_urlopen.call_args.args[0]
+                self.assertEqual(req.headers, {})
+                self.assertEqual(req.get_header("Authorization"), "Bearer test")
+
+    @patch("urllib.request.urlopen")
+    def test_config_auth_header_wins_and_key_source_is_not_called(self, mock_urlopen):
+        source = Mock(return_value="from-source")
+        adapter = OpenAIAdapter(api_key=source)
+        for name in ("authorization", "AUTHORIZATION"):
+            with self.subTest(name):
+                mock_urlopen.return_value = buffered_response(
+                    json.dumps(FINAL_DATA).encode()
+                )
+                adapter.chat(
+                    "gpt-x", MESSAGES, config={"headers": {name: "Bearer cfg"}}
+                )
+                req = mock_urlopen.call_args.args[0]
+                self.assertEqual(req.get_header("Authorization"), "Bearer cfg")
+        source.assert_not_called()
+
 
 class OpenAIBlockShapeTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     def test_url_image_block_passes_url_through_as_is(self):
         messages: list[Message] = [
@@ -577,7 +617,7 @@ class OpenAIThinkingSerializeTests(unittest.TestCase):
             }
         ]
         with self.assertLogs(openai_module.logger, level="WARNING") as logs:
-            serialized = OpenAIAdapter()._serialize(messages * 3)[:1]
+            serialized = OpenAIAdapter(api_key="test")._serialize(messages * 3)[:1]
         self.assertEqual(len(logs.records), 1)
         self.assertIn("dropping 3", logs.output[0])
         self.assertEqual(
@@ -607,13 +647,13 @@ class OpenAINullUsageTests(unittest.TestCase):
                 },
             },
         }
-        response = OpenAIAdapter()._deserialize(data, 0.0)
+        response = OpenAIAdapter(api_key="test")._deserialize(data, 0.0)
         self.assertEqual(response["usage"], {"input_tokens": 0, "output_tokens": 4})
 
 
 class OpenAIStreamContentTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_stream_chat_carries_cache_fields_in_message_stop(self, mock_urlopen):
@@ -889,7 +929,7 @@ class OpenAIStreamContentTests(unittest.TestCase):
 
 class OpenAIStreamErrorTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     def _stream(self, lines, error=None):
         with patch("urllib.request.urlopen") as mock_urlopen:
@@ -1024,7 +1064,7 @@ class OpenAIStreamErrorTests(unittest.TestCase):
 
 class OpenAILatencyTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_chat_latency_spans_request_to_body_read(self, mock_urlopen):
@@ -1047,9 +1087,9 @@ class OpenAILatencyTests(unittest.TestCase):
 
 
 class OpenAIReservedConfigTests(unittest.TestCase):
-    @patch("urllib.request.urlopen")
+    @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
     def test_reserved_config_keys_are_rejected_before_any_request(self, mock_urlopen):
-        adapter = OpenAIAdapter()
+        adapter = OpenAIAdapter(api_key="test")
         for key in ("stream", "model", "input"):
             with self.subTest(key=key), self.assertRaises(ValueError) as ctx:
                 adapter.chat("gpt-x", MESSAGES, config={key: True})
@@ -1057,7 +1097,7 @@ class OpenAIReservedConfigTests(unittest.TestCase):
         mock_urlopen.assert_not_called()
 
     def test_non_reserved_defaults_can_be_overridden(self):
-        req, _ = OpenAIAdapter()._build_request(
+        req, _ = OpenAIAdapter(api_key="test")._build_request(
             "gpt-x", MESSAGES, None, None, {"store": True}, stream=False
         )
         self.assertIs(request_body(req)["store"], True)
@@ -1065,7 +1105,7 @@ class OpenAIReservedConfigTests(unittest.TestCase):
 
 class OpenAIInvalidToolArgsTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
 
     def test_deeply_nested_arguments_fall_back_to_empty_input_in_chat(self):
         deep = "[" * 200_000 + "]" * 200_000
@@ -1196,7 +1236,7 @@ class OpenAIInvalidToolArgsTests(unittest.TestCase):
 
 class OpenAIModelsCacheInvalidationTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = OpenAIAdapter()
+        self.adapter = OpenAIAdapter(api_key="test")
         self.adapter._models_cache = {"gpt-old"}
         self.adapter._cache_time = time.monotonic()
 

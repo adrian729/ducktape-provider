@@ -161,7 +161,7 @@ class PlainTextChatTests(_ConformanceBase):
         mock_urlopen.return_value = buffered_response(
             json.dumps(CLAUDE_TEXT_DATA).encode()
         )
-        provider = Provider(adapters={"claude": ClaudeAdapter()})
+        provider = Provider(adapters={"claude": ClaudeAdapter(api_key="test")})
         response = provider.chat("claude-x", TEXT_MESSAGES, provider="claude")
         self._assert_valid(response)
 
@@ -170,7 +170,7 @@ class PlainTextChatTests(_ConformanceBase):
         mock_urlopen.return_value = buffered_response(
             json.dumps(OPENAI_TEXT_DATA).encode()
         )
-        provider = Provider(adapters={"openai": OpenAIAdapter()})
+        provider = Provider(adapters={"openai": OpenAIAdapter(api_key="test")})
         response = provider.chat("gpt-x", TEXT_MESSAGES, provider="openai")
         self._assert_valid(response)
 
@@ -197,7 +197,7 @@ class ToolUseRoundTripTests(_ConformanceBase):
         mock_urlopen.return_value = buffered_response(
             json.dumps(CLAUDE_TOOL_DATA).encode()
         )
-        provider = Provider(adapters={"claude": ClaudeAdapter()})
+        provider = Provider(adapters={"claude": ClaudeAdapter(api_key="test")})
         response = provider.chat(
             "claude-x", TOOL_MESSAGES, tools=WEATHER_TOOL, provider="claude"
         )
@@ -208,7 +208,7 @@ class ToolUseRoundTripTests(_ConformanceBase):
         mock_urlopen.return_value = buffered_response(
             json.dumps(OPENAI_TOOL_DATA).encode()
         )
-        provider = Provider(adapters={"openai": OpenAIAdapter()})
+        provider = Provider(adapters={"openai": OpenAIAdapter(api_key="test")})
         response = provider.chat(
             "gpt-x", TOOL_MESSAGES, tools=WEATHER_TOOL, provider="openai"
         )
@@ -240,7 +240,7 @@ class StreamingChatTests(_ConformanceBase):
     @patch("urllib.request.urlopen")
     def test_claude(self, mock_urlopen):
         mock_urlopen.return_value = FakeStreamResponse(sse_lines(*CLAUDE_STREAM_EVENTS))
-        provider = Provider(adapters={"claude": ClaudeAdapter()})
+        provider = Provider(adapters={"claude": ClaudeAdapter(api_key="test")})
         events = list(
             provider.stream_chat("claude-x", TEXT_MESSAGES, provider="claude")
         )
@@ -249,7 +249,7 @@ class StreamingChatTests(_ConformanceBase):
     @patch("urllib.request.urlopen")
     def test_openai(self, mock_urlopen):
         mock_urlopen.return_value = FakeStreamResponse(sse_lines(*OPENAI_STREAM_EVENTS))
-        provider = Provider(adapters={"openai": OpenAIAdapter()})
+        provider = Provider(adapters={"openai": OpenAIAdapter(api_key="test")})
         events = list(provider.stream_chat("gpt-x", TEXT_MESSAGES, provider="openai"))
         self._assert_stream(events)
 
@@ -265,10 +265,11 @@ class StreamingChatTests(_ConformanceBase):
         self._assert_stream(events)
 
 
+# The class, and a factory for an instance that can send requests.
 ADAPTERS = {
-    "claude": (ClaudeAdapter, "ANTHROPIC_API_KEY"),
-    "openai": (OpenAIAdapter, "OPENAI_API_KEY"),
-    "ollama-local": (OllamaLocalAdapter, None),
+    "claude": (ClaudeAdapter, lambda: ClaudeAdapter(api_key="test")),
+    "openai": (OpenAIAdapter, lambda: OpenAIAdapter(api_key="test")),
+    "ollama-local": (OllamaLocalAdapter, OllamaLocalAdapter),
 }
 
 
@@ -285,7 +286,8 @@ class RequestValidationTests(unittest.TestCase):
     """Client-side mistakes surface as ValueError before any request, on every
     backend, and never quote a header value (which may be a credential)."""
 
-    @patch("urllib.request.urlopen")
+    # Raising rather than answering: a mock body would make the read loop forever.
+    @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
     def test_invalid_config_raises_value_error_not_api_error(self, mock_urlopen):
         configs = {
             "negative timeout": {"timeout": -1},
@@ -301,10 +303,31 @@ class RequestValidationTests(unittest.TestCase):
             "trailing CRLF": {"headers": {"x-token": "SECRET\r\n"}},
             "non-latin-1 header": {"headers": {"x-token": "SECRET\u2603"}},
             "bad header name": {"headers": {"x token:": "SECRET"}},
+            # Would slip past the case-insensitive check for a config auth header.
+            "header name with trailing space": {"headers": {"x-api-key ": "SECRET"}},
+            "leading tab in header name": {"headers": {"\tAuthorization": "SECRET"}},
+            # Allowed by the header-name pattern, so only the strip check rejects.
+            "trailing tab in header name": {"headers": {"x-token\t": "SECRET"}},
+            "trailing space in header name": {"headers": {"x-token ": "SECRET"}},
+            # A key in the body would be sent to the vendor as a request field.
+            **{
+                f"{key} in config": {key: "SECRET"}
+                for key in (
+                    "api_key",
+                    "API_KEY",
+                    "apiKey",
+                    "api_keys",
+                    "x-api-key",
+                    "authorization",
+                    "anthropic_api_key",
+                    "OPENAI_API_KEY",
+                    "x-goog-api-key",
+                )
+            },
         }
-        for name, (cls, _) in ADAPTERS.items():
+        for name, (_, make) in ADAPTERS.items():
             for label, config in configs.items():
-                for call_name, call in _calls(cls(), config).items():
+                for call_name, call in _calls(make(), config).items():
                     with self.subTest(name, label=label, call=call_name):
                         with self.assertRaises(ValueError) as ctx:
                             call()
@@ -314,8 +337,8 @@ class RequestValidationTests(unittest.TestCase):
         mock_urlopen.assert_not_called()
 
     def test_timeout_none_means_no_timeout_and_absent_means_default(self):
-        for name, (cls, _) in ADAPTERS.items():
-            adapter = cls()
+        for name, (cls, make) in ADAPTERS.items():
+            adapter = make()
             for config, expected in (
                 ({"timeout": None}, None),
                 ({}, cls._CHAT_TIMEOUT),
@@ -337,8 +360,8 @@ class RequestValidationTests(unittest.TestCase):
 
 
 STREAM_FIXTURES: dict[str, tuple[Adapter, list[bytes]]] = {
-    "claude": (ClaudeAdapter(), sse_lines(*CLAUDE_STREAM_EVENTS)),
-    "openai": (OpenAIAdapter(), sse_lines(*OPENAI_STREAM_EVENTS)),
+    "claude": (ClaudeAdapter(api_key="test"), sse_lines(*CLAUDE_STREAM_EVENTS)),
+    "openai": (OpenAIAdapter(api_key="test"), sse_lines(*OPENAI_STREAM_EVENTS)),
     "ollama-local": (OllamaLocalAdapter(), ndjson_lines(*OLLAMA_STREAM_CHUNKS)),
 }
 
@@ -418,12 +441,18 @@ class TruncatedStreamTests(unittest.TestCase):
 
     def test_claude(self):
         self._assert_raises(
-            "claude", ClaudeAdapter(), "claude-x", sse_lines(*CLAUDE_STREAM_EVENTS[:-1])
+            "claude",
+            ClaudeAdapter(api_key="test"),
+            "claude-x",
+            sse_lines(*CLAUDE_STREAM_EVENTS[:-1]),
         )
 
     def test_openai(self):
         self._assert_raises(
-            "openai", OpenAIAdapter(), "gpt-x", sse_lines(*OPENAI_STREAM_EVENTS[:-1])
+            "openai",
+            OpenAIAdapter(api_key="test"),
+            "gpt-x",
+            sse_lines(*OPENAI_STREAM_EVENTS[:-1]),
         )
 
     def test_ollama(self):

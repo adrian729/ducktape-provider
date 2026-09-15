@@ -7,7 +7,7 @@ import time
 import unittest
 from collections.abc import Generator
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from http_test_utils import (
     FakeStreamResponse,
@@ -92,7 +92,7 @@ STREAM_EVENTS = [
 
 class ClaudeSerializeTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     def test_serialize_passes_through_image_and_tool_result(self):
         messages: list[Message] = [
@@ -153,7 +153,7 @@ class ClaudeSerializeTests(unittest.TestCase):
 
 class ClaudeDeserializeTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     def test_maps_known_stop_reason(self):
         data = {
@@ -250,7 +250,7 @@ class ClaudeDeserializeTests(unittest.TestCase):
 
 class ClaudeChatHTTPTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_chat_returns_deserialized_response(self, mock_urlopen):
@@ -285,7 +285,7 @@ class ClaudeChatHTTPTests(unittest.TestCase):
 
 class ClaudeStreamChatHTTPTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_stream_chat_yields_expected_event_sequence(self, mock_urlopen):
@@ -371,7 +371,7 @@ class ClaudeStreamChatHTTPTests(unittest.TestCase):
 
 class ClaudeHeaderOverrideTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     def test_config_headers_override_default(self):
         req, _ = self.adapter._build_request(
@@ -384,10 +384,49 @@ class ClaudeHeaderOverrideTests(unittest.TestCase):
         )
         self.assertEqual(req.get_header("Anthropic-version"), "2099-01-01")
 
+    @patch("urllib.request.urlopen")
+    def test_no_header_follows_a_redirect(self, mock_urlopen):
+        calls = {
+            "chat": (
+                lambda: self.adapter.chat("claude-x", MESSAGES),
+                lambda: buffered_response(json.dumps(FINAL_DATA).encode()),
+            ),
+            "stream_chat": (
+                lambda: list(self.adapter.stream_chat("claude-x", MESSAGES)),
+                lambda: FakeStreamResponse(sse_lines(*STREAM_EVENTS)),
+            ),
+            "models": (
+                self.adapter.models,
+                lambda: buffered_response(b'{"data": [{"id": "claude-x"}]}'),
+            ),
+        }
+        for label, (call, reply) in calls.items():
+            with self.subTest(label):
+                mock_urlopen.return_value = reply()
+                call()
+                req = mock_urlopen.call_args.args[0]
+                self.assertEqual(req.headers, {})
+                self.assertEqual(req.get_header("X-api-key"), "test")
+                self.assertEqual(req.get_header("Anthropic-version"), "2023-06-01")
+
+    @patch("urllib.request.urlopen")
+    def test_config_auth_header_wins_and_key_source_is_not_called(self, mock_urlopen):
+        source = Mock(return_value="from-source")
+        adapter = ClaudeAdapter(api_key=source)
+        for name in ("x-api-key", "X-API-KEY"):
+            with self.subTest(name):
+                mock_urlopen.return_value = buffered_response(
+                    json.dumps(FINAL_DATA).encode()
+                )
+                adapter.chat("claude-x", MESSAGES, config={"headers": {name: "cfg"}})
+                req = mock_urlopen.call_args.args[0]
+                self.assertEqual(req.get_header("X-api-key"), "cfg")
+        source.assert_not_called()
+
 
 class ClaudeBlockShapeTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     def test_url_image_block_serializes_to_nested_url_source(self):
         messages: list[Message] = [
@@ -476,7 +515,7 @@ def _text_stream(*middle: dict) -> list[dict]:
 
 class ClaudeThinkingSerializeTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     def test_signed_thinking_block_passes_through(self):
         block: ThinkingBlock = {
@@ -547,14 +586,14 @@ class ClaudeNullUsageTests(unittest.TestCase):
                 "cache_creation_input_tokens": None,
             },
         }
-        response = ClaudeAdapter()._deserialize(data, 0.0)
+        response = ClaudeAdapter(api_key="test")._deserialize(data, 0.0)
         self.assertEqual(response["usage"], {"input_tokens": 3, "output_tokens": 0})
         self.assertEqual(response["raw_stop_reason"], "")
 
 
 class ClaudeStreamContentTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_thinking_and_signature_accumulate_into_final_block(self, mock_urlopen):
@@ -741,7 +780,7 @@ class ClaudeStreamFlushOnMessageStopTests(unittest.TestCase):
     still contribute its buffered deltas to the final response."""
 
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_text_without_content_block_stop_is_kept(self, mock_urlopen):
@@ -858,7 +897,7 @@ class ClaudeStreamFlushOnMessageStopTests(unittest.TestCase):
 
 class ClaudeStreamErrorTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     def _stream(self, lines, error=None):
         with patch("urllib.request.urlopen") as mock_urlopen:
@@ -985,7 +1024,7 @@ class ClaudeStreamErrorTests(unittest.TestCase):
 
 class ClaudeLatencyTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_chat_latency_spans_request_to_body_read(self, mock_urlopen):
@@ -1010,9 +1049,10 @@ class ClaudeLatencyTests(unittest.TestCase):
 
 class ClaudeRequestValidationTests(unittest.TestCase):
     def setUp(self):
+        # No explicit key, so the env var below is the one sent.
         self.adapter = ClaudeAdapter()
 
-    @patch("urllib.request.urlopen")
+    @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
     def test_api_key_with_line_break_raises_value_error_without_the_key(
         self, mock_urlopen
     ):
@@ -1024,7 +1064,8 @@ class ClaudeRequestValidationTests(unittest.TestCase):
                 with self.assertRaises(ValueError) as ctx:
                     call()
                 self.assertNotIsInstance(ctx.exception, APIError)
-                self.assertIn("x-api-key", str(ctx.exception))
+                self.assertIn("claude API key", str(ctx.exception))
+                self.assertIn("trailing newline", str(ctx.exception))
                 self.assertNotIn("SECRET", str(ctx.exception))
                 self.assertIsNone(ctx.exception.__cause__)
                 self.assertIsNone(ctx.exception.__context__)
@@ -1032,9 +1073,9 @@ class ClaudeRequestValidationTests(unittest.TestCase):
 
 
 class ClaudeReservedConfigTests(unittest.TestCase):
-    @patch("urllib.request.urlopen")
+    @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
     def test_reserved_config_keys_are_rejected_before_any_request(self, mock_urlopen):
-        adapter = ClaudeAdapter()
+        adapter = ClaudeAdapter(api_key="test")
         for key in ("stream", "model", "messages"):
             with self.subTest(key=key), self.assertRaises(ValueError) as ctx:
                 adapter.chat("claude-x", MESSAGES, config={key: True})
@@ -1044,7 +1085,7 @@ class ClaudeReservedConfigTests(unittest.TestCase):
         mock_urlopen.assert_not_called()
 
     def test_timeout_and_headers_are_not_sent_in_body(self):
-        req, timeout = ClaudeAdapter()._build_request(
+        req, timeout = ClaudeAdapter(api_key="test")._build_request(
             "claude-x",
             MESSAGES,
             None,
@@ -1062,7 +1103,7 @@ class ClaudeReservedConfigTests(unittest.TestCase):
 
 class ClaudeStreamAccumulationTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     def test_long_streams_accumulate_in_linear_time(self):
         # Few large deltas, so quadratic accumulation copies tens of GiB (~45 s
@@ -1140,7 +1181,7 @@ class ClaudeStreamAccumulationTests(unittest.TestCase):
 
 class ClaudeInvalidToolArgsTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
 
     @patch("urllib.request.urlopen")
     def test_deeply_nested_partial_json_falls_back_to_empty_input(self, mock_urlopen):
@@ -1214,7 +1255,7 @@ class ClaudeInvalidToolArgsTests(unittest.TestCase):
 
 class ClaudeModelsCacheInvalidationTests(unittest.TestCase):
     def setUp(self):
-        self.adapter = ClaudeAdapter()
+        self.adapter = ClaudeAdapter(api_key="test")
         self.adapter._models_cache = {"claude-old"}
         self.adapter._cache_time = time.monotonic()
 

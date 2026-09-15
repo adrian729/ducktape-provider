@@ -312,6 +312,38 @@ class OllamaHeaderOverrideTests(unittest.TestCase):
         )
         self.assertEqual(req.get_header("Content-type"), "application/x-custom")
 
+    @patch("urllib.request.urlopen")
+    def test_no_header_follows_a_redirect(self, mock_urlopen):
+        config = {"headers": {"X-Token": "t"}}
+        calls = {
+            "chat": (
+                lambda: self.adapter.chat("llama3", MESSAGES, config=config),
+                lambda: buffered_response(json.dumps(FINAL_DATA).encode()),
+            ),
+            "stream_chat": (
+                lambda: list(
+                    self.adapter.stream_chat("llama3", MESSAGES, config=config)
+                ),
+                lambda: FakeStreamResponse(
+                    ndjson_lines({"message": {"content": "hi"}, "done": True})
+                ),
+            ),
+            "models": (
+                self.adapter.models,
+                lambda: buffered_response(b'{"models": [{"name": "llama3"}]}'),
+            ),
+        }
+        # Port 9 plus a patched urlopen: nothing can reach a real Ollama daemon.
+        with patch.dict("os.environ", {"OLLAMA_HOST": "http://127.0.0.1:9"}):
+            for label, (call, reply) in calls.items():
+                with self.subTest(label):
+                    mock_urlopen.return_value = reply()
+                    call()
+                    req = mock_urlopen.call_args.args[0]
+                    self.assertEqual(req.headers, {})
+                    if label != "models":
+                        self.assertEqual(req.get_header("X-token"), "t")
+
 
 class OllamaUnsupportedBlockTests(unittest.TestCase):
     def setUp(self):
@@ -644,7 +676,7 @@ class OllamaLatencyTests(unittest.TestCase):
 
 
 class OllamaReservedConfigTests(unittest.TestCase):
-    @patch("urllib.request.urlopen")
+    @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
     def test_reserved_config_keys_are_rejected_before_any_request(self, mock_urlopen):
         adapter = OllamaLocalAdapter()
         for key in ("stream", "model", "messages"):

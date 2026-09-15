@@ -32,6 +32,22 @@ Vendor availability and model listing come from environment variables — no con
 | `openai`       | `OPENAI_API_KEY`                                 |
 | `ollama-local` | `OLLAMA_HOST` (default `http://127.0.0.1:11434`) |
 
+Or pass API keys directly, as strings or functions returning one:
+
+```python
+from ducktape_provider import ClaudeAdapter, Provider
+
+provider = Provider(api_keys={"claude": "sk-ant-...", "openai": get_openai_key})
+provider = Provider(api_keys=lambda name: vault.read(name))  # name: "claude", ...
+claude = ClaudeAdapter(api_key=get_claude_key)
+```
+
+`api_keys` also works for Claude and OpenAI adapters passed in `adapters=`, matched by name.
+
+An explicit key disables the env var for that provider; to fall back to it, return `os.environ.get("ANTHROPIC_API_KEY")` from your function.
+
+A function is called on every request, possibly from several threads at once.
+
 ## Usage
 
 All types the interface uses (`Message`, `Response`, `StreamEvent`, `Config`, errors, `Adapter`) are in [`types.py`](src/ducktape_provider/types.py).
@@ -57,6 +73,7 @@ response = provider.chat(
 | `timeout` | `float \| None` | adapter default | Seconds for every call; `None` disables |
 | `autodiscover` | `bool \| Collection[str]` | `False` | Load [third-party adapters](#third-party-adapters) |
 | `executor` | `Executor \| None` | asyncio default | Thread pool for async calls, except streams |
+| `api_keys` | `Mapping[str, str \| Callable[[], str \| None]] \| Callable[[str], str \| None] \| None` | env vars | [API keys](#provider-setup) by provider name |
 
 ### Chat methods
 
@@ -101,7 +118,7 @@ provider.chat(
 
 `providers` holds per-provider config that overrides the rest for that provider; its fields are the same as that vendor's API.
 
-`headers` merge key by key: a per-provider header adds to the call's headers rather than replacing them. Keys the call already sets (`model`, `messages`/`input`, `stream`) raise `ValueError`.
+`headers` merge key by key: a per-provider header adds to the call's headers rather than replacing them. Keys the call already sets (`model`, `messages`/`input`, `stream`) raise `ValueError`, and so do API-key-like keys (`api_key`, `authorization`, …); pass keys as shown in [Provider setup](#provider-setup).
 
 ## Streaming
 

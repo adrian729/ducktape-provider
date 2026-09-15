@@ -12,9 +12,15 @@ import unittest
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from http_test_utils import LocalServer, Reply, final_response, split_every
+from http_test_utils import (
+    LocalServer,
+    RecordedRequest,
+    Reply,
+    final_response,
+    split_every,
+)
 
 from ducktape_provider import (
     Adapter,
@@ -52,6 +58,9 @@ def serving(adapter: Adapter, *replies: Reply) -> Iterator[LocalServer]:
         # A proxy from the environment must not intercept loopback requests.
         env = {"no_proxy": "*", "NO_PROXY": "*", "OLLAMA_HOST": server.url}
         stack.enter_context(patch.dict(os.environ, env))
+        # Explicit keys only: the developer's own must never reach a test server.
+        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+            os.environ.pop(var, None)
         if isinstance(adapter, ClaudeAdapter):
             stack.enter_context(
                 patch.object(adapter, "_MESSAGES_URL", f"{server.url}/v1/messages")
@@ -60,7 +69,18 @@ def serving(adapter: Adapter, *replies: Reply) -> Iterator[LocalServer]:
             stack.enter_context(
                 patch.object(adapter, "_RESPONSES_URL", f"{server.url}/v1/responses")
             )
+        if isinstance(adapter, (ClaudeAdapter, OpenAIAdapter)):
+            stack.enter_context(
+                patch.object(adapter, "_MODELS_URL", f"{server.url}/v1/models")
+            )
         yield server
+
+
+def header(request: RecordedRequest, name: str) -> str | None:
+    """A received header, matched case-insensitively."""
+    return next(
+        (v for k, v in request.headers.items() if k.lower() == name.lower()), None
+    )
 
 
 CLAUDE_BODY = {
@@ -200,8 +220,8 @@ OLLAMA_STREAM = ndjson(
 class BufferedChatTests(unittest.TestCase):
     def test_every_adapter_reads_length_delimited_and_chunked_bodies(self):
         cases: list[tuple[Adapter, dict[str, Any], str, str]] = [
-            (ClaudeAdapter(), CLAUDE_BODY, "/v1/messages", "hello"),
-            (OpenAIAdapter(), OPENAI_BODY, "/v1/responses", "one"),
+            (ClaudeAdapter(api_key="test"), CLAUDE_BODY, "/v1/messages", "hello"),
+            (OpenAIAdapter(api_key="test"), OPENAI_BODY, "/v1/responses", "one"),
             (OllamaLocalAdapter(), OLLAMA_BODY, "/api/chat", "hello"),
         ]
         for adapter, body, path, first_text in cases:
@@ -246,7 +266,7 @@ class StreamingChatTests(unittest.TestCase):
         return events
 
     def test_claude_events_split_across_http_chunks(self):
-        events = self._stream(ClaudeAdapter(), CLAUDE_STREAM)
+        events = self._stream(ClaudeAdapter(api_key="test"), CLAUDE_STREAM)
         self.assertEqual(
             [(e["type"], e.get("index")) for e in events],
             [
@@ -271,7 +291,7 @@ class StreamingChatTests(unittest.TestCase):
         self.assertIn("ttft_ms", response)
 
     def test_openai_multi_part_message_matches_buffered_content(self):
-        adapter = OpenAIAdapter()
+        adapter = OpenAIAdapter(api_key="test")
         events = self._stream(adapter, OPENAI_STREAM)
         self.assertEqual(
             events[:-1],
@@ -314,6 +334,118 @@ class StreamingChatTests(unittest.TestCase):
                 body = ndjson({"message": message, "done": True, "done_reason": "stop"})
                 response = final_response(self._stream(OllamaLocalAdapter(), body))
                 self.assertIsInstance(response.get("ttft_ms"), float)
+
+
+def body(data: dict[str, Any]) -> Reply:
+    return Reply([json.dumps(data).encode()], chunked=False)
+
+
+# (adapter class, auth header, value prefix, stream body, chat body)
+KEYED_CASES: list[
+    tuple[type[ClaudeAdapter] | type[OpenAIAdapter], str, str, bytes, dict[str, Any]]
+] = [
+    (ClaudeAdapter, "x-api-key", "", CLAUDE_STREAM, CLAUDE_BODY),
+    (OpenAIAdapter, "authorization", "Bearer ", OPENAI_STREAM, OPENAI_BODY),
+]
+
+
+class ApiKeyWireTests(unittest.TestCase):
+    """What actually goes out on the wire for an explicit key."""
+
+    def test_explicit_key_reaches_chat_stream_and_models_instead_of_env(self):
+        for cls, name, prefix, stream, chat_body in KEYED_CASES:
+            for source in ("sk-explicit", lambda: "sk-explicit"):
+                adapter = cls(api_key=source)
+                replies = (
+                    body(chat_body),
+                    Reply([stream]),
+                    body({"data": [{"id": "gpt-x"}]}),
+                )
+                with (
+                    self.subTest(cls.__name__, source=type(source).__name__),
+                    serving(adapter, *replies) as server,
+                    patch.dict(
+                        os.environ,
+                        {"ANTHROPIC_API_KEY": "env", "OPENAI_API_KEY": "env"},
+                    ),
+                ):
+                    adapter.chat("m", MESSAGES)
+                    list(adapter.stream_chat("m", MESSAGES))
+                    adapter.models()
+                    self.assertEqual(
+                        [header(r, name) for r in server.requests],
+                        [f"{prefix}sk-explicit"] * 3,
+                    )
+
+    def test_function_source_is_called_once_per_request(self):
+        for cls, name, prefix, _, chat_body in KEYED_CASES:
+            source = Mock(side_effect=["k1", "k2"])
+            adapter = cls(api_key=source)
+            with (
+                self.subTest(cls.__name__),
+                serving(adapter, body(chat_body), body(chat_body)) as server,
+            ):
+                adapter.chat("m", MESSAGES)
+                adapter.chat("m", MESSAGES)
+            self.assertEqual(
+                [header(r, name) for r in server.requests],
+                [f"{prefix}k1", f"{prefix}k2"],
+            )
+
+    def test_claude_models_pagination_calls_source_once(self):
+        source = Mock(return_value="k")
+        adapter = ClaudeAdapter(api_key=source)
+        pages = (
+            body({"data": [{"id": "a"}], "has_more": True, "last_id": "a"}),
+            body({"data": [{"id": "b"}], "has_more": False}),
+        )
+        with serving(adapter, *pages) as server:
+            self.assertEqual(adapter.models(), {"a", "b"})
+        source.assert_called_once_with()
+        self.assertEqual([header(r, "x-api-key") for r in server.requests], ["k", "k"])
+
+    def test_source_exception_propagates_out_of_models(self):
+        for cls, *_ in KEYED_CASES:
+            adapter = cls(api_key=Mock(side_effect=ConnectionError("vault down")))
+            with (
+                self.subTest(cls.__name__),
+                serving(adapter) as server,
+                self.assertRaises(ConnectionError),
+            ):
+                adapter.models()
+            self.assertEqual(server.requests, [])
+
+
+class RedirectTests(unittest.TestCase):
+    """A redirect, even to another host, never carries the key or config headers."""
+
+    def test_no_header_follows_a_redirect(self):
+        cases: list[tuple[Adapter, dict[str, Any]]] = [
+            (ClaudeAdapter(api_key="sk-secret"), CLAUDE_BODY),
+            (OpenAIAdapter(api_key="sk-secret"), OPENAI_BODY),
+            (OllamaLocalAdapter(), OLLAMA_BODY),
+        ]
+        config = {"headers": {"X-Custom": "config-value"}}
+        for adapter, final_body in cases:
+            with (
+                self.subTest(type(adapter).__name__),
+                LocalServer(body(final_body)) as target,
+                serving(
+                    adapter,
+                    Reply(
+                        status=302,
+                        headers={"Location": f"{target.url}/elsewhere"},
+                        chunked=False,
+                    ),
+                ) as origin,
+            ):
+                adapter.chat("m", MESSAGES, config=config)
+            [first] = origin.requests
+            [second] = target.requests
+            self.assertEqual(header(first, "x-custom"), "config-value")
+            self.assertEqual(second.path, "/elsewhere")
+            for name in ("x-api-key", "authorization", "x-custom", "anthropic-version"):
+                self.assertIsNone(header(second, name), name)
 
 
 if __name__ == "__main__":

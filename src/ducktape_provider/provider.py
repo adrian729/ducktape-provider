@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import contextvars
+import copy
 import enum
 import functools
 import importlib.metadata
@@ -11,7 +12,7 @@ import urllib.error
 from collections.abc import AsyncGenerator, Callable, Collection, Iterator, Mapping
 from typing import Any, Literal, TypeVar
 
-from .adapter import Adapter, _validate_timeout
+from .adapter import Adapter, _Secret, _validate_timeout
 from .adapters.claude import ClaudeAdapter
 from .adapters.ollama import OllamaLocalAdapter
 from .adapters.openai import OpenAIAdapter
@@ -157,8 +158,42 @@ class Provider:
         timeout: float | None | Literal[_Default.TIMEOUT] = _Default.TIMEOUT,
         autodiscover: bool | Collection[str] = False,
         executor: concurrent.futures.Executor | None = None,
+        api_keys: Mapping[str, str | Callable[[], str | None]]
+        | Callable[[str], str | None]
+        | None = None,
     ):
-        """`timeout=None` disables timeouts for every call; leaving it out keeps each adapter's default."""
+        """`timeout=None` disables timeouts for every call; leaving it out keeps each adapter's default.
+
+        `api_keys` gives the adapters that take an API key (`ClaudeAdapter`,
+        `OpenAIAdapter` and their subclasses, built in or passed in `adapters`)
+        their key by registered name, before plugins are discovered: a mapping of
+        name to key or zero-argument function, or one function called with the
+        name. It works like each adapter's `api_key=`: the env var is no longer
+        read, and a function is called on every request, possibly from several
+        threads at once. A passed adapter is never modified; a shallow copy gets
+        the key, so a subclass's own mutable state (locks, dicts) stays shared
+        with the original.
+        """
+        # Wrapped before anything can raise, so no raw key sits in a local of
+        # this frame on a traceback. Names too, since an inverted mapping puts
+        # the key there. Mapping.items() is also read only once.
+        if isinstance(api_keys, Mapping):
+            credentials: list[tuple[_Secret, _Secret]] | _Secret | None = [
+                (_Secret(name), _Secret(value)) for name, value in api_keys.items()
+            ]
+            api_keys = None
+        elif callable(api_keys):
+            credentials = _Secret(api_keys)
+            api_keys = None
+        elif api_keys is not None:
+            api_keys_type = type(api_keys).__name__
+            api_keys = None
+            raise TypeError(
+                "api_keys must be a mapping of provider name to key or a function, "
+                f"not a {api_keys_type}"
+            )
+        else:
+            credentials = None
         if timeout is not _Default.TIMEOUT:
             _validate_timeout("Provider", timeout)
         # Copied so discovery never registers plugins into the caller's mapping.
@@ -171,6 +206,8 @@ class Provider:
                 "ollama-local": OllamaLocalAdapter(),
             }
         )
+        if credentials is not None:
+            self._apply_api_keys(credentials)
         if isinstance(autodiscover, (str, bytes, bytearray)):
             raise TypeError(
                 "autodiscover must be a bool or a collection of str names, not a"
@@ -202,6 +239,56 @@ class Provider:
         # Guarded by a lock since async resolution runs on worker threads.
         self._auto_match_cache: dict[str, str] = {}
         self._auto_match_lock = threading.Lock()
+
+    def _apply_api_keys(
+        self, credentials: list[tuple[_Secret, _Secret]] | _Secret
+    ) -> None:
+        """Replaces each targeted keyed adapter with a copy using its key source."""
+        # Error messages name registered providers and types only: an unknown
+        # name may be a key itself, e.g. from an inverted mapping.
+        keyed = {
+            name: adapter
+            for name, adapter in self._adapters.items()
+            if isinstance(adapter, (ClaudeAdapter, OpenAIAdapter))
+        }
+        if isinstance(credentials, _Secret):
+            if not keyed:
+                raise ValueError(
+                    "api_keys is a function, but no provider that takes an API key "
+                    "is registered"
+                )
+            # partial, not a lambda closing over the loop variable, which would
+            # hand every adapter the last provider's name.
+            targets = [(name, credentials.bind(name)) for name in keyed]
+        else:
+            targets = []
+            for wrapped_name, source in credentials:
+                # Unwrapped only once known to be a registered provider name.
+                if (name := wrapped_name.among(keyed)) is None:
+                    raise ValueError(
+                        "api_keys names a provider that is not registered or takes "
+                        "no API key; providers that take one: "
+                        f"{', '.join(repr(n) for n in keyed) or 'none'}"
+                    )
+                targets.append((name, source))
+        for name, source in targets:
+            source.validate(name)
+            adapter = keyed[name]
+            if adapter._key_source is not None:
+                raise ValueError(
+                    f"api_keys sets a key for {name!r}, whose adapter already has "
+                    "its own api_key"
+                )
+            copied = copy.copy(adapter)
+            if copied is adapter:
+                raise TypeError(
+                    f"api_keys cannot set a key for {name!r}: copying its adapter "
+                    "returned the same instance, which would change the caller's"
+                )
+            copied._models_cache = None
+            copied._cache_time = 0.0
+            copied._key_source = source
+            self._adapters[name] = copied
 
     def _register_plugins(self, allowed: frozenset[str] | None) -> None:
         unmatched = set(allowed) if allowed is not None else set()

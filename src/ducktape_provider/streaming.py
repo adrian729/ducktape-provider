@@ -5,9 +5,11 @@ import contextlib
 import http.client
 import json
 import time
+import traceback
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Iterator
+from types import TracebackType
 from typing import Any, Protocol
 
 from . import errors
@@ -172,18 +174,67 @@ def _shape_checked(vendor: str) -> Iterator[None]:
         errors.raise_for_malformed_response(vendor, e)
 
 
-@contextlib.contextmanager
-def _transport_errors(vendor: str) -> Iterator[None]:
+def _clear_tracebacks(exc: BaseException) -> None:
+    """Swaps the traceback of `exc`, and of every exception chained to it, for its text.
+
+    urllib's `do_open` and http.client's frames on those tracebacks hold the
+    request's header dict, API key included, where anything that inspects frame
+    locals (debuggers, error reporters) would find it. The note keeps each
+    file/line/source for debugging, without the locals.
+    """
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [exc]
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if current.__traceback__ is not None:
+            # add_note raises TypeError when __notes__ was set to a non-list; the
+            # note is optional, dropping the traceback isn't.
+            try:
+                with contextlib.suppress(TypeError):
+                    current.add_note(
+                        "".join(traceback.format_tb(current.__traceback__))
+                    )
+            finally:
+                current.__traceback__ = None
+        pending += (current.__cause__, current.__context__)
+
+
+class _transport_errors:
     """Maps an HTTP error status or a failed connection/read onto `APIError`.
 
-    Same rule as `_shape_checked`: never wrap a `yield` to the consumer.
+    Same rule as `_shape_checked`: never wrap a `yield` to the consumer. A class
+    rather than `@contextlib.contextmanager`, whose generator machinery would
+    keep its own references to the original traceback.
     """
-    try:
-        yield
-    except urllib.error.HTTPError as e:
-        errors.raise_for_http_error(vendor, e)
-    except (OSError, http.client.HTTPException) as e:
-        errors.raise_for_connection_error(vendor, e)
+
+    def __init__(self, vendor: str) -> None:
+        self._vendor = vendor
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        # Would otherwise stay reachable from this frame on the raised error's
+        # traceback, along with the header-holding frames it references.
+        del tb
+        # Our own errors are raised by our parsing code, not from inside urllib.
+        if exc is None or isinstance(exc, errors.DucktapeError):
+            return
+        # Mapped or not: a signal handler's SystemExit or KeyboardInterrupt while
+        # waiting for the reply carries the same header-holding frames.
+        _clear_tracebacks(exc)
+        if isinstance(exc, urllib.error.HTTPError):
+            errors.raise_for_http_error(self._vendor, exc)
+        if isinstance(exc, (OSError, http.client.HTTPException)):
+            errors.raise_for_connection_error(self._vendor, exc)
 
 
 def _request_json(
