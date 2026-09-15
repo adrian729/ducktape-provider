@@ -111,7 +111,6 @@ class TestExplicitProviderUnchanged(unittest.TestCase):
         provider = Provider(adapters={"fake": adapter})
         response = provider.chat("fake-model", MESSAGES, provider="fake")
         self.assertEqual(response, FIXED_RESPONSE)
-        # Explicit provider never touches auto-match machinery.
         self.assertEqual(adapter.is_available_calls, 0)
         self.assertEqual(adapter.models_calls, 0)
 
@@ -238,7 +237,6 @@ class TestAutoMatchAsync(unittest.IsolatedAsyncioTestCase):
     async def test_async_stream_chat_no_match_raises_on_iteration_not_call(self):
         adapter = CountingFakeAdapter(models=lambda: {"other-model"})
         provider = Provider(adapters={"fake": adapter})
-        # Constructing the async generator must not raise or do any I/O yet.
         stream = provider.async_stream_chat("no-such-model", MESSAGES)
         self.assertEqual(adapter.models_calls, 0)
         with self.assertRaises(KeyError):
@@ -275,7 +273,6 @@ class TestAutoMatchCache(unittest.TestCase):
         self.assertEqual(adapter.models_calls, 1)
 
         provider.chat("fake-model", MESSAGES)
-        # Cache hit: no further is_available()/models() I/O.
         self.assertEqual(adapter.is_available_calls, 1)
         self.assertEqual(adapter.models_calls, 1)
 
@@ -318,7 +315,6 @@ class TestAutoMatchCache(unittest.TestCase):
             provider.chat("fake-model", MESSAGES)
         self.assertNotIn("fake-model", provider._auto_match_cache)
 
-        # Re-resolves (probes again) on the next call.
         self.assertEqual(adapter.models_calls, 1)
         with self.assertLogs(LOGGER, "WARNING"):
             provider.chat("fake-model", MESSAGES)
@@ -353,14 +349,12 @@ class TestAutoMatchCache(unittest.TestCase):
         adapter = CountingFakeAdapter(stream=stream, models=lambda: {"fake-model"})
         provider = Provider(adapters={"fake": adapter})
         with self.assertLogs(LOGGER, "WARNING"):
-            # stream_chat's return type doesn't promise .close(), but the
-            # generator it actually returns does.
             gen = cast(
                 Generator[StreamEvent, None, None],
                 provider.stream_chat("fake-model", MESSAGES),
             )
             next(gen)
-            gen.close()  # the consumer leaves before the 404 is ever raised
+            gen.close()
         self.assertIn("fake-model", provider._auto_match_cache)
 
     def test_404_through_async_chat_evicts_entry(self):
@@ -412,8 +406,6 @@ class TestAutoMatchCache(unittest.TestCase):
         self.assertNotIn("fake-model", provider._auto_match_cache)
 
     def test_url_error_caused_failure_evicts_cache_entry(self):
-        # A URLError cause means urlopen itself failed (connect/DNS/TLS), i.e.
-        # the provider was never reached.
         def chat() -> Response:
             raise _connection_error(urllib.error.URLError(ConnectionRefusedError()))
 
@@ -434,7 +426,6 @@ class TestAutoMatchCache(unittest.TestCase):
         self.assertIn("fake-model", provider._auto_match_cache)
 
     def test_incomplete_read_does_not_evict_cache_entry(self):
-        # Mid-response failure: the provider answered, just not completely.
         def chat() -> Response:
             raise _connection_error(http.client.IncompleteRead(b""))
 
@@ -445,8 +436,6 @@ class TestAutoMatchCache(unittest.TestCase):
         self.assertIn("fake-model", provider._auto_match_cache)
 
     def test_raw_oserror_mid_read_does_not_evict_cache_entry(self):
-        # A bare OSError (not wrapped in URLError) from reading an already
-        # established connection - the provider was reached.
         def chat() -> Response:
             raise _connection_error(ConnectionResetError())
 

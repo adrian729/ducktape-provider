@@ -263,7 +263,6 @@ class ClaudeChatHTTPTests(unittest.TestCase):
         self.assertEqual(response["usage"], {"input_tokens": 10, "output_tokens": 8})
         self.assertIsInstance(response["latency_ms"], float)
         self.assertGreaterEqual(response["latency_ms"], 0)
-        # request actually went through urlopen, never a real socket
         mock_urlopen.assert_called_once()
         request = mock_urlopen.call_args.args[0]
         self.assertEqual(request.full_url, ClaudeAdapter._MESSAGES_URL)
@@ -565,7 +564,6 @@ class ClaudeThinkingSerializeTests(unittest.TestCase):
         ]
         with self.assertLogs(claude_module.logger, level="WARNING"):
             serialized = self.adapter._serialize(messages)
-        # Claude merges the now-consecutive user turns itself.
         self.assertEqual([m["role"] for m in serialized], ["user", "user"])
         self.assertTrue(all(m["content"] for m in serialized))
 
@@ -725,7 +723,6 @@ class ClaudeStreamContentTests(unittest.TestCase):
 
         events = list(self.adapter.stream_chat("claude-x", MESSAGES))
 
-        # server-executed blocks surface no events at all, not even a lone block_stop
         self.assertEqual(
             [(e["type"], e.get("index")) for e in events],
             [("text_delta", 2), ("block_stop", 2), ("message_stop", None)],
@@ -980,8 +977,6 @@ class ClaudeStreamErrorTests(unittest.TestCase):
     def test_exception_thrown_in_by_consumer_is_not_relabeled(self):
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_urlopen.return_value = FakeStreamResponse(sse_lines(*_text_stream()))
-            # The concrete adapter returns a generator; the Adapter ABC only
-            # promises an Iterator, which has no throw().
             stream = cast(
                 Generator[StreamEvent], self.adapter.stream_chat("claude-x", MESSAGES)
             )
@@ -1037,19 +1032,16 @@ class ClaudeLatencyTests(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_stream_latency_and_ttft_use_wire_read_times(self, mock_urlopen):
         mock_urlopen.return_value = FakeStreamResponse(sse_lines(*STREAM_EVENTS))
-        # one clock read at request start, then one per SSE event parsed
         clock = [100.0 + i * 0.125 for i in range(len(STREAM_EVENTS) + 1)]
         with patch("time.monotonic", side_effect=clock):
             events = list(self.adapter.stream_chat("claude-x", MESSAGES))
         final = final_response(events)
-        # first text_delta is the 3rd SSE event, message_stop the 9th
         self.assertEqual(final["ttft_ms"], 375.0)
         self.assertEqual(final["latency_ms"], 1125.0)
 
 
 class ClaudeRequestValidationTests(unittest.TestCase):
     def setUp(self):
-        # No explicit key, so the env var below is the one sent.
         self.adapter = ClaudeAdapter()
 
     @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
@@ -1106,8 +1098,6 @@ class ClaudeStreamAccumulationTests(unittest.TestCase):
         self.adapter = ClaudeAdapter(api_key="test")
 
     def test_long_streams_accumulate_in_linear_time(self):
-        # Few large deltas, so quadratic accumulation copies tens of GiB (~45 s
-        # measured at this size) while linear takes ~30 ms: a wide margin either way.
         n, delta = 4000, "x" * 16 * 1024
         cases = [
             ("thinking", "thinking_delta", "thinking"),

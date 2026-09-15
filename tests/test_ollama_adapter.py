@@ -52,7 +52,6 @@ FINAL_CHUNK_STATS = {
 }
 WEATHER_CALL = {"function": {"name": "get_weather", "arguments": {"city": "NYC"}}}
 
-# Older Ollama versions attach tool calls to the final done:true chunk.
 STREAM_CHUNKS = [
     {"message": {"role": "assistant", "content": "Let "}, "done": False},
     {"message": {"role": "assistant", "content": "me check"}, "done": False},
@@ -62,7 +61,6 @@ STREAM_CHUNKS = [
     },
 ]
 
-# Recent Ollama versions send tool calls in an earlier done:false chunk.
 STREAM_CHUNKS_EARLY_TOOL_CALLS = [
     {"message": {"role": "assistant", "content": "Let "}, "done": False},
     {"message": {"role": "assistant", "content": "me check"}, "done": False},
@@ -333,7 +331,6 @@ class OllamaHeaderOverrideTests(unittest.TestCase):
                 lambda: buffered_response(b'{"models": [{"name": "llama3"}]}'),
             ),
         }
-        # Port 9 plus a patched urlopen: nothing can reach a real Ollama daemon.
         with patch.dict("os.environ", {"OLLAMA_HOST": "http://127.0.0.1:9"}):
             for label, (call, reply) in calls.items():
                 with self.subTest(label):
@@ -431,7 +428,6 @@ class OllamaStreamContentTests(unittest.TestCase):
                 ("message_stop", None),
             ],
         )
-        # one block per streamed index, so each event's index addresses content
         final = final_response(events)
         self.assertEqual(
             final["content"],
@@ -647,7 +643,6 @@ class OllamaLatencyTests(unittest.TestCase):
         self, mock_urlopen
     ):
         cases = {
-            # Older Ollama versions attach tool calls to the final chunk only.
             "tool call only in done chunk": [
                 {"message": {"content": ""}, "done": False},
                 {"message": {"tool_calls": [WEATHER_CALL]}, **FINAL_CHUNK_STATS},
@@ -749,8 +744,6 @@ class OllamaStreamAccumulationTests(unittest.TestCase):
         self.adapter = OllamaLocalAdapter()
 
     def test_long_streams_accumulate_in_linear_time(self):
-        # Few large deltas, so quadratic accumulation copies tens of GiB (~45 s
-        # measured at this size) while linear takes ~30 ms: a wide margin either way.
         n, delta = 4000, "x" * 16 * 1024
         for field, block_type in [("thinking", "thinking"), ("content", "text")]:
             with self.subTest(field):

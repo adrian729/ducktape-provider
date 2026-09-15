@@ -56,9 +56,6 @@ def _tool_use_block(index: int, call: dict[str, Any]) -> ToolUseBlock:
     if isinstance(args, str):
         args = _loads_tool_input(args)
     elif not isinstance(args, dict):
-        # Non-string, non-dict arguments (None, a list, ...) have no parse step
-        # of their own to fall back to {} — _loads_tool_input already does that
-        # for the string case.
         args = {}
     return {
         "type": "tool_use",
@@ -107,8 +104,6 @@ class OllamaLocalAdapter(Adapter):
         return set(model_ids)
 
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
-        # A 404 means the model itself is gone, so Provider's auto-match must not
-        # keep re-picking this adapter off a stale models() list for up to _MODELS_TTL.
         if e.status == 404:
             self._models_cache = None
 
@@ -303,10 +298,6 @@ class OllamaLocalAdapter(Adapter):
         call is emitted as its own complete block as soon as its chunk arrives. The
         final content holds one block per streamed index, in that order."""
         blocks: list[Block] = []
-        # Deltas collected per open block and joined once it closes, rather than
-        # accumulated with `+=` on every delta: str concatenation on a list item
-        # isn't CPython's in-place-append fast path, so `+=` here is O(n^2) over a
-        # long stream.
         parts: dict[int, list[str]] = {}
         open_kind: str | None = None
         tool_calls: list[dict[str, Any]] = []
@@ -356,8 +347,6 @@ class OllamaLocalAdapter(Adapter):
                 elif blocks[index]["type"] == "text":
                     yield {"type": "text_delta", "index": index, "text": delta}
 
-            # Recent Ollama versions send tool calls in a done:false chunk, older
-            # ones in the final chunk, so collect them from every chunk.
             for call in message.get("tool_calls") or []:
                 if open_kind is not None:
                     yield {"type": "block_stop", "index": close_open_block()}
@@ -372,9 +361,6 @@ class OllamaLocalAdapter(Adapter):
                     "id": block["id"],
                     "name": block["name"],
                 }
-                # Re-encoded from the parsed input rather than passed through, so
-                # missing or unparseable arguments stream as the same {} the final
-                # block carries.
                 yield {
                     "type": "tool_use_delta",
                     "index": index,

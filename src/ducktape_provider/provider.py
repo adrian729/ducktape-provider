@@ -23,11 +23,7 @@ logger = logging.getLogger(__name__)
 
 ENTRY_POINT_GROUP = "ducktape_provider.adapters"
 
-# Caps events buffered between a stream's reader thread and a slow consumer;
-# one HTTP chunk can decode into several events, so leave room for bursts.
 _STREAM_BUFFER_SIZE = 64
-# How often a reader blocked on a full buffer re-checks whether its loop died
-# without ever closing the async generator (so nothing will release a slot).
 _READER_POLL_SECONDS = 1.0
 
 _EVENT = "event"
@@ -38,7 +34,6 @@ _T = TypeVar("_T")
 
 
 class _Default(enum.Enum):
-    # An enum member rather than object() so type checkers can narrow it away.
     TIMEOUT = enum.auto()
 
     def __repr__(self) -> str:
@@ -112,8 +107,6 @@ def _scan_entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
     )
 
 
-# Only successes are cached: a failed import may be transient (e.g. a package
-# mid-upgrade), so later Providers retry it.
 _loaded_adapter_classes: dict[importlib.metadata.EntryPoint, type[Adapter]] = {}
 
 
@@ -174,9 +167,6 @@ class Provider:
         the key, so a subclass's own mutable state (locks, dicts) stays shared
         with the original.
         """
-        # Wrapped before anything can raise, so no raw key sits in a local of
-        # this frame on a traceback. Names too, since an inverted mapping puts
-        # the key there. Mapping.items() is also read only once.
         if isinstance(api_keys, Mapping):
             credentials: list[tuple[_Secret, _Secret]] | _Secret | None = [
                 (_Secret(name), _Secret(value)) for name, value in api_keys.items()
@@ -196,7 +186,6 @@ class Provider:
             credentials = None
         if timeout is not _Default.TIMEOUT:
             _validate_timeout("Provider", timeout)
-        # Copied so discovery never registers plugins into the caller's mapping.
         self._adapters: dict[str, Adapter] = (
             dict(adapters)
             if adapters is not None
@@ -214,17 +203,12 @@ class Provider:
                 f" {type(autodiscover).__name__}"
             )
         if not isinstance(autodiscover, bool):
-            # Materialized once: a generator would be exhausted by this validation
-            # pass, leaving nothing for frozenset() below to register.
             autodiscover = tuple(autodiscover)
             for entry in autodiscover:
                 if not isinstance(entry, str):
                     raise TypeError(
                         f"autodiscover entries must be str, got {type(entry).__name__}"
                     )
-        # A plain name a plugin lost to a collision, mapped to the qualified
-        # name(s) it registered under instead — used to make an unknown-provider
-        # KeyError on that plain name point at its qualified alternatives.
         self._plain_name_alternatives: dict[str, list[str]] = {}
         if autodiscover:
             self._register_plugins(
@@ -234,9 +218,6 @@ class Provider:
         self._config: dict[str, Any] = {}
         if timeout is not _Default.TIMEOUT:
             self._config["timeout"] = timeout
-        # Auto-match results only (explicit `provider=` calls never touch this),
-        # so a repeat call for the same model skips is_available()/models() I/O.
-        # Guarded by a lock since async resolution runs on worker threads.
         self._auto_match_cache: dict[str, str] = {}
         self._auto_match_lock = threading.Lock()
 
@@ -244,8 +225,6 @@ class Provider:
         self, credentials: list[tuple[_Secret, _Secret]] | _Secret
     ) -> None:
         """Replaces each targeted keyed adapter with a copy using its key source."""
-        # Error messages name registered providers and types only: an unknown
-        # name may be a key itself, e.g. from an inverted mapping.
         keyed = {
             name: adapter
             for name, adapter in self._adapters.items()
@@ -257,13 +236,10 @@ class Provider:
                     "api_keys is a function, but no provider that takes an API key "
                     "is registered"
                 )
-            # partial, not a lambda closing over the loop variable, which would
-            # hand every adapter the last provider's name.
             targets = [(name, credentials.bind(name)) for name in keyed]
         else:
             targets = []
             for wrapped_name, source in credentials:
-                # Unwrapped only once known to be a registered provider name.
                 if (name := wrapped_name.among(keyed)) is None:
                     raise ValueError(
                         "api_keys names a provider that is not registered or takes "
@@ -298,10 +274,6 @@ class Provider:
             else {}
         )
 
-        # (entry_point, dist, qualified) for every candidate, plus whether it was
-        # selected via a dist-qualified allowlist entry (e.g. "beta-dist:shared")
-        # rather than a plain one — a qualified match always registers under
-        # that exact qualified name, so it never competes for the plain one.
         candidates: list[
             tuple[importlib.metadata.EntryPoint, str | None, str | None, bool]
         ] = []
@@ -322,10 +294,6 @@ class Provider:
                 qualified_match = False
             candidates.append((entry_point, dist, qualified, qualified_match))
 
-        # A name two or more plugins would otherwise both plainly want is
-        # ambiguous — which one gets it would depend on install order or dist
-        # sort, and a new install could silently reroute an existing plain-name
-        # call to a different vendor. So none of them gets it.
         plain_name_counts: dict[str, int] = {}
         for entry_point, _dist, _qualified, qualified_match in candidates:
             if not qualified_match:
@@ -359,9 +327,6 @@ class Provider:
                         qualified,
                     )
                     continue
-                # The plain name was asked for in qualified form, so it never
-                # competes for the plain name — but if a built-in or explicit
-                # adapter already holds the plain name, still say so.
                 if entry_point.name in self._adapters:
                     collision_reason = "collides with an existing provider"
             else:
@@ -445,8 +410,6 @@ class Provider:
         with self._auto_match_lock:
             cached_name = self._auto_match_cache.get(model)
             if cached_name is not None:
-                # self._adapters never changes after __init__, so a cached name
-                # is always still in it.
                 return cached_name, self._adapters[cached_name]
         checked: list[str] = []
         for name, adapter in self._adapters.items():
@@ -456,9 +419,6 @@ class Provider:
             try:
                 models = adapter.models()
             except Exception:
-                # One adapter's probe failing shouldn't stop matching against
-                # the rest — models() is documented to return set() rather
-                # than raise, but a misbehaving adapter shouldn't wedge this.
                 logger.warning(
                     "provider %r raised while listing models during auto-match",
                     name,
@@ -467,9 +427,6 @@ class Provider:
                 continue
             if model in models:
                 with self._auto_match_lock:
-                    # The lock makes two concurrent first-fills log only once; a
-                    # second log happens only if the entry was evicted between
-                    # one fill and the next.
                     first_fill = model not in self._auto_match_cache
                     self._auto_match_cache[model] = name
                 if first_fill:
@@ -571,7 +528,6 @@ class Provider:
                 if key == "headers" and isinstance(value, Mapping):
                     current = merged.get(key)
                     base = current if isinstance(current, Mapping) else {}
-                    # Always a fresh dict, so adapters never share the caller's.
                     merged[key] = {**base, **value}
                 else:
                     merged[key] = value
@@ -629,8 +585,6 @@ class Provider:
         *,
         provider: str | None = None,
     ) -> Response:
-        # Resolution (when provider is omitted) can hit the network, so it runs
-        # inside the off-loop call rather than eagerly on the caller's thread.
         def call() -> Response:
             resolved_name, adapter = self._resolve_provider(provider, model)
             try:
@@ -648,11 +602,6 @@ class Provider:
 
         return await self._run_off_loop(call)
 
-    # A plain def (not an async generator): with an explicit provider, an
-    # unknown name still raises at call time rather than on first iteration.
-    # With provider omitted, resolution itself may do network I/O, so it's
-    # deferred into open_stream and runs on the stream's reader thread instead
-    # — a no-match KeyError there surfaces on first iteration, not call time.
     def async_stream_chat(
         self,
         model: str,
@@ -700,8 +649,6 @@ class Provider:
         """
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
-        # Bounds the queue from the producer side: a thread can't await a full
-        # asyncio.Queue, but it can block on a semaphore the consumer releases.
         slots = threading.Semaphore(_STREAM_BUFFER_SIZE)
         stopped = threading.Event()
 
@@ -713,7 +660,6 @@ class Provider:
                 return False
             try:
                 loop.call_soon_threadsafe(queue.put_nowait, item)
-            # The loop can still close between the check above and this call.
             except RuntimeError:
                 return False
             return True
@@ -728,11 +674,8 @@ class Provider:
                     if not put((_EVENT, event)):
                         consumer_gone = True
                         break
-            # Everything, not just Exception: the consumer re-raises it on the loop.
             except BaseException as exc:  # noqa: BLE001
                 outcome = (_ERROR, exc)
-            # Close before signalling the end, so the adapter's cleanup has run
-            # by the time the consumer sees the stream finish.
             close = getattr(iterator, "close", None)
             if close is not None:
                 try:
@@ -741,18 +684,10 @@ class Provider:
                     if outcome[0] == _DONE and not consumer_gone:
                         outcome = (_ERROR, exc)
                     else:
-                        # Nobody will see this error otherwise: the consumer
-                        # left, or gets the stream's own (root-cause) error.
                         logger.warning("Error closing stream", exc_info=True)
-            # A consumer that left will never free a slot for the outcome, so
-            # putting it would only stall this thread for a poll interval.
             if not consumer_gone:
                 put(outcome)
 
-        # Its own daemon thread, not an executor worker: a reader stays blocked
-        # for as long as the consumer is slow, and holding a shared worker that
-        # long deadlocks consumers that await the same executor per event
-        # (async_chat, asyncio.to_thread, getaddrinfo).
         threading.Thread(
             target=contextvars.copy_context().run,
             args=(read,),
@@ -771,5 +706,4 @@ class Provider:
                 return
         finally:
             stopped.set()
-            # Wakes a reader blocked on a full buffer so it can see the stop.
             slots.release()

@@ -15,7 +15,6 @@ from .types import (
     UnsupportedBlockError,
 )
 
-# Re-exported so existing `errors.X` references keep working.
 __all__ = [
     "APIError",
     "AuthError",
@@ -36,11 +35,7 @@ _CONTEXT_OVERFLOW_MARKERS = (
     "too many tokens",
 )
 
-# An error body only needs to be long enough to classify and explain the failure;
-# a misbehaving server must not make us buffer an unbounded one.
 _MAX_ERROR_BODY_BYTES = 64 * 1024
-# How much of a body or vendor message is quoted in an exception's message, so a
-# log line stays readable; the full (capped) body is still on `APIError.body`.
 _MAX_MESSAGE_DETAIL_CHARS = 2048
 
 
@@ -52,7 +47,6 @@ def _parse_retry_after(e: urllib.error.HTTPError) -> float | None:
         value = float(header_value)
     except ValueError:
         return None
-    # nan/inf/negative would reach a caller's time.sleep(retry_after) and raise there.
     if not math.isfinite(value) or value < 0:
         return None
     return value
@@ -83,14 +77,10 @@ def _truncate(text: str) -> str:
 
 
 def _cap_body(body: str) -> str:
-    # Same cap as an HTTP error body (raise_for_http_error reads at most this many
-    # bytes); a vendor error's body is already str, so bound length instead of bytes.
     return body[:_MAX_ERROR_BODY_BYTES]
 
 
 def raise_for_http_error(vendor: str, e: urllib.error.HTTPError) -> NoReturn:
-    # The status alone still classifies the error, so a body that can't be read
-    # (timeout, connection dropped) must not replace it with a raw socket error.
     try:
         body = e.read(_MAX_ERROR_BODY_BYTES).decode(errors="replace")
     except (OSError, http.client.HTTPException, ValueError):
@@ -134,7 +124,6 @@ def raise_for_connection_error(vendor: str, e: BaseException) -> NoReturn:
 
 
 def raise_for_malformed_response(vendor: str, e: BaseException) -> NoReturn:
-    # A bare KeyError/IndexError message is just the key, e.g. "'index'".
     detail = f"{type(e).__name__}: {e}" if isinstance(e, LookupError) else str(e)
     raise MalformedResponseError(
         f"{vendor} chat failed: malformed response: {_truncate(detail)}"
@@ -142,6 +131,4 @@ def raise_for_malformed_response(vendor: str, e: BaseException) -> NoReturn:
 
 
 def raise_for_truncated_stream(vendor: str, terminal: str) -> NoReturn:
-    # A plain APIError, not MalformedResponseError: what did arrive parsed fine,
-    # so this is the connection ending early, which a retry can fix.
     raise APIError(f"{vendor} chat failed: stream ended before {terminal}")

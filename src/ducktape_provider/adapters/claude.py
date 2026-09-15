@@ -35,8 +35,6 @@ from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef, 
 
 logger = logging.getLogger(__name__)
 
-# HTTP status Anthropic documents for each error type, so mid-stream error
-# events map to the same exception class as the equivalent HTTP error.
 _ERROR_TYPE_STATUS = {
     "invalid_request_error": 400,
     "authentication_error": 401,
@@ -80,8 +78,6 @@ class ClaudeAdapter(Adapter):
             self._key_source = source
 
     def is_available(self) -> bool:
-        # A key source counts as configured without calling it, since this is
-        # probed often and the source may be a remote vault.
         if self._key_source is not None:
             return True
         return bool(os.environ.get("ANTHROPIC_API_KEY"))
@@ -90,13 +86,9 @@ class ClaudeAdapter(Adapter):
         now = time.monotonic()
         if self._models_cache is not None and now - self._cache_time < self._MODELS_TTL:
             return set(self._models_cache)
-        # Read once, so the URL the key is checked against is the one it goes to,
-        # even if a subclass property returns different values.
         base = self._MODELS_URL
         if not _key_url_allowed(base):
             return set()
-        # Resolved once for every page, and outside the probe-error handler so a
-        # failing key source raises instead of passing for "unreachable".
         key = _current_key(self._key_source, "ANTHROPIC_API_KEY")
         try:
             key.check("claude")
@@ -125,8 +117,6 @@ class ClaudeAdapter(Adapter):
                 after_id = next_after_id
         except _PROBE_ERRORS:
             return set()
-        # Anything else (e.g. KeyboardInterrupt mid-request) propagates, and its
-        # traceback holds urllib's frames with the key in their header dict.
         except BaseException as e:
             _clear_tracebacks(e)
             raise
@@ -135,8 +125,6 @@ class ClaudeAdapter(Adapter):
         return set(model_ids)
 
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
-        # A 404 means the model itself is gone, so Provider's auto-match must not
-        # keep re-picking this adapter off a stale models() list for up to _MODELS_TTL.
         if e.status == 404:
             self._models_cache = None
 
@@ -195,13 +183,9 @@ class ClaudeAdapter(Adapter):
                         entry["is_error"] = True
                     content.append(entry)
                 elif block["type"] == "thinking" and not block.get("signature"):
-                    # Only Claude-issued thinking blocks carry a signature, and the
-                    # API rejects unsigned ones (e.g. OpenAI/Ollama reasoning).
                     dropped_thinking += 1
                 else:
                     content.append(dict(block))
-            # The API rejects empty content, and dropping the message instead is
-            # safe because it merges the consecutive same-role turns this leaves.
             if not content and dropped_thinking > dropped_before:
                 continue
             serialized.append({"role": message["role"], "content": content})
@@ -292,7 +276,6 @@ class ClaudeAdapter(Adapter):
             "claude", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
         )
         _validate_headers("claude", extra_headers)
-        # Read once: the transport check and the request must see the same URL.
         url = self._MESSAGES_URL
         req = _new_request(
             url,
@@ -355,27 +338,16 @@ class ClaudeAdapter(Adapter):
     def _stream_handler(
         self, timer: _StreamTimer
     ) -> Callable[[dict[str, Any]], Iterator[StreamEvent]]:
-        # Keyed by wire index, so a delta for a block that never started is a
-        # KeyError (malformed) rather than silently growing a padded list.
         blocks: dict[int, dict[str, Any]] = {}
-        # Deltas collected per block and joined once at content_block_stop, rather
-        # than accumulated with `+=` on every delta: str concatenation on a dict
-        # value isn't CPython's in-place-append fast path, so `+=` here is O(n^2)
-        # over a long stream.
         text_parts: dict[int, list[str]] = {}
         thinking_parts: dict[int, list[str]] = {}
         signature_parts: dict[int, list[str]] = {}
         json_buffers: dict[int, list[str]] = {}
-        # Indices that produced a start or delta event; only those get block_stop,
-        # so a block the caller never saw (e.g. server_tool_use) has no lone stop.
         surfaced: set[int] = set()
         stream_usage: dict[str, Any] = {}
         stop_reason = ""
 
         def flush(index: int) -> None:
-            # Shared by content_block_stop and message_stop, since a stream can
-            # end mid-block (no content_block_stop) and its buffered deltas
-            # must still land in the final response rather than vanish.
             block = blocks[index]
             if index in text_parts:
                 block["text"] = "".join(text_parts.pop(index))
@@ -394,7 +366,6 @@ class ClaudeAdapter(Adapter):
             elif etype == "content_block_start":
                 index = event["index"]
                 block = blocks[index] = dict(event["content_block"])
-                # server_tool_use/mcp_tool_use stream their input the same way.
                 if "input" in block:
                     json_buffers[index] = []
                 if block["type"] == "tool_use":
@@ -426,8 +397,6 @@ class ClaudeAdapter(Adapter):
                     signature_parts.setdefault(index, []).append(delta["signature"])
                 elif dtype == "input_json_delta":
                     json_buffers.setdefault(index, []).append(delta["partial_json"])
-                    # Server-executed tool calls aren't the caller's to run, so
-                    # only client tool_use blocks surface as tool_use events.
                     if block.get("type") == "tool_use":
                         yield {
                             "type": "tool_use_delta",
@@ -441,8 +410,6 @@ class ClaudeAdapter(Adapter):
                     yield {"type": "block_stop", "index": index}
             elif etype == "message_delta":
                 stop_reason = event["delta"].get("stop_reason") or stop_reason
-                # message_delta usage is cumulative and, with server tools, also
-                # revises input/cache counts — not just output_tokens.
                 stream_usage.update(
                     {
                         k: v

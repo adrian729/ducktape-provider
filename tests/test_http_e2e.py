@@ -36,7 +36,6 @@ MESSAGES: list[Message] = [
     {"role": "user", "content": [{"type": "text", "text": "hi"}]}
 ]
 
-# Small enough that most SSE lines and NDJSON chunks straddle several HTTP chunks.
 SPLIT = 7
 
 
@@ -55,10 +54,8 @@ def serving(adapter: Adapter, *replies: Reply) -> Iterator[LocalServer]:
     """Runs a LocalServer and points `adapter` at it instead of the vendor."""
     with ExitStack() as stack:
         server = stack.enter_context(LocalServer(*replies))
-        # A proxy from the environment must not intercept loopback requests.
         env = {"no_proxy": "*", "NO_PROXY": "*", "OLLAMA_HOST": server.url}
         stack.enter_context(patch.dict(os.environ, env))
-        # Explicit keys only: the developer's own must never reach a test server.
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
             os.environ.pop(var, None)
         if isinstance(adapter, ClaudeAdapter):
@@ -340,7 +337,6 @@ def body(data: dict[str, Any]) -> Reply:
     return Reply([json.dumps(data).encode()], chunked=False)
 
 
-# (adapter class, auth header, value prefix, stream body, chat body)
 KEYED_CASES: list[
     tuple[type[ClaudeAdapter] | type[OpenAIAdapter], str, str, bytes, dict[str, Any]]
 ] = [

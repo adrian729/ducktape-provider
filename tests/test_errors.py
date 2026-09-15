@@ -67,7 +67,6 @@ class RaiseForHttpErrorTests(unittest.TestCase):
         self.assertIsNone(ctx.exception.retry_after)
 
     def test_429_with_non_finite_or_negative_retry_after_leaves_none(self):
-        # nan/inf/negative would reach a caller's time.sleep(retry_after) and raise.
         for value in ("nan", "inf", "-inf", "-1"):
             with self.subTest(value=value):
                 e = http_error(

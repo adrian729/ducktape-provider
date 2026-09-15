@@ -156,7 +156,6 @@ def stream_until_blocked(
 
 
 def more_than_the_buffer() -> Iterator[StreamEvent]:
-    # Long enough that a reader blocked on backpressure can't just finish.
     for _ in range(_STREAM_BUFFER_SIZE * 3):
         yield text_event("x")
 
@@ -333,7 +332,6 @@ class TestProviderAsyncStream(unittest.IsolatedAsyncioTestCase):
             try:
                 yield text_event("first")
                 first_sent.set()
-                # Stands in for a blocking HTTP read that cancellation can't abort.
                 release.wait(WAIT_SECONDS)
                 produced_after_release.append(text_event("second"))
                 yield text_event("second")
@@ -380,8 +378,6 @@ class TestProviderAsyncStream(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(await wait_for_event(blocked))
                 break
         self.assertTrue(await wait_for_event(closed))
-        # Exactly the events that fit, plus the one the blocked reader held:
-        # fewer means the buffer never filled, more means it didn't block.
         self.assertEqual(produced[0], _STREAM_BUFFER_SIZE + 2)
 
     async def test_reader_exits_promptly_when_consumer_leaves_a_full_buffer(self):
@@ -396,8 +392,6 @@ class TestProviderAsyncStream(unittest.IsolatedAsyncioTestCase):
             return stream()
 
         provider = Provider(adapters={"fake": FakeAdapter(stream=recording_stream)})
-        # A poll far longer than the join below: only an exit that doesn't wait
-        # on the buffer again can pass.
         with patch(POLL_SECONDS, WAIT_SECONDS * 10):
             async with contextlib.aclosing(
                 provider.async_stream_chat("fake-model", MESSAGES, provider="fake")
@@ -433,7 +427,6 @@ class TestProviderAsyncStream(unittest.IsolatedAsyncioTestCase):
         await events.aclose()
 
     async def test_consumer_can_await_the_executor_mid_stream(self):
-        # One worker: a stream reader holding it would starve async_chat forever.
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.addCleanup(executor.shutdown, wait=False, cancel_futures=True)
         provider = Provider(
@@ -513,8 +506,6 @@ class TestProviderAsyncStream(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         real_call_soon_threadsafe = loop.call_soon_threadsafe
 
-        # Stands in for the loop closing between the reader's is_closed() check
-        # and its hand-off; other callers (e.g. asyncio.to_thread) still work.
         def reject_handoff(callback: Callable[..., Any], *args: Any, **kwargs: Any):
             if getattr(callback, "__name__", None) == "put_nowait":
                 raise RuntimeError("Event loop is closed")
@@ -573,7 +564,6 @@ class TestProviderAsyncExecutorAndDiscovery(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(threads), 4)
         self.assertTrue(all(name.startswith("injected") for name in threads), threads)
-        # Streams read on their own daemon thread so they never hold a worker.
         [stream_thread] = stream_threads
         self.assertFalse(stream_thread.name.startswith("injected"))
         self.assertTrue(stream_thread.daemon)
@@ -590,7 +580,6 @@ class TestProviderAsyncExecutorAndDiscovery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await provider.async_models(), {"up": ["a", "b"]})
 
     async def test_async_providers_probes_adapters_concurrently(self):
-        # Each probe only returns once both are running at the same time.
         barrier = threading.Barrier(2, timeout=WAIT_SECONDS)
 
         def probe() -> bool:
@@ -603,7 +592,6 @@ class TestProviderAsyncExecutorAndDiscovery(unittest.IsolatedAsyncioTestCase):
                 "two": FakeAdapter(is_available=probe),
             }
         )
-        # A sequential probe would break the barrier and raise instead.
         result = await provider.async_providers()
         self.assertEqual(result, {"one": True, "two": True})
 
@@ -636,7 +624,6 @@ class TestStreamReaderAfterLoopCloses(unittest.TestCase):
         with patch(POLL_SECONDS, 0.01):
             loop.run_until_complete(anext(events))
             self.assertTrue(blocked.wait(WAIT_SECONDS))
-            # Neither stopped nor closed, the blocked reader must keep waiting.
             self.assertFalse(closed.is_set())
             loop.close()
             self.assertTrue(closed.wait(WAIT_SECONDS))

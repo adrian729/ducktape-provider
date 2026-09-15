@@ -54,7 +54,6 @@ class FakeStreamResponse:
         return line
 
 
-# `object`, not dict: tests also feed deliberately malformed, non-object payloads.
 def sse_lines(*events: object) -> list[bytes]:
     lines: list[bytes] = []
     for event in events:
@@ -89,7 +88,6 @@ def final_response(events: Sequence[StreamEvent]) -> Response:
 
 def request_body(req: Request) -> Any:
     """The JSON body an adapter built into `req`."""
-    # Request.data is typed as any uploadable body; adapters always set bytes.
     return json.loads(cast(bytes, req.data))
 
 
@@ -126,9 +124,7 @@ class LocalServer:
         self.requests: list[RecordedRequest] = []
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler_class())
-        # Joined on close, so no handler outlives the test that started it.
         self._httpd.daemon_threads = False
-        # A short poll so shutdown() returns promptly instead of after 0.5 s.
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, kwargs={"poll_interval": 0.01}
         )

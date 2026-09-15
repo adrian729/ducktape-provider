@@ -35,12 +35,6 @@ from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef, 
 
 logger = logging.getLogger(__name__)
 
-# HTTP status OpenAI documents for each error code or type, so failures reported
-# inside a 200 response map to the same exception class as the HTTP error would.
-# Sources: the Responses API ResponseErrorCode enum (server_error,
-# rate_limit_exceeded) and the error-codes guide (the 429 quota/spend-limit codes,
-# 503 server_is_overloaded); the remaining ResponseErrorCode values (invalid_prompt,
-# invalid_image, ...) are request problems and fall through to a plain APIError.
 _ERROR_CODE_STATUS = {
     "invalid_request_error": 400,
     "context_length_exceeded": 400,
@@ -87,8 +81,6 @@ class OpenAIAdapter(Adapter):
             self._key_source = source
 
     def is_available(self) -> bool:
-        # A key source counts as configured without calling it, since this is
-        # probed often and the source may be a remote vault.
         if self._key_source is not None:
             return True
         return bool(os.environ.get("OPENAI_API_KEY"))
@@ -97,13 +89,9 @@ class OpenAIAdapter(Adapter):
         now = time.monotonic()
         if self._models_cache is not None and now - self._cache_time < self._MODELS_TTL:
             return set(self._models_cache)
-        # Read once, so the URL the key is checked against is the one it goes to,
-        # even if a subclass property returns different values.
         url = self._MODELS_URL
         if not _key_url_allowed(url):
             return set()
-        # Outside the probe-error handler, so a failing key source raises instead
-        # of passing for "unreachable".
         key = _current_key(self._key_source, "OPENAI_API_KEY")
         try:
             key.check("openai")
@@ -121,8 +109,6 @@ class OpenAIAdapter(Adapter):
             }
         except _PROBE_ERRORS:
             return set()
-        # Anything else (e.g. KeyboardInterrupt mid-request) propagates, and its
-        # traceback holds urllib's frames with the key in their header dict.
         except BaseException as e:
             _clear_tracebacks(e)
             raise
@@ -131,8 +117,6 @@ class OpenAIAdapter(Adapter):
         return set(model_ids)
 
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
-        # A 404 means the model itself is gone, so Provider's auto-match must not
-        # keep re-picking this adapter off a stale models() list for up to _MODELS_TTL.
         if e.status == 404:
             self._models_cache = None
 
@@ -170,8 +154,6 @@ class OpenAIAdapter(Adapter):
                         "dropping one from the request"
                     )
                 elif block["type"] == "thinking":
-                    # Round-tripping reasoning needs the item id and encrypted
-                    # content, which a ThinkingBlock doesn't carry.
                     dropped_thinking += 1
                 elif block["type"] == "tool_use":
                     flush()
@@ -320,7 +302,6 @@ class OpenAIAdapter(Adapter):
             "openai", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
         )
         _validate_headers("openai", extra_headers)
-        # Read once: the transport check and the request must see the same URL.
         url = self._RESPONSES_URL
         req = _new_request(
             url,
@@ -388,7 +369,6 @@ class OpenAIAdapter(Adapter):
         refusal part of a message item, allocated in the order they first appear."""
         index_by_part: dict[tuple[str, int], int] = {}
         indices_by_item: dict[str, list[int]] = {}
-        # Only indices that produced a start or delta event get a block_stop.
         surfaced: set[int] = set()
         summary_index_by_item: dict[str, int] = {}
 
@@ -413,8 +393,6 @@ class OpenAIAdapter(Adapter):
                         "name": item.get("name", ""),
                     }
             elif etype == "response.content_part.added":
-                # Reserved even if no delta follows, since the final content still
-                # holds a (possibly empty) block for this part.
                 if event["part"].get("type") in ("output_text", "refusal"):
                     block_index(event["item_id"], event["content_index"])
             elif etype in ("response.output_text.delta", "response.refusal.delta"):
@@ -434,7 +412,6 @@ class OpenAIAdapter(Adapter):
                 text = event["delta"]
                 summary_index = event.get("summary_index", 0)
                 previous = summary_index_by_item.get(item_id)
-                # Matches the "\n" the buffered path joins summary parts with.
                 if previous is not None and previous != summary_index:
                     text = "\n" + text
                 summary_index_by_item[item_id] = summary_index
@@ -446,7 +423,6 @@ class OpenAIAdapter(Adapter):
                     if index in surfaced:
                         yield {"type": "block_stop", "index": index}
             elif etype == "error":
-                # Documented flat, but accept the fields nested like other errors.
                 nested = event.get("error")
                 self._raise_for_error(nested if isinstance(nested, dict) else event)
             elif etype == "response.failed":

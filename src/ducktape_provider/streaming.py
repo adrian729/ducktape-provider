@@ -17,19 +17,12 @@ from .types import StreamEvent
 
 _FIRST_CONTENT_EVENTS = frozenset({"text_delta", "thinking_delta", "tool_use_start"})
 
-# Far above any legitimate event or body (a whole long response is well under
-# this), but bounds what a misbehaving server can make us buffer.
 _MAX_EVENT_BYTES = 16 * 1024 * 1024
 
-# Read a buffered body in pieces so the cap never costs a 16 MiB allocation up front.
 _READ_CHUNK_BYTES = 64 * 1024
 
-# Errors that only arise from a wire event having an unexpected shape (a missing
-# key, a list where an object belongs, a delta for a block that never started).
 _SHAPE_ERRORS = (KeyError, IndexError, TypeError, AttributeError)
 
-# Everything a best-effort probe such as models() treats as "vendor unreachable".
-# ValueError covers an unusable base URL (e.g. a malformed OLLAMA_HOST).
 _PROBE_ERRORS = (
     OSError,
     ValueError,
@@ -50,8 +43,6 @@ class _Reader(Protocol):
 
 
 def _iter_lines(resp: _LineReader, vendor: str) -> Iterator[bytes]:
-    # readline() with a limit, rather than iterating the response, so an endless
-    # line is rejected before it is buffered in full.
     while line := resp.readline(_MAX_EVENT_BYTES + 1):
         if len(line) > _MAX_EVENT_BYTES:
             errors.raise_for_malformed_response(
@@ -64,15 +55,10 @@ def _loads(payload: str | bytes, vendor: str) -> Any:
     try:
         return json.loads(payload)
     except (ValueError, RecursionError) as e:
-        # RecursionError: nesting deep enough to exhaust the parser's stack.
         errors.raise_for_malformed_response(vendor, e)
 
 
 def _loads_tool_input(payload: str) -> dict[str, Any]:
-    # Models do emit invalid tool arguments, and valid-JSON-but-non-object ones
-    # (e.g. "[1,2,3]"). Either way an empty input lets the caller answer with an
-    # error tool_result and the model retry, instead of violating the dict input
-    # type or losing the reply.
     try:
         parsed = json.loads(payload)
     except (ValueError, RecursionError):
@@ -190,8 +176,6 @@ def _clear_tracebacks(exc: BaseException) -> None:
             continue
         seen.add(id(current))
         if current.__traceback__ is not None:
-            # add_note raises TypeError when __notes__ was set to a non-list; the
-            # note is optional, dropping the traceback isn't.
             try:
                 with contextlib.suppress(TypeError):
                     current.add_note(
@@ -222,14 +206,9 @@ class _transport_errors:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        # Would otherwise stay reachable from this frame on the raised error's
-        # traceback, along with the header-holding frames it references.
         del tb
-        # Our own errors are raised by our parsing code, not from inside urllib.
         if exc is None or isinstance(exc, errors.DucktapeError):
             return
-        # Mapped or not: a signal handler's SystemExit or KeyboardInterrupt while
-        # waiting for the reply carries the same header-holding frames.
         _clear_tracebacks(exc)
         if isinstance(exc, urllib.error.HTTPError):
             errors.raise_for_http_error(self._vendor, exc)
@@ -282,8 +261,6 @@ def _stream_request(
             out: list[StreamEvent] = []
             with _shape_checked(vendor):
                 for event in handle(frame):
-                    # Observed as it is produced, so a message_stop built from the
-                    # same frame already accounts for content that preceded it.
                     timer.observe(event)
                     out.append(event)
             yield from out

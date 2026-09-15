@@ -71,7 +71,6 @@ class OversizeAndMalformedTests(unittest.TestCase):
         ):
             list(_iter_sse(resp, "test"))
         self.assertIn("malformed", str(ctx.exception))
-        # only limit + 1 bytes were read from the endless line
         self.assertEqual(len(resp._lines[0]), 100 + 7 - 33)
 
     def test_oversize_multi_line_event_raises_malformed(self):

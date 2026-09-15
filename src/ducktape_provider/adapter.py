@@ -13,8 +13,6 @@ from .types import Adapter, AuthError
 
 __all__ = ["Adapter"]
 
-# Printable ASCII with no space: anything else is either a pasting mistake (a
-# trailing newline) or would break or inject into the HTTP header it's sent in.
 _API_KEY = re.compile(r"[\x21-\x7e]+")
 
 _REDACTED = "<redacted>"
@@ -45,7 +43,6 @@ class _Secret:
     def __format__(self, format_spec: str) -> str:
         return _REDACTED
 
-    # Also refuses a function source, e.g. a vault client's bound method.
     def __reduce__(self) -> NoReturn:
         raise TypeError("an API key cannot be pickled")
 
@@ -63,7 +60,6 @@ class _Secret:
 
     def among(self, names: Collection[str]) -> str | None:
         """This value if it is one of `names`, which aren't secret; otherwise None."""
-        # Exactly str: a subclass's own __hash__/__eq__ could match any name.
         if type(self._value) is str and self._value in names:
             return self._value
         return None
@@ -137,10 +133,6 @@ def _key_url_allowed(url: str) -> bool:
         loopback = ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
-    # Read from the env on every request, while urllib's global opener keeps the
-    # proxies from its first urlopen() or install_opener(), so the two can
-    # disagree if the env changes in between; only an opener of our own, built
-    # per request, would close that.
     return loopback and (
         "http" not in urllib.request.getproxies()
         or bool(urllib.request.proxy_bypass(parts.netloc))
@@ -195,16 +187,11 @@ def _new_request(
     return req
 
 
-# A socket timeout must fit CPython's internal nanosecond clock (about 9.2e9 s), or
-# urlopen fails with a raw OverflowError; inf and 1e300 would otherwise pass `> 0`.
-# Anything near that is effectively "no timeout", which None already expresses.
 _MAX_TIMEOUT = 1e9
 
 
 def _validate_timeout(owner: str, timeout: object) -> None:
     """Raises ValueError unless `timeout` is None or a usable number of seconds."""
-    # bool is an int subclass but never meant as a duration; NaN fails the chained
-    # comparison.
     if timeout is not None and (
         isinstance(timeout, bool)
         or not isinstance(timeout, int | float)
@@ -259,8 +246,6 @@ def _merge_config(
     return timeout, headers
 
 
-# Mirror http.client's own checks, which would otherwise fail inside urlopen with
-# the offending value (often an API key) quoted in the message.
 _LEGAL_HEADER_NAME = re.compile(r"[^:\s][^:\r\n]*", re.ASCII)
 _ILLEGAL_HEADER_VALUE = re.compile(r"\n(?![ \t])|\r(?![ \t\n])")
 
@@ -268,8 +253,6 @@ _ILLEGAL_HEADER_VALUE = re.compile(r"\n(?![ \t])|\r(?![ \t\n])")
 def _validate_headers(vendor: str, headers: dict[str, Any]) -> None:
     """Raises ValueError naming the bad header's key, never its value."""
     for key, value in headers.items():
-        # Surrounding whitespace isn't part of a header name (RFC 9110 tokens),
-        # and would let "x-api-key " dodge the case-insensitive auth-header match.
         if (
             not isinstance(key, str)
             or not key.isascii()
@@ -286,8 +269,6 @@ def _validate_headers(vendor: str, headers: dict[str, Any]) -> None:
                 f"{vendor} request header {key!r} must be a string, "
                 f"got {type(value).__name__}"
             )
-        # A test rather than catching UnicodeEncodeError, whose context would
-        # carry the value along with the ValueError raised here.
         if any(ord(c) > 0xFF for c in value):
             raise ValueError(
                 f"{vendor} request header {key!r} contains a non-latin-1 character"

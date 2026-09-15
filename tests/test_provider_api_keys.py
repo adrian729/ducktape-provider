@@ -50,8 +50,6 @@ def no_request(*_args: object, **_kwargs: object) -> NoReturn:
     raise AssertionError("request sent")
 
 
-# Module-level so no test frame holds it in a local, which the frame scan would
-# (rightly) report.
 SENTINEL = "sk-SENTINEL-4f1c9a"
 
 _CLEARED_ENV = {
@@ -257,8 +255,6 @@ class KeyedAdapterTests(unittest.TestCase):
 
     def test_source_exceptions_propagate_unwrapped(self):
         for case in KEYED:
-            # An OSError, like a real vault client's, so a source called inside
-            # models()' probe-error handler would be swallowed and fail this.
             error = ConnectionError("vault down")
             adapter = case.cls(api_key=Mock(side_effect=error))
             calls = {**request_calls(case, adapter), "models": adapter.models}
@@ -512,8 +508,6 @@ class ProviderApiKeysTests(unittest.TestCase):
         self.assertIsNotNone(copied._key_source)
 
     def test_invalid_api_keys_raise_without_keys_in_the_message(self):
-        # Lambdas building each call inline, so SENTINEL never sits in a local of
-        # a frame the scan walks.
         failures: dict[str, tuple[type[Exception], Callable[[], object]]] = {
             "unknown name": (ValueError, lambda: Provider(api_keys={"nope": SENTINEL})),
             "non-str name": (ValueError, lambda: Provider(api_keys={42: SENTINEL})),  # ty: ignore[invalid-argument-type]
@@ -573,11 +567,9 @@ class ProviderApiKeysTests(unittest.TestCase):
                 assert_no_sentinel_in_frames(self, exc)
 
     def test_unknown_names_are_not_echoed_or_kept_in_frames(self):
-        # An inverted mapping puts the key where the provider name belongs.
         failures: dict[str, Callable[[], object]] = {
             "inverted mapping": lambda: Provider(api_keys={SENTINEL: "claude"}),
             "name with newline": lambda: Provider(api_keys={f"{SENTINEL}\n": "k"}),
-            # Fails after the names are wrapped, before they are looked at.
             "later check fails": lambda: Provider(
                 api_keys={SENTINEL: "claude"},
                 timeout=-1,
@@ -675,7 +667,6 @@ class FrameLocalsTests(unittest.TestCase):
 
     def test_request_failures(self):
         for case in KEYED:
-            # Only read by the adapter without a source below.
             os.environ[case.env_var] = f"{SENTINEL}\n"
             failures: dict[str, tuple[type[BaseException], Any, dict[str, Any]]] = {
                 "bad config JSON": (TypeError, SENTINEL, {"x": object()}),
@@ -730,8 +721,6 @@ class FrameLocalsTests(unittest.TestCase):
                     provider.chat, model, MESSAGES, provider=name
                 ),
             }
-            # Neither mapped nor a probe error, e.g. a worker timeout's SystemExit
-            # raised by a signal handler while the request is being sent.
             for error in (SystemExit(1), Interrupted()):
                 with (
                     patch.object(adapter, case.chat_url_attr, "http://127.0.0.1:1/v1"),
@@ -778,7 +767,6 @@ class FrameLocalsTests(unittest.TestCase):
                         cause = exc.__cause__
                         assert cause is not None
                         self.assertIsNone(cause.__traceback__)
-                        # The traceback text survives as a note for debugging.
                         self.assertIn(
                             "do_open", "".join(getattr(cause, "__notes__", []))
                         )

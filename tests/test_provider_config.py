@@ -104,7 +104,6 @@ class TestProviderConfigResolution(unittest.TestCase):
         self.assertEqual(
             resolved["headers"], {"X-Global": "1", "X-Prov": "2", "X-Shared": "prov"}
         )
-        # The caller's dicts are left untouched for reuse across calls.
         self.assertEqual(config["headers"], {"X-Global": "1", "X-Shared": "call"})
 
     def test_accepts_any_mapping_and_copies_headers(self):
@@ -126,7 +125,6 @@ class TestProviderConfigResolution(unittest.TestCase):
             "headers": {"X-Global": "1"},
             "providers": {"ollama-local": {"headers": {"X-Prov": "2"}}},
         }
-        # Port 9 plus a patched urlopen: nothing can reach a real Ollama daemon.
         with (
             patch.dict(os.environ, {"OLLAMA_HOST": "http://127.0.0.1:9"}),
             patch("urllib.request.urlopen", capture),

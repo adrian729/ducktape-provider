@@ -785,7 +785,6 @@ class OpenAIStreamContentTests(unittest.TestCase):
                     "content_index": 0,
                     "delta": "one",
                 },
-                # An empty part gets no deltas but still occupies a final block.
                 part_added(1, "output_text"),
                 part_added(2, "refusal"),
                 {
@@ -831,7 +830,6 @@ class OpenAIStreamContentTests(unittest.TestCase):
         )
         content = final_response(events)["content"]
         self.assertEqual(content, self.adapter._deserialize(completed, 0.0)["content"])
-        # every streamed index addresses the final block its deltas built
         for event in events:
             if event["type"] == "text_delta":
                 self.assertEqual(
@@ -1081,7 +1079,6 @@ class OpenAILatencyTests(unittest.TestCase):
         with patch("time.monotonic", side_effect=clock):
             events = list(self.adapter.stream_chat("gpt-x", MESSAGES))
         final = final_response(events)
-        # first text delta is the 2nd SSE event, response.completed the 7th
         self.assertEqual(final["ttft_ms"], 500.0)
         self.assertEqual(final["latency_ms"], 1750.0)
 

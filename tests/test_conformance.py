@@ -265,7 +265,6 @@ class StreamingChatTests(_ConformanceBase):
         self._assert_stream(events)
 
 
-# The class, and a factory for an instance that can send requests.
 ADAPTERS = {
     "claude": (ClaudeAdapter, lambda: ClaudeAdapter(api_key="test")),
     "openai": (OpenAIAdapter, lambda: OpenAIAdapter(api_key="test")),
@@ -286,7 +285,6 @@ class RequestValidationTests(unittest.TestCase):
     """Client-side mistakes surface as ValueError before any request, on every
     backend, and never quote a header value (which may be a credential)."""
 
-    # Raising rather than answering: a mock body would make the read loop forever.
     @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
     def test_invalid_config_raises_value_error_not_api_error(self, mock_urlopen):
         configs = {
@@ -296,20 +294,16 @@ class RequestValidationTests(unittest.TestCase):
             "bool timeout": {"timeout": True},
             "infinite timeout": {"timeout": float("inf")},
             "NaN timeout": {"timeout": float("nan")},
-            # Finite, but overflows the socket layer's clock inside urlopen.
             "huge timeout": {"timeout": 1e300},
             "huge int timeout": {"timeout": 10**400},
             "newline in header": {"headers": {"x-token": "SECRET\ninjected: 1"}},
             "trailing CRLF": {"headers": {"x-token": "SECRET\r\n"}},
             "non-latin-1 header": {"headers": {"x-token": "SECRET\u2603"}},
             "bad header name": {"headers": {"x token:": "SECRET"}},
-            # Would slip past the case-insensitive check for a config auth header.
             "header name with trailing space": {"headers": {"x-api-key ": "SECRET"}},
             "leading tab in header name": {"headers": {"\tAuthorization": "SECRET"}},
-            # Allowed by the header-name pattern, so only the strip check rejects.
             "trailing tab in header name": {"headers": {"x-token\t": "SECRET"}},
             "trailing space in header name": {"headers": {"x-token ": "SECRET"}},
-            # A key in the body would be sent to the vendor as a request field.
             **{
                 f"{key} in config": {key: "SECRET"}
                 for key in (
@@ -378,8 +372,6 @@ class ConsumerExceptionTests(unittest.TestCase):
                     patch("urllib.request.urlopen") as mock_urlopen,
                 ):
                     mock_urlopen.return_value = FakeStreamResponse(lines)
-                    # Concrete adapters return generators; the Adapter ABC only
-                    # promises an Iterator, which has no throw().
                     stream = cast(
                         Generator[StreamEvent],
                         adapter.stream_chat("m", TEXT_MESSAGES),
