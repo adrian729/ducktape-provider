@@ -1,11 +1,13 @@
 """Tests for API keys passed without env vars: `Provider(api_keys=...)`, the adapters'
-`api_key=`, and keeping a key out of reprs, pickles and traceback frame locals.
+`api_key=`, and keeping a key or configured header out of reprs, pickles and
+traceback frame locals.
 
 urlopen is mocked, except for connection errors against a closed port on 127.0.0.1;
 nothing reaches a vendor or a local Ollama daemon.
 """
 
 import asyncio
+import contextlib
 import copy
 import functools
 import http.client
@@ -13,6 +15,7 @@ import json
 import os
 import pickle
 import socket
+import types
 import unittest
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -20,14 +23,22 @@ from dataclasses import dataclass
 from typing import Any, NoReturn
 from unittest.mock import Mock, patch
 
-from http_test_utils import FakeStreamResponse, buffered_response, sse_lines
+from http_test_utils import (
+    FakeStreamResponse,
+    buffered_response,
+    ndjson_lines,
+    sse_lines,
+)
 from test_provider_discovery import ENTRY_POINTS, FakeEntryPoint
 
 from ducktape_provider import (
+    Adapter,
     APIError,
     AuthError,
     ClaudeAdapter,
+    MalformedResponseError,
     Message,
+    ModelInfo,
     OllamaLocalAdapter,
     OpenAIAdapter,
     Provider,
@@ -132,6 +143,91 @@ def fake_urlopen(case: Keyed) -> Callable[..., Any]:
         return buffered_response(json.dumps(case.chat_body).encode())
 
     return urlopen
+
+
+OLLAMA_MODEL = "llama3"
+OLLAMA_BODY = {"message": {"content": "hi"}, "done": True, "done_reason": "stop"}
+
+
+def ollama_urlopen(req: Any, timeout: float | None = None) -> Any:
+    """A urlopen stand-in answering Ollama's version, tags, chat and stream requests."""
+    if req.full_url.endswith("/api/version"):
+        return buffered_response(b'{"version": "0.0.0"}')
+    if req.full_url.endswith("/api/tags"):
+        return buffered_response(
+            json.dumps({"models": [{"name": OLLAMA_MODEL}]}).encode()
+        )
+    if json.loads(req.data)["stream"]:
+        return FakeStreamResponse(ndjson_lines(OLLAMA_BODY))
+    return buffered_response(json.dumps(OLLAMA_BODY).encode())
+
+
+def secret_headers(name: str, value: object = SENTINEL) -> dict[str, Any]:
+    """A Provider config giving provider `name` one configured header."""
+    return {"providers": {name: {"headers": {"X-Proxy-Token": value}}}}
+
+
+def secured_providers() -> list[tuple[str, Provider, str, str]]:
+    """(label, provider, provider name, model) for each way a provider can hold
+    SENTINEL: a keyed adapter's own `api_key=`, or `api_keys` plus a configured
+    header function, and a configured str header for Ollama."""
+    setups: list[tuple[str, Provider, str, str]] = []
+    for case in KEYED:
+        setups.append(
+            (
+                f"{case.name} api_key=",
+                Provider(adapters={case.name: case.cls(api_key=SENTINEL)}),
+                case.name,
+                case.model,
+            )
+        )
+        setups.append(
+            (
+                f"{case.name} api_keys and headers",
+                Provider(
+                    adapters={case.name: case.cls()},
+                    api_keys={case.name: SENTINEL},
+                    config=secret_headers(case.name, lambda: SENTINEL),
+                ),
+                case.name,
+                case.model,
+            )
+        )
+    setups.append(
+        (
+            "ollama-local headers",
+            Provider(
+                adapters={"ollama-local": OllamaLocalAdapter()},
+                config=secret_headers("ollama-local"),
+            ),
+            "ollama-local",
+            OLLAMA_MODEL,
+        )
+    )
+    return setups
+
+
+@contextmanager
+def pointed_at(provider: Provider, name: str, url: str) -> Iterator[None]:
+    """Sends every request from `provider`'s `name` adapter to `url` instead."""
+    adapter = provider._adapters[name]
+    if isinstance(adapter, OllamaLocalAdapter):
+        with patch.dict(os.environ, {"OLLAMA_HOST": url}):
+            yield
+        return
+    attrs = [
+        attr
+        for attr in ("_MESSAGES_URL", "_RESPONSES_URL", "_MODELS_URL")
+        if hasattr(adapter, attr)
+    ]
+    with contextlib.ExitStack() as stack:
+        for attr in attrs:
+            stack.enter_context(patch.object(adapter, attr, url))
+        yield
+
+
+def drain(adapter: Adapter, model: str) -> list[Any]:
+    return list(adapter.stream_chat(model, MESSAGES))
 
 
 def request_calls(case: Keyed, adapter: Any) -> dict[str, Callable[[], object]]:
@@ -422,6 +518,52 @@ class KeyedAdapterTests(unittest.TestCase):
                         else:
                             self.assertEqual(result, set())
 
+        ollama_calls: dict[str, Callable[[Adapter], object]] = {
+            "chat": lambda a: a.chat(OLLAMA_MODEL, MESSAGES),
+            "stream_chat": lambda a: drain(a, OLLAMA_MODEL),
+            "models": lambda a: a.models(),
+            "is_available": lambda a: a.is_available(),
+        }
+
+        def shifting_ollama(*urls: str) -> Adapter:
+            """A configured Ollama adapter whose base URL is each of `urls` in turn."""
+            reads = iter(urls)
+            cls = type(
+                "Shifting",
+                (OllamaLocalAdapter,),
+                {"_base_url": lambda self: next(reads, urls[-1])},
+            )
+            provider = Provider(
+                adapters={"ollama-local": cls()},
+                config=secret_headers("ollama-local", "t"),
+            )
+            return provider._adapters["ollama-local"]
+
+        for label, call in ollama_calls.items():
+            with self.subTest("ollama-local", call=label, order="checked https first"):
+                adapter = shifting_ollama(https, http)
+                with patch(
+                    "urllib.request.urlopen", side_effect=ollama_urlopen
+                ) as mock_urlopen:
+                    call(adapter)
+                [req] = [c.args[0] for c in mock_urlopen.call_args_list]
+                self.assertTrue(req.full_url.startswith(https), req.full_url)
+                self.assertEqual(req.get_header("X-proxy-token"), "t")
+            with (
+                self.subTest("ollama-local", call=label, order="http first"),
+                patch("urllib.request.urlopen", side_effect=no_request),
+                self.assertLogs("ducktape_provider", "WARNING")
+                if label in ("models", "is_available")
+                else contextlib.nullcontext(),
+            ):
+                adapter = shifting_ollama(http, https)
+                try:
+                    result = call(adapter)
+                except ValueError:
+                    self.assertIn(label, ("chat", "stream_chat"))
+                else:
+                    self.assertIn(result, (set(), False))
+
 
 class ClearTracebacksTests(unittest.TestCase):
     def test_non_list_notes_do_not_stop_clearing(self):
@@ -499,13 +641,16 @@ class ProviderApiKeysTests(unittest.TestCase):
         self.assertEqual(self._sent_key(provider, "openai", openai), "k2")
 
     def test_passed_adapter_is_left_unchanged(self):
+        stale: dict[str, ModelInfo] = {
+            "stale": {"context_window": None, "max_output_tokens": None}
+        }
         original = ClaudeAdapter()
-        original._models_cache = {"stale"}
+        original._models_cache = dict(stale)
         provider = Provider(adapters={"claude": original}, api_keys={"claude": "k"})
         copied = provider._adapters["claude"]
         self.assertIsNot(copied, original)
         self.assertIsNone(original._key_source)
-        self.assertEqual(original._models_cache, {"stale"})
+        self.assertEqual(original._models_cache, stale)
         assert isinstance(copied, ClaudeAdapter)
         self.assertIsNone(copied._models_cache)
         self.assertIsNotNone(copied._key_source)
@@ -629,9 +774,74 @@ def raised(
     test.fail(f"{error.__name__} not raised")
 
 
+def _cell_contents(cell: types.CellType) -> object:
+    """A closure cell's value, or None while the variable is still unbound."""
+    try:
+        return cell.cell_contents
+    except ValueError:
+        return None
+
+
+def _sentinel_in_value(value: object, seen: set[int], depth: int) -> bool:
+    """A bounded, cycle-safe walk of `value` for SENTINEL.
+
+    Reaches strings/bytes directly, dict keys and values, list/tuple/set/frozenset
+    elements, `functools.partial` parts, a function's closure cells and defaults, a
+    bound method's `__self__` and function, a suspended generator's, coroutine's or
+    async generator's frame locals, and plain objects via their `__dict__`. Never
+    `__slots__` (`_Secret`'s are deliberately opaque to this kind of introspection,
+    same as to `repr`), nor a function's `__globals__`, which hold SENTINEL itself.
+    """
+    if depth > 8:
+        return False
+    if isinstance(value, str):
+        return SENTINEL in value
+    if isinstance(value, bytes | bytearray):
+        return SENTINEL.encode() in value
+    oid = id(value)
+    if oid in seen:
+        return False
+    seen.add(oid)
+
+    def found(*children: object) -> bool:
+        return any(_sentinel_in_value(child, seen, depth + 1) for child in children)
+
+    if isinstance(value, dict):
+        return any(found(k, v) for k, v in value.items())
+    if isinstance(value, list | tuple | set | frozenset):
+        return found(*value)
+    if isinstance(value, functools.partial):
+        return found(value.func, value.args, value.keywords)
+    if isinstance(value, types.MethodType):
+        return found(value.__self__, value.__func__)
+    if isinstance(value, types.FunctionType):
+        return found(
+            *(_cell_contents(cell) for cell in value.__closure__ or ()),
+            value.__defaults__,
+            value.__kwdefaults__,
+        )
+    if isinstance(value, types.GeneratorType):
+        frame = value.gi_frame
+    elif isinstance(value, types.CoroutineType):
+        frame = value.cr_frame
+    elif isinstance(value, types.AsyncGeneratorType):
+        frame = value.ag_frame
+    else:
+        frame = None
+    if frame is not None:
+        return found(dict(frame.f_locals))
+    obj_dict = getattr(value, "__dict__", None)
+    if obj_dict:
+        return found(obj_dict)
+    return False
+
+
 def assert_no_sentinel_in_frames(test: unittest.TestCase, exc: BaseException) -> None:
     """Fails if any frame local on `exc`'s traceback, or any chained exception's,
-    has a repr containing SENTINEL."""
+    has a repr containing SENTINEL, or holds it more deeply — e.g. a
+    `urllib.request.Request` whose `unredirected_hdrs` dict has the raw key, which
+    `Request.__repr__` doesn't show. See `_sentinel_in_value` for the scan's reach.
+    """
     seen: set[int] = set()
     pending: list[BaseException | None] = [exc]
     while pending:
@@ -643,12 +853,12 @@ def assert_no_sentinel_in_frames(test: unittest.TestCase, exc: BaseException) ->
         while tb is not None:
             frame = tb.tb_frame
             for name, value in frame.f_locals.items():
-                test.assertNotIn(
-                    SENTINEL,
-                    repr(value),
+                label = (
                     f"local {name!r} of {frame.f_code.co_qualname} "
-                    f"on {type(current).__name__}",
+                    f"on {type(current).__name__}"
                 )
+                test.assertNotIn(SENTINEL, repr(value), label)
+                test.assertFalse(_sentinel_in_value(value, set(), 0), label)
             tb = tb.tb_next
         pending += (current.__cause__, current.__context__)
 
@@ -706,43 +916,64 @@ class FrameLocalsTests(unittest.TestCase):
                 assert_no_sentinel_in_frames(self, exc)
             del os.environ[case.env_var]
 
+    def test_malformed_responses(self):
+        for case in KEYED:
+            adapter = case.cls(api_key=SENTINEL)
+            calls: dict[str, tuple[Callable[[], object], Any]] = {
+                "chat": (
+                    functools.partial(adapter.chat, case.model, MESSAGES),
+                    lambda: buffered_response(b"not json"),
+                ),
+                "stream_chat": (
+                    lambda adapter=adapter, model=case.model: list(
+                        adapter.stream_chat(model, MESSAGES)
+                    ),
+                    lambda: FakeStreamResponse([b"data: not json\n", b"\n"]),
+                ),
+            }
+            for call_name, (call, make_response) in calls.items():
+                with (
+                    self.subTest(case.name, call=call_name),
+                    patch(
+                        "urllib.request.urlopen",
+                        side_effect=lambda *a, r=make_response, **k: r(),
+                    ),
+                ):
+                    exc = raised(self, MalformedResponseError, call)
+                    assert_no_sentinel_in_frames(self, exc)
+
     def test_interruptions_mid_request(self):
         class Interrupted(Exception):
             pass
 
-        for case in KEYED:
-            adapter = case.cls(api_key=SENTINEL)
-            provider = Provider(adapters={case.name: adapter})
-            model, name = case.model, case.name
+        for setup, provider, name, model in secured_providers():
+            adapter = provider._adapters[name]
             calls: dict[str, Callable[[], object]] = {
                 "chat": functools.partial(adapter.chat, model, MESSAGES),
-                "stream_chat": lambda adapter=adapter, model=model: list(
-                    adapter.stream_chat(model, MESSAGES)
-                ),
+                "stream_chat": functools.partial(drain, adapter, model),
                 "models": adapter.models,
                 "Provider.chat": functools.partial(
                     provider.chat, model, MESSAGES, provider=name
                 ),
             }
+            if isinstance(adapter, OllamaLocalAdapter):
+                calls["is_available"] = adapter.is_available
             for error in (SystemExit(1), Interrupted()):
                 with (
-                    patch.object(adapter, case.chat_url_attr, "http://127.0.0.1:1/v1"),
-                    patch.object(adapter, "_MODELS_URL", "http://127.0.0.1:1/v1"),
+                    pointed_at(provider, name, "http://127.0.0.1:1/v1"),
                     patch.object(
                         http.client.HTTPConnection, "request", side_effect=error
                     ),
                 ):
                     for label, call in calls.items():
-                        with self.subTest(case.name, call=label, error=type(error)):
+                        with self.subTest(setup, call=label, error=type(error)):
                             exc = raised(self, type(error), call)
                             self.assertIs(exc, error)
                             assert_no_sentinel_in_frames(self, exc)
 
     def test_connection_errors(self):
-        for case in KEYED:
-            adapter = case.cls(api_key=SENTINEL)
-            provider = Provider(adapters={case.name: adapter})
-            model, name = case.model, case.name
+        for setup, provider, name, model in secured_providers():
+            adapter = provider._adapters[name]
 
             async def consume_stream(
                 provider: Provider = provider, model: str = model, name: str = name
@@ -754,17 +985,17 @@ class FrameLocalsTests(unittest.TestCase):
 
             calls: dict[str, Callable[[], object]] = {
                 "chat": functools.partial(adapter.chat, model, MESSAGES),
-                "stream_chat": lambda adapter=adapter, model=model: list(
-                    adapter.stream_chat(model, MESSAGES)
-                ),
+                "stream_chat": functools.partial(drain, adapter, model),
                 "async_chat": lambda provider=provider, model=model, name=name: (
                     asyncio.run(provider.async_chat(model, MESSAGES, provider=name))
                 ),
-                "async_stream_chat": lambda: asyncio.run(consume_stream()),
+                "async_stream_chat": lambda consume_stream=consume_stream: asyncio.run(
+                    consume_stream()
+                ),
             }
-            with patch.object(adapter, case.chat_url_attr, closed_loopback_url()):
+            with pointed_at(provider, name, closed_loopback_url()):
                 for label, call in calls.items():
-                    with self.subTest(case.name, call=label):
+                    with self.subTest(setup, call=label):
                         exc = raised(self, APIError, call)
                         assert_no_sentinel_in_frames(self, exc)
                         assert isinstance(exc, APIError)

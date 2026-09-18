@@ -17,6 +17,7 @@ from ducktape_provider.errors import APIError
 from ducktape_provider.provider import _STREAM_BUFFER_SIZE, Provider
 from ducktape_provider.types import (
     Message,
+    ModelInfo,
     Response,
     StreamEvent,
     ToolDef,
@@ -60,17 +61,22 @@ class FakeAdapter(Adapter):
         stream: Callable[[], Iterator[StreamEvent]] = lambda: iter(FIXED_STREAM),
         is_available: Callable[[], bool] = lambda: True,
         models: Callable[[], set[str]] = lambda: {"fake-model"},
+        model_info: Callable[[], ModelInfo | None] = lambda: None,
     ):
         self._chat = chat
         self._stream = stream
         self._is_available = is_available
         self._models = models
+        self._model_info = model_info
 
     def is_available(self) -> bool:
         return self._is_available()
 
     def models(self) -> set[str]:
         return self._models()
+
+    def model_info(self, model: str) -> ModelInfo | None:
+        return self._model_info()
 
     def chat(
         self,
@@ -200,6 +206,36 @@ class TestProviderAsyncChat(unittest.IsolatedAsyncioTestCase):
         provider = Provider(adapters={"failing": failing})
         with self.assertRaises(APIError):
             await provider.async_chat("fake-model", MESSAGES, provider="failing")
+
+    async def test_async_model_info_matches_sync_model_info(self):
+        info: ModelInfo = {"context_window": 100, "max_output_tokens": 10}
+        provider = Provider(adapters={"fake": FakeAdapter(model_info=lambda: info)})
+        expected = provider.model_info("fake-model", provider="fake")
+        actual = await provider.async_model_info("fake-model", provider="fake")
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual, info)
+
+    async def test_async_model_info_does_not_block_event_loop(self):
+        def slow_model_info() -> ModelInfo | None:
+            time.sleep(0.2)
+            return None
+
+        provider = Provider(adapters={"slow": FakeAdapter(model_info=slow_model_info)})
+        with LoopTicker() as ticker:
+            await provider.async_model_info("fake-model", provider="slow")
+        self.assertGreater(ticker.count, 5)
+
+    async def test_async_model_info_propagates_error(self):
+        failing = FakeAdapter(model_info=lambda: raise_(RuntimeError("boom")))
+        provider = Provider(adapters={"failing": failing})
+        with self.assertRaises(RuntimeError):
+            await provider.async_model_info("fake-model", provider="failing")
+
+    async def test_async_model_info_resolves_auto_match_off_the_loop(self):
+        provider = Provider(adapters={"fake": FakeAdapter()})
+        with self.assertLogs("ducktape_provider.provider", "WARNING"):
+            result = await provider.async_model_info("fake-model")
+        self.assertIsNone(result)
 
     async def test_async_chat_propagates_contextvars(self):
         request_id = contextvars.ContextVar("request_id", default="unset")
@@ -525,6 +561,126 @@ class TestProviderAsyncStream(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await pending
         self.assertEqual(thread_errors, [])
+
+
+class CancellableFakeStream:
+    """Stands in for a built-in adapter's stream: after its first event it blocks the
+    reader thread, and only `cancel()` ends that block — the same shape as a real
+    stream parked in a socket read that a force-close has to break out of."""
+
+    def __init__(self) -> None:
+        self.cancelled = threading.Event()
+        self.closed = threading.Event()
+        self.blocked = threading.Event()
+        self._sent_first = False
+
+    def __iter__(self) -> Self:
+        return self
+
+    def __next__(self) -> StreamEvent:
+        if not self._sent_first:
+            self._sent_first = True
+            return text_event("first")
+        self.blocked.set()
+        if not self.cancelled.wait(WAIT_SECONDS):
+            raise AssertionError("stream was never cancelled")
+        raise StopIteration
+
+    def close(self) -> None:
+        self.closed.set()
+
+    def cancel(self) -> None:
+        self.cancelled.set()
+
+
+class TestStreamCancelPropagation(unittest.IsolatedAsyncioTestCase):
+    """A consumer that stops early must reach the stream's own `cancel()`, not just
+    stop reading: without it the reader thread stays parked in its current read."""
+
+    def _provider(self, stream: CancellableFakeStream) -> Provider:
+        self.addCleanup(stream.cancel)
+        return Provider(adapters={"fake": FakeAdapter(stream=lambda: stream)})
+
+    async def test_task_cancellation_cancels_the_underlying_stream(self):
+        stream = CancellableFakeStream()
+        provider = self._provider(stream)
+        received: list[StreamEvent] = []
+        got_first = asyncio.Event()
+
+        async def consume() -> None:
+            async for event in provider.async_stream_chat(
+                "fake-model", MESSAGES, provider="fake"
+            ):
+                received.append(event)
+                got_first.set()
+
+        task = asyncio.ensure_future(consume())
+        await asyncio.wait_for(got_first.wait(), WAIT_SECONDS)
+        self.assertTrue(await wait_for_event(stream.blocked))
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(stream.cancelled.is_set())
+        self.assertTrue(await wait_for_event(stream.closed))
+        self.assertEqual(received, [text_event("first")])
+
+    async def test_breaking_out_of_the_loop_cancels_the_underlying_stream(self):
+        stream = CancellableFakeStream()
+        provider = self._provider(stream)
+        async with contextlib.aclosing(
+            provider.async_stream_chat("fake-model", MESSAGES, provider="fake")
+        ) as events:
+            async for _event in events:
+                self.assertTrue(await wait_for_event(stream.blocked))
+                break
+        self.assertTrue(stream.cancelled.is_set())
+        self.assertTrue(await wait_for_event(stream.closed))
+
+    async def test_cancel_after_a_stream_completes_normally_is_harmless(self):
+        cancelled = threading.Event()
+
+        class FinishingStream:
+            """Completes on its own, then still gets the `finally`'s cancel()."""
+
+            def __init__(self) -> None:
+                self._events = iter(FIXED_STREAM)
+
+            def __iter__(self) -> Self:
+                return self
+
+            def __next__(self) -> StreamEvent:
+                return next(self._events)
+
+            def cancel(self) -> None:
+                cancelled.set()
+
+        provider = Provider(adapters={"fake": FakeAdapter(stream=FinishingStream)})
+        received = [
+            event
+            async for event in provider.async_stream_chat(
+                "fake-model", MESSAGES, provider="fake"
+            )
+        ]
+        self.assertEqual(received, FIXED_STREAM)
+        self.assertTrue(cancelled.is_set())
+
+    async def test_a_stream_without_cancel_is_left_alone(self):
+        released = threading.Event()
+        self.addCleanup(released.set)
+        blocked = threading.Event()
+
+        def stream() -> Iterator[StreamEvent]:
+            yield text_event("first")
+            blocked.set()
+            released.wait(WAIT_SECONDS)
+
+        provider = Provider(adapters={"fake": FakeAdapter(stream=stream)})
+        async with contextlib.aclosing(
+            provider.async_stream_chat("fake-model", MESSAGES, provider="fake")
+        ) as events:
+            async for _event in events:
+                self.assertTrue(await wait_for_event(blocked))
+                break
 
 
 class TestProviderAsyncExecutorAndDiscovery(unittest.IsolatedAsyncioTestCase):

@@ -4,15 +4,30 @@ import http.client
 import json
 import logging
 import os
+import sys
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
 from typing import Any
 
 from .. import errors
-from ..adapter import Adapter, _merge_config, _new_request, _validate_headers
+from ..adapter import (
+    Adapter,
+    _BadConfiguredHeader,
+    _key_url_allowed,
+    _merge_config,
+    _new_request,
+    _resolve_headers,
+    _Secret,
+    _validate_headers,
+    _warn_headers_refused,
+)
 from ..streaming import (
     _PROBE_ERRORS,
+    _CancellableStream,
+    _clear_tracebacks,
+    _ErrorHookedStream,
     _iter_ndjson,
     _loads_tool_input,
     _read_json,
@@ -23,10 +38,13 @@ from ..streaming import (
 )
 from ..types import (
     Block,
+    ImageBlock,
     Message,
+    ModelInfo,
     Response,
     StopReason,
     StreamEvent,
+    TextBlock,
     ToolDef,
     ToolUseBlock,
 )
@@ -53,24 +71,34 @@ def _stream_error_status(message: str) -> int:
 def _tool_use_block(index: int, call: dict[str, Any]) -> ToolUseBlock:
     fn = call.get("function") or {}
     args = fn.get("arguments")
+    truncated = False
     if isinstance(args, str):
-        args = _loads_tool_input(args)
+        args, truncated = _loads_tool_input(args)
     elif not isinstance(args, dict):
         args = {}
-    return {
+    block: ToolUseBlock = {
         "type": "tool_use",
         "id": f"call_{index}",
         "name": fn.get("name", ""),
         "input": args,
     }
+    if truncated:
+        block["truncated"] = True
+    return block
 
 
 class OllamaLocalAdapter(Adapter):
     _CHAT_TIMEOUT = 300
     _MODELS_TTL = 60
     _RESERVED_CONFIG = frozenset({"model", "messages", "stream"})
+    _provider_headers: tuple[_Secret, ...] = ()
+    _provider_name: str | None = None
+    _warned_transport = False
 
     def __init__(self):
+        """A subclass overriding `_build_request`, `models()` or
+        `is_available()` must send any configured Provider headers
+        (`self._provider_headers`) itself."""
         self._models_cache: set[str] | None = None
         self._cache_time = 0.0
 
@@ -78,27 +106,57 @@ class OllamaLocalAdapter(Adapter):
         host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
         if not host.startswith(("http://", "https://")):
             host = f"http://{host}"
-        return host
+        return host.rstrip("/")
 
     def is_available(self) -> bool:
+        url = f"{self._base_url()}/api/version"
+        if self._provider_headers and not _key_url_allowed(url):
+            _warn_headers_refused(self, logger, "ollama-local")
+            return False
         try:
-            with urllib.request.urlopen(f"{self._base_url()}/api/version", timeout=0.5):
+            headers = _resolve_headers("ollama-local", url, self._provider_headers, ())
+        except _BadConfiguredHeader:
+            return False
+        stop = sys.exception()
+        try:
+            with urllib.request.urlopen(_new_request(url, resolved=headers), timeout=3):
                 return True
+        except urllib.error.HTTPError as e:
+            e.close()
+            return False
         except (OSError, ValueError, http.client.HTTPException):
             return False
+        except BaseException as e:
+            _clear_tracebacks(e, stop)
+            raise
 
     def models(self) -> set[str]:
         now = time.monotonic()
         if self._models_cache is not None and now - self._cache_time < self._MODELS_TTL:
             return set(self._models_cache)
+        url = f"{self._base_url()}/api/tags"
+        if self._provider_headers and not _key_url_allowed(url):
+            _warn_headers_refused(self, logger, "ollama-local")
+            return set()
+        try:
+            headers = _resolve_headers("ollama-local", url, self._provider_headers, ())
+        except _BadConfiguredHeader:
+            return set()
+        stop = sys.exception()
         try:
             with urllib.request.urlopen(
-                _new_request(f"{self._base_url()}/api/tags"), timeout=0.5
+                _new_request(url, resolved=headers), timeout=3
             ) as resp:
                 data = _read_json(resp, "ollama")
             model_ids = {m["name"] for m in data.get("models", [])}
+        except urllib.error.HTTPError as e:
+            e.close()
+            return set()
         except _PROBE_ERRORS:
             return set()
+        except BaseException as e:
+            _clear_tracebacks(e, stop)
+            raise
         self._models_cache = model_ids
         self._cache_time = now
         return set(model_ids)
@@ -106,6 +164,64 @@ class OllamaLocalAdapter(Adapter):
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
         if e.status == 404:
             self._models_cache = None
+
+    def model_info(self, model: str) -> ModelInfo | None:
+        """The context window from Ollama's own GGUF metadata for `model` — its
+        maximum *supported* context, not necessarily what a given request
+        actually gets: `num_ctx` can override the effective window smaller or
+        larger per call. No max-output-tokens equivalent exists in Ollama's
+        API, so that field is always `None`. Unlike `models()`, this isn't
+        cached: it's a per-model lookup, rare enough that a fresh probe each
+        time is fine.
+        """
+        url = f"{self._base_url()}/api/show"
+        if self._provider_headers and not _key_url_allowed(url):
+            _warn_headers_refused(self, logger, "ollama-local")
+            return None
+        try:
+            headers = _resolve_headers("ollama-local", url, self._provider_headers, ())
+        except _BadConfiguredHeader:
+            return None
+        stop = sys.exception()
+        try:
+            req = _new_request(
+                url,
+                json.dumps({"model": model}).encode(),
+                {"Content-Type": "application/json"},
+                resolved=headers,
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = _read_json(resp, "ollama")
+        except urllib.error.HTTPError as e:
+            e.close()
+            return None
+        except _PROBE_ERRORS:
+            return None
+        except BaseException as e:
+            _clear_tracebacks(e, stop)
+            raise
+        info = data.get("model_info") or {}
+        context_window = next(
+            (
+                v
+                for k, v in info.items()
+                if k.endswith(".context_length")
+                and isinstance(v, int)
+                and not isinstance(v, bool)
+            ),
+            None,
+        )
+        return {"context_window": context_window, "max_output_tokens": None}
+
+    def _tool_result_content(self, content: str | list[TextBlock | ImageBlock]) -> str:
+        if isinstance(content, str):
+            return content
+        if any(b["type"] == "image" for b in content):
+            raise errors.UnsupportedBlockError(
+                "ollama-local does not support image content in tool results — "
+                "convert to text or drop it before calling"
+            )
+        return "\n".join(b["text"] for b in content if b["type"] == "text")
 
     def _serialize(
         self, messages: list[Message], system: str | None
@@ -123,7 +239,7 @@ class OllamaLocalAdapter(Adapter):
             content_blocks = [b for b in message["content"] if b["type"] != "document"]
             results = [b for b in content_blocks if b["type"] == "tool_result"]
             for block in results:
-                content = block["content"]
+                content = self._tool_result_content(block["content"])
                 if block.get("is_error"):
                     content = f"ERROR: {content}"
                 serialized.append(
@@ -239,11 +355,16 @@ class OllamaLocalAdapter(Adapter):
             "ollama", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
         )
         _validate_headers("ollama", extra_headers)
+        url = f"{self._base_url()}/api/chat"
+        resolved = _resolve_headers(
+            "ollama-local", url, self._provider_headers, extra_headers
+        )
         req = _new_request(
-            f"{self._base_url()}/api/chat",
+            url,
             json.dumps(payload).encode(),
             {"Content-Type": "application/json"},
             extra_headers,
+            resolved,
         )
         return req, timeout
 
@@ -255,11 +376,13 @@ class OllamaLocalAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
-        req, timeout = self._build_request(
-            model, messages, system, tools, config, stream=False
-        )
         try:
-            data, latency_ms = _request_json("ollama", req, timeout)
+            data, latency_ms = _request_json(
+                "ollama",
+                *self._build_request(
+                    model, messages, system, tools, config, stream=False
+                ),
+            )
             with _shape_checked("ollama"):
                 return self._deserialize(data, latency_ms)
         except errors.APIError as e:
@@ -274,21 +397,18 @@ class OllamaLocalAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
-        req, timeout = self._build_request(
-            model, messages, system, tools, config, stream=True
-        )
-        try:
-            yield from _stream_request(
+        def start() -> _CancellableStream:
+            return _stream_request(
                 "ollama",
-                req,
-                timeout,
+                *self._build_request(
+                    model, messages, system, tools, config, stream=True
+                ),
                 frames=_iter_ndjson,
                 handler=self._stream_handler,
                 terminal="a done chunk",
             )
-        except errors.APIError as e:
-            self._invalidate_models_cache_on_404(e)
-            raise
+
+        return _ErrorHookedStream("ollama", start, self._invalidate_models_cache_on_404)
 
     def _stream_handler(
         self, timer: _StreamTimer

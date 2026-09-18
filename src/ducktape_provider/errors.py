@@ -63,6 +63,8 @@ def _classify(
         )
     if status is not None and status >= 500:
         return ServerError(message, status=status, body=body, retry_after=retry_after)
+    if status == 413:
+        return ContextOverflowError(message, status=status, body=body)
     if status in (400, None) and any(
         m in body.lower() for m in _CONTEXT_OVERFLOW_MARKERS
     ):

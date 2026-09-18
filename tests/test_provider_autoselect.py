@@ -16,8 +16,14 @@ from ducktape_provider.errors import (
     RequestTimeoutError,
     ServerError,
 )
-from ducktape_provider.provider import Provider
-from ducktape_provider.types import Message, Response, StreamEvent, ToolDef
+from ducktape_provider.provider import Provider, _EvictingStream
+from ducktape_provider.types import (
+    Message,
+    ModelInfo,
+    Response,
+    StreamEvent,
+    ToolDef,
+)
 
 FIXED_RESPONSE: Response = {
     "content": [{"type": "text", "text": "hi there"}],
@@ -63,13 +69,16 @@ class CountingFakeAdapter(Adapter):
         stream: Callable[[], Iterator[StreamEvent]] = lambda: iter(FIXED_STREAM),
         is_available: Callable[[], bool] = lambda: True,
         models: Callable[[], set[str]] = lambda: {"fake-model"},
+        model_info: Callable[[], ModelInfo | None] = lambda: None,
     ):
         self._chat = chat
         self._stream = stream
         self._is_available = is_available
         self._models = models
+        self._model_info = model_info
         self.is_available_calls = 0
         self.models_calls = 0
+        self.model_info_calls = 0
         self.chat_threads: list[threading.Thread] = []
         self.models_threads: list[threading.Thread] = []
 
@@ -81,6 +90,10 @@ class CountingFakeAdapter(Adapter):
         self.models_calls += 1
         self.models_threads.append(threading.current_thread())
         return self._models()
+
+    def model_info(self, model: str) -> ModelInfo | None:
+        self.model_info_calls += 1
+        return self._model_info()
 
     def chat(
         self,
@@ -113,6 +126,16 @@ class TestExplicitProviderUnchanged(unittest.TestCase):
         self.assertEqual(response, FIXED_RESPONSE)
         self.assertEqual(adapter.is_available_calls, 0)
         self.assertEqual(adapter.models_calls, 0)
+
+    def test_explicit_provider_short_circuits_model_info_resolution(self):
+        info: ModelInfo = {"context_window": 100, "max_output_tokens": None}
+        adapter = CountingFakeAdapter(model_info=lambda: info)
+        provider = Provider(adapters={"fake": adapter})
+        result = provider.model_info("fake-model", provider="fake")
+        self.assertEqual(result, info)
+        self.assertEqual(adapter.is_available_calls, 0)
+        self.assertEqual(adapter.models_calls, 0)
+        self.assertEqual(adapter.model_info_calls, 1)
 
 
 class TestAutoMatch(unittest.TestCase):
@@ -275,6 +298,42 @@ class TestAutoMatchCache(unittest.TestCase):
         provider.chat("fake-model", MESSAGES)
         self.assertEqual(adapter.is_available_calls, 1)
         self.assertEqual(adapter.models_calls, 1)
+
+    def test_model_info_reuses_the_auto_match_cache_chat_populates(self):
+        adapter = CountingFakeAdapter(models=lambda: {"fake-model"})
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"):
+            provider.chat("fake-model", MESSAGES)
+        self.assertEqual(adapter.is_available_calls, 1)
+        self.assertEqual(adapter.models_calls, 1)
+
+        with self.assertNoLogs(LOGGER, "WARNING"):
+            provider.model_info("fake-model")
+        self.assertEqual(adapter.is_available_calls, 1)
+        self.assertEqual(adapter.models_calls, 1)
+        self.assertEqual(adapter.model_info_calls, 1)
+
+    def test_model_info_populates_the_auto_match_cache_chat_then_reuses(self):
+        adapter = CountingFakeAdapter(models=lambda: {"fake-model"})
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"):
+            provider.model_info("fake-model")
+        self.assertEqual(adapter.is_available_calls, 1)
+        self.assertEqual(adapter.models_calls, 1)
+
+        with self.assertNoLogs(LOGGER, "WARNING"):
+            provider.chat("fake-model", MESSAGES)
+        self.assertEqual(adapter.is_available_calls, 1)
+        self.assertEqual(adapter.models_calls, 1)
+
+    def test_model_info_raising_propagates_unwrapped(self):
+        adapter = CountingFakeAdapter(
+            models=lambda: {"fake-model"},
+            model_info=lambda: raise_(RuntimeError("boom")),
+        )
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"), self.assertRaises(RuntimeError):
+            provider.model_info("fake-model")
 
     def test_warning_logged_only_on_first_call(self):
         adapter = CountingFakeAdapter(models=lambda: {"fake-model"})
@@ -496,6 +555,91 @@ class TestAutoMatchCache(unittest.TestCase):
                 ):
                     provider.chat("fake-model", MESSAGES)
                 self.assertIn("fake-model", provider._auto_match_cache)
+
+
+class RecordingStream:
+    """An inner stream that records the calls `_EvictingStream` should pass through."""
+
+    def __init__(self, events: list[StreamEvent]):
+        self._events = iter(events)
+        self.closed = False
+        self.cancelled = False
+
+    def __iter__(self) -> "RecordingStream":
+        return self
+
+    def __next__(self) -> StreamEvent:
+        return next(self._events)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+class EvictingStreamTests(unittest.TestCase):
+    """Wrapping an auto-matched stream must not hide what the consumer holds it for:
+    a generator wrapper couldn't carry `close`/`cancel` at all, which is the bug this
+    class exists to avoid."""
+
+    def _provider(self) -> Provider:
+        provider = Provider(
+            adapters={"fake": CountingFakeAdapter(models=lambda: {"fake-model"})}
+        )
+        provider._auto_match_cache["fake-model"] = "fake"
+        return provider
+
+    def test_close_and_cancel_forward_to_the_inner_stream(self):
+        inner = RecordingStream(list(FIXED_STREAM))
+        stream = _EvictingStream(inner, self._provider(), "fake-model", "fake")
+        stream.close()
+        stream.cancel()
+        self.assertTrue(inner.closed)
+        self.assertTrue(inner.cancelled)
+
+    def test_forwarding_degrades_when_the_inner_stream_lacks_the_methods(self):
+        inner = iter(FIXED_STREAM)
+        stream = _EvictingStream(inner, self._provider(), "fake-model", "fake")
+        stream.close()
+        # `cancel` isn't just a no-op here: it's genuinely absent, so
+        # `getattr(stream, "cancel", None)` — the README's documented
+        # feature check for third-party adapter streams — correctly reports
+        # "not supported" instead of a method that silently does nothing.
+        self.assertIsNone(getattr(stream, "cancel", None))
+        self.assertEqual(list(stream), FIXED_STREAM)
+
+    def test_cancel_degrades_on_a_plain_generator_stream(self):
+        def inner() -> Iterator[StreamEvent]:
+            yield from FIXED_STREAM
+
+        generator = inner()
+        stream = _EvictingStream(generator, self._provider(), "fake-model", "fake")
+        self.assertIsNone(getattr(stream, "cancel", None))
+        self.assertEqual(list(stream), FIXED_STREAM)
+
+    def test_exhausted_inner_stream_ends_the_loop_without_evicting(self):
+        provider = self._provider()
+        stream = _EvictingStream(
+            RecordingStream(list(FIXED_STREAM)), provider, "fake-model", "fake"
+        )
+        self.assertEqual(list(stream), FIXED_STREAM)
+        with self.assertRaises(StopIteration):
+            next(stream)
+        self.assertEqual(provider._auto_match_cache, {"fake-model": "fake"})
+
+    def test_cancel_through_stream_chat_reaches_the_adapter_stream(self):
+        inner = RecordingStream(list(FIXED_STREAM))
+        adapter = CountingFakeAdapter(
+            stream=lambda: inner, models=lambda: {"fake-model"}
+        )
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"):
+            stream = provider.stream_chat("fake-model", MESSAGES)
+        cancel = getattr(stream, "cancel", None)
+        self.assertIsNotNone(cancel)
+        cast(Callable[[], None], cancel)()
+        self.assertTrue(inner.cancelled)
 
 
 if __name__ == "__main__":

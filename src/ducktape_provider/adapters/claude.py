@@ -3,7 +3,9 @@
 import json
 import logging
 import os
+import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator
@@ -12,17 +14,21 @@ from typing import Any
 from .. import errors
 from ..adapter import (
     Adapter,
-    _current_key,
     _key_url_allowed,
     _merge_config,
     _new_request,
     _request_key,
+    _resolve_headers,
+    _resolve_probe_auth,
     _Secret,
     _validate_headers,
+    _warn_headers_refused,
 )
 from ..streaming import (
     _PROBE_ERRORS,
+    _CancellableStream,
     _clear_tracebacks,
+    _ErrorHookedStream,
     _iter_sse,
     _loads_tool_input,
     _read_json,
@@ -31,7 +37,19 @@ from ..streaming import (
     _stream_request,
     _StreamTimer,
 )
-from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef, Usage
+from ..types import (
+    Block,
+    DocumentBlock,
+    ImageBlock,
+    Message,
+    ModelInfo,
+    Response,
+    StopReason,
+    StreamEvent,
+    TextBlock,
+    ToolDef,
+    Usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +75,11 @@ class ClaudeAdapter(Adapter):
     _CHAT_TIMEOUT = 120
     _MAX_TOKENS = 4096
     _RESERVED_CONFIG = frozenset({"model", "messages", "stream"})
+    _AUTH_HEADER = "x-api-key"
     _key_source: _Secret | None = None
+    _provider_headers: tuple[_Secret, ...] = ()
+    _provider_name: str | None = None
+    _warned_transport = False
 
     def __init__(self, api_key: str | Callable[[], str | None] | None = None):
         """`api_key` is the key, or a function called for it on every request.
@@ -67,11 +89,12 @@ class ClaudeAdapter(Adapter):
         that env var is read per request. A function may be called from several
         threads at once: `Provider`'s async executor workers and stream reader
         threads, and concurrent `async_models()` probes. A subclass overriding
-        `_build_request` or `models()` must send the key itself.
+        `_build_request` or `models()` must send the key and any configured
+        Provider headers (`self._provider_headers`) itself.
         """
         source = None if api_key is None else _Secret(api_key)
         api_key = None
-        self._models_cache: set[str] | None = None
+        self._models_cache: dict[str, ModelInfo] | None = None
         self._cache_time = 0.0
         if source is not None:
             source.validate("claude")
@@ -80,6 +103,8 @@ class ClaudeAdapter(Adapter):
     def is_available(self) -> bool:
         if self._key_source is not None:
             return True
+        if any(h.sets({self._AUTH_HEADER}) for h in self._provider_headers):
+            return True
         return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
     def models(self) -> set[str]:
@@ -87,46 +112,95 @@ class ClaudeAdapter(Adapter):
         if self._models_cache is not None and now - self._cache_time < self._MODELS_TTL:
             return set(self._models_cache)
         base = self._MODELS_URL
-        if not _key_url_allowed(base):
+        resolved = _resolve_probe_auth(
+            "claude",
+            base,
+            self._key_source,
+            "ANTHROPIC_API_KEY",
+            self._AUTH_HEADER,
+            self._provider_headers,
+        )
+        if resolved is None:
+            if self._provider_headers and not _key_url_allowed(base):
+                _warn_headers_refused(self, logger, "claude")
             return set()
-        key = _current_key(self._key_source, "ANTHROPIC_API_KEY")
-        try:
-            key.check("claude")
-        except (errors.AuthError, TypeError, ValueError):
-            return set()
-        model_ids: set[str] = set()
+        key, headers = resolved
+        model_infos: dict[str, ModelInfo] = {}
         after_id = None
+        stop = sys.exception()
         try:
             while True:
                 url = base
                 if after_id:
                     url = f"{url}?{urllib.parse.urlencode({'after_id': after_id})}"
-                req = _new_request(
-                    url,
-                    defaults={"anthropic-version": "2023-06-01"},
-                    auth=("x-api-key", "", lambda: key),
-                )
-                with urllib.request.urlopen(req, timeout=3) as resp:
+                with urllib.request.urlopen(
+                    _new_request(
+                        url,
+                        defaults={"anthropic-version": "2023-06-01"},
+                        resolved=headers,
+                        auth=None if key is None else ("x-api-key", "", lambda: key),
+                    ),
+                    timeout=3,
+                ) as resp:
                     data = _read_json(resp, "claude")
-                model_ids.update(m["id"] for m in data.get("data", []))
+                for m in data.get("data", []):
+                    model_infos[m["id"]] = {
+                        "context_window": m.get("max_input_tokens"),
+                        "max_output_tokens": m.get("max_tokens"),
+                    }
                 next_after_id = data.get("last_id")
                 if not data.get("has_more") or not next_after_id:
                     break
                 if next_after_id == after_id:
                     break
                 after_id = next_after_id
+        except urllib.error.HTTPError as e:
+            e.close()
+            return set()
         except _PROBE_ERRORS:
             return set()
         except BaseException as e:
-            _clear_tracebacks(e)
+            _clear_tracebacks(e, stop)
             raise
-        self._models_cache = model_ids
+        self._models_cache = model_infos
         self._cache_time = now
-        return set(model_ids)
+        return set(model_infos)
+
+    def model_info(self, model: str) -> ModelInfo | None:
+        """Context window and max output for `model`, read from the same
+        paginated `/v1/models` listing `models()` uses — calling both costs at
+        most one round trip, since this reuses (and, on a miss, populates) the
+        same cache. `None` when `model` isn't in any page, or on any probe
+        failure `models()` itself would swallow into an empty set.
+        """
+        if model not in self.models():
+            return None
+        return self._models_cache.get(model) if self._models_cache else None
 
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
         if e.status == 404:
             self._models_cache = None
+
+    def _content_source(self, block: ImageBlock | DocumentBlock) -> dict[str, Any]:
+        if block["source"] == "url":
+            return {"type": "url", "url": block["url"]}
+        return {
+            "type": "base64",
+            "media_type": block["media_type"],
+            "data": block["data"],
+        }
+
+    def _tool_result_content(
+        self, content: str | list[TextBlock | ImageBlock]
+    ) -> str | list[dict[str, Any]]:
+        if isinstance(content, str):
+            return content
+        return [
+            {"type": "text", "text": b["text"]}
+            if b["type"] == "text"
+            else {"type": "image", "source": self._content_source(b)}
+            for b in content
+        ]
 
     def _serialize(self, messages: list[Message]) -> list[dict[str, Any]]:
         serialized: list[dict[str, Any]] = []
@@ -136,48 +210,18 @@ class ClaudeAdapter(Adapter):
             dropped_before = dropped_thinking
             for block in message["content"]:
                 if block["type"] == "image":
-                    if block["source"] == "url":
-                        content.append(
-                            {
-                                "type": "image",
-                                "source": {"type": "url", "url": block["url"]},
-                            }
-                        )
-                    else:
-                        content.append(
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": block["media_type"],
-                                    "data": block["data"],
-                                },
-                            }
-                        )
+                    content.append(
+                        {"type": "image", "source": self._content_source(block)}
+                    )
                 elif block["type"] == "document":
-                    if block["source"] == "url":
-                        content.append(
-                            {
-                                "type": "document",
-                                "source": {"type": "url", "url": block["url"]},
-                            }
-                        )
-                    else:
-                        content.append(
-                            {
-                                "type": "document",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": block["media_type"],
-                                    "data": block["data"],
-                                },
-                            }
-                        )
+                    content.append(
+                        {"type": "document", "source": self._content_source(block)}
+                    )
                 elif block["type"] == "tool_result":
                     entry: dict[str, Any] = {
                         "type": "tool_result",
                         "tool_use_id": block["tool_use_id"],
-                        "content": block["content"],
+                        "content": self._tool_result_content(block["content"]),
                     }
                     if block.get("is_error"):
                         entry["is_error"] = True
@@ -277,11 +321,15 @@ class ClaudeAdapter(Adapter):
         )
         _validate_headers("claude", extra_headers)
         url = self._MESSAGES_URL
+        resolved = _resolve_headers(
+            "claude", url, self._provider_headers, extra_headers
+        )
         req = _new_request(
             url,
             json.dumps(payload).encode(),
             {"anthropic-version": "2023-06-01", "content-type": "application/json"},
             extra_headers,
+            resolved,
             auth=(
                 "x-api-key",
                 "",
@@ -300,11 +348,13 @@ class ClaudeAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
-        req, timeout = self._build_request(
-            model, messages, system, tools, config, stream=False
-        )
         try:
-            data, latency_ms = _request_json("claude", req, timeout)
+            data, latency_ms = _request_json(
+                "claude",
+                *self._build_request(
+                    model, messages, system, tools, config, stream=False
+                ),
+            )
             with _shape_checked("claude"):
                 return self._deserialize(data, latency_ms)
         except errors.APIError as e:
@@ -319,21 +369,18 @@ class ClaudeAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
-        req, timeout = self._build_request(
-            model, messages, system, tools, config, stream=True
-        )
-        try:
-            yield from _stream_request(
+        def start() -> _CancellableStream:
+            return _stream_request(
                 "claude",
-                req,
-                timeout,
+                *self._build_request(
+                    model, messages, system, tools, config, stream=True
+                ),
                 frames=_iter_sse,
                 handler=self._stream_handler,
                 terminal="message_stop",
             )
-        except errors.APIError as e:
-            self._invalidate_models_cache_on_404(e)
-            raise
+
+        return _ErrorHookedStream("claude", start, self._invalidate_models_cache_on_404)
 
     def _stream_handler(
         self, timer: _StreamTimer
@@ -356,7 +403,10 @@ class ClaudeAdapter(Adapter):
             if index in signature_parts:
                 block["signature"] = "".join(signature_parts.pop(index))
             if json_buffers.get(index):
-                block["input"] = _loads_tool_input("".join(json_buffers.pop(index)))
+                args, truncated = _loads_tool_input("".join(json_buffers.pop(index)))
+                block["input"] = args
+                if truncated:
+                    block["truncated"] = True
 
         def handle(event: dict[str, Any]) -> Iterator[StreamEvent]:
             nonlocal stream_usage, stop_reason

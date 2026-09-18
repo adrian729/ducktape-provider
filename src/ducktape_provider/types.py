@@ -73,21 +73,29 @@ class UrlDocumentBlock(TypedDict):
 
 
 class ToolUseBlock(TypedDict):
-    """A tool call the model made; answer it with a `ToolResultBlock`."""
+    """A tool call the model made; answer it with a `ToolResultBlock`.
+
+    `truncated` is set when the model's `input` couldn't be parsed — almost
+    always a `max_tokens` cutoff mid-call; treat the call as incomplete, not as
+    a legitimate empty-argument call.
+    """
 
     type: Literal["tool_use"]
     id: ToolCallId
     name: str
     input: dict[str, Any]
+    truncated: NotRequired[bool]
 
 
 class ToolResultBlock(TypedDict):
-    """Your tool's output, sent back in a `user` message."""
+    """Your tool's output, sent back in a `user` message. `content` can be
+    plain text, or a list of text/image blocks for tools that return images
+    (e.g. a screenshot, a rendered chart)."""
 
     type: Literal["tool_result"]
     tool_use_id: ToolCallId
     name: str
-    content: str
+    content: str | list[TextBlock | ImageBlock]
     is_error: NotRequired[bool]
 
 
@@ -139,7 +147,8 @@ class Config(TypedDict, total=False):
 class Response(TypedDict):
     """A complete model turn, from `chat()` or a stream's final `message_stop` event.
 
-    Only `content` and `stop_reason` are required; adapters set the rest when they can.
+    Only `content`, `stop_reason` and `usage` are required; `usage` is `None` when
+    not known. Adapters set the rest when they can.
 
     - `latency_ms`: from sending the request until the reply was fully read.
     - `ttft_ms`: streaming only, until the first content event was read.
@@ -148,7 +157,7 @@ class Response(TypedDict):
     content: list[Block]
     stop_reason: StopReason
     raw_stop_reason: NotRequired[str]
-    usage: NotRequired[Usage]
+    usage: Usage | None
     raw: NotRequired[dict[str, Any]]
     latency_ms: NotRequired[float]
     ttft_ms: NotRequired[float]
@@ -307,10 +316,19 @@ register it as a plugin (see the README's "Third-party adapters").
 """
 
 
+class ModelInfo(TypedDict):
+    """Best-effort model metadata. Either field is `None` when the provider
+    doesn't expose it for that model."""
+
+    context_window: int | None
+    max_output_tokens: int | None
+
+
 class Adapter(ABC):
     """One vendor behind the `Provider` interface.
 
-    - `chat` returns a `Response`; only `content` and `stop_reason` are required.
+    - `chat` returns a `Response`; only `content`, `stop_reason` and `usage` are
+      required (`usage` is `None` when not known).
     - `stream_chat` yields `StreamEvent`s and must end with one `MessageStopEvent`.
     - `config` arrives merged (per-provider overrides applied): apply its `timeout`
       and `headers` to the HTTP request and send every other key to the vendor.
@@ -327,6 +345,15 @@ class Adapter(ABC):
     def models(self) -> set[str]:
         """Model ids servable now; empty when unreachable."""
         ...
+
+    def model_info(self, model: str) -> ModelInfo | None:
+        """Context window and max output for `model`, when known.
+
+        Optional: the default returns `None`. Override to add real data — see the
+        built-in adapters for examples of reading it from the vendor rather than
+        guessing.
+        """
+        return None
 
     @abstractmethod
     def chat(

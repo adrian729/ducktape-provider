@@ -24,6 +24,7 @@ from ducktape_provider import (
     ContextOverflowError,
     MalformedResponseError,
     Message,
+    ModelInfo,
     RateLimitError,
     RequestTimeoutError,
     ServerError,
@@ -214,11 +215,12 @@ class ClaudeDeserializeTests(unittest.TestCase):
             },
         }
         response = self.adapter._deserialize(data, 0.0)
+        usage = response["usage"]
+        assert usage is not None
         self.assertEqual(
-            response["usage"],
-            {"input_tokens": 103, "output_tokens": 5, "cache_read_tokens": 100},
+            usage, {"input_tokens": 103, "output_tokens": 5, "cache_read_tokens": 100}
         )
-        self.assertNotIn("cache_write_tokens", response["usage"])
+        self.assertNotIn("cache_write_tokens", usage)
 
     def test_maps_cache_write_only(self):
         data = {
@@ -231,11 +233,12 @@ class ClaudeDeserializeTests(unittest.TestCase):
             },
         }
         response = self.adapter._deserialize(data, 0.0)
+        usage = response["usage"]
+        assert usage is not None
         self.assertEqual(
-            response["usage"],
-            {"input_tokens": 23, "output_tokens": 5, "cache_write_tokens": 20},
+            usage, {"input_tokens": 23, "output_tokens": 5, "cache_write_tokens": 20}
         )
-        self.assertNotIn("cache_read_tokens", response["usage"])
+        self.assertNotIn("cache_read_tokens", usage)
 
     def test_omits_cache_usage_fields_when_absent(self):
         data = {
@@ -244,8 +247,10 @@ class ClaudeDeserializeTests(unittest.TestCase):
             "usage": {"input_tokens": 3, "output_tokens": 5},
         }
         response = self.adapter._deserialize(data, 0.0)
-        self.assertNotIn("cache_read_tokens", response["usage"])
-        self.assertNotIn("cache_write_tokens", response["usage"])
+        usage = response["usage"]
+        assert usage is not None
+        self.assertNotIn("cache_read_tokens", usage)
+        self.assertNotIn("cache_write_tokens", usage)
 
 
 class ClaudeChatHTTPTests(unittest.TestCase):
@@ -490,6 +495,105 @@ class ClaudeBlockShapeTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_tool_result_with_list_content_serializes_text_and_image_blocks(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "name": "screenshot",
+                        "content": [
+                            {"type": "text", "text": "here"},
+                            {
+                                "type": "image",
+                                "source": "base64",
+                                "media_type": "image/png",
+                                "data": "abc",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(
+            serialized[0]["content"],
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        {"type": "text", "text": "here"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "abc",
+                            },
+                        },
+                    ],
+                }
+            ],
+        )
+
+    def test_tool_result_with_empty_list_content_sends_an_empty_array(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "name": "noop",
+                        "content": [],
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(serialized[0]["content"][0]["content"], [])
+
+    def test_tool_result_is_error_with_list_content_still_sets_is_error(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "name": "screenshot",
+                        "content": [{"type": "text", "text": "failed"}],
+                        "is_error": True,
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(serialized[0]["content"][0]["is_error"], True)
+        self.assertEqual(
+            serialized[0]["content"][0]["content"], [{"type": "text", "text": "failed"}]
+        )
+
+    def test_tool_result_plain_str_content_still_passes_through(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "name": "get_weather",
+                        "content": "sunny",
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(serialized[0]["content"][0]["content"], "sunny")
 
 
 def _text_stream(*middle: dict) -> list[dict]:
@@ -1034,7 +1138,9 @@ class ClaudeLatencyTests(unittest.TestCase):
         mock_urlopen.return_value = FakeStreamResponse(sse_lines(*STREAM_EVENTS))
         clock = [100.0 + i * 0.125 for i in range(len(STREAM_EVENTS) + 1)]
         with patch("time.monotonic", side_effect=clock):
-            events = list(self.adapter.stream_chat("claude-x", MESSAGES))
+            events = list(
+                self.adapter.stream_chat("claude-x", MESSAGES, config={"timeout": None})
+            )
         final = final_response(events)
         self.assertEqual(final["ttft_ms"], 375.0)
         self.assertEqual(final["latency_ms"], 1125.0)
@@ -1200,7 +1306,13 @@ class ClaudeInvalidToolArgsTests(unittest.TestCase):
         response = final_response(list(self.adapter.stream_chat("claude-x", MESSAGES)))
         self.assertEqual(
             response["content"][0],
-            {"type": "tool_use", "id": "t1", "name": "f", "input": {}},
+            {
+                "type": "tool_use",
+                "id": "t1",
+                "name": "f",
+                "input": {},
+                "truncated": True,
+            },
         )
 
     @patch("urllib.request.urlopen")
@@ -1239,14 +1351,163 @@ class ClaudeInvalidToolArgsTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     response["content"][0],
+                    {
+                        "type": "tool_use",
+                        "id": "t1",
+                        "name": "f",
+                        "input": {},
+                        "truncated": True,
+                    },
+                )
+
+    @patch("urllib.request.urlopen")
+    def test_legitimately_empty_json_is_not_marked_truncated(self, mock_urlopen):
+        for partial_json in ("", "{}"):
+            with self.subTest(partial_json=partial_json):
+                events = [
+                    {
+                        "type": "message_start",
+                        "message": {"usage": {"input_tokens": 1}},
+                    },
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "f",
+                            "input": {},
+                        },
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": partial_json,
+                        },
+                    },
+                    {"type": "content_block_stop", "index": 0},
+                    {"type": "message_stop"},
+                ]
+                mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events))
+                response = final_response(
+                    list(self.adapter.stream_chat("claude-x", MESSAGES))
+                )
+                self.assertEqual(
+                    response["content"][0],
                     {"type": "tool_use", "id": "t1", "name": "f", "input": {}},
                 )
+
+
+class ClaudeModelInfoTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = ClaudeAdapter(api_key="test")
+
+    @patch("urllib.request.urlopen")
+    def test_reads_context_window_and_max_output_from_the_models_listing(
+        self, mock_urlopen
+    ):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "id": "claude-x",
+                            "max_input_tokens": 200000,
+                            "max_tokens": 8192,
+                        }
+                    ]
+                }
+            ).encode()
+        )
+        self.assertEqual(
+            self.adapter.model_info("claude-x"),
+            {"context_window": 200000, "max_output_tokens": 8192},
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_null_fields_become_none_not_zero_or_missing(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "id": "claude-x",
+                            "max_input_tokens": None,
+                            "max_tokens": None,
+                        }
+                    ]
+                }
+            ).encode()
+        )
+        self.assertEqual(
+            self.adapter.model_info("claude-x"),
+            {"context_window": None, "max_output_tokens": None},
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_model_not_in_any_page_returns_none(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps({"data": [{"id": "claude-other"}]}).encode()
+        )
+        self.assertIsNone(self.adapter.model_info("claude-x"))
+
+    @patch("urllib.request.urlopen")
+    def test_reuses_the_same_cache_as_models(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(
+                {"data": [{"id": "claude-x", "max_input_tokens": 200000}]}
+            ).encode()
+        )
+        self.assertEqual(self.adapter.models(), {"claude-x"})
+        self.assertEqual(
+            self.adapter.model_info("claude-x"),
+            {"context_window": 200000, "max_output_tokens": None},
+        )
+        mock_urlopen.assert_called_once()
+
+    @patch("urllib.request.urlopen")
+    def test_model_info_alone_populates_the_cache_in_one_call(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(
+                {"data": [{"id": "claude-x", "max_input_tokens": 200000}]}
+            ).encode()
+        )
+        self.assertEqual(
+            self.adapter.model_info("claude-x"),
+            {"context_window": 200000, "max_output_tokens": None},
+        )
+        self.assertEqual(self.adapter.models(), {"claude-x"})
+        mock_urlopen.assert_called_once()
+
+    @patch("urllib.request.urlopen")
+    def test_probe_failure_returns_none_like_models_returns_empty(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(ClaudeAdapter._MODELS_URL, 500, b"boom")
+        self.assertIsNone(self.adapter.model_info("claude-x"))
+
+    @patch("urllib.request.urlopen")
+    def test_a_stale_warm_cache_does_not_survive_a_later_failed_probe(
+        self, mock_urlopen
+    ):
+        self.adapter._models_cache = {
+            "claude-x": {"context_window": 200000, "max_output_tokens": 8192}
+        }
+        self.adapter._cache_time = 0.0
+        mock_urlopen.side_effect = http_error(ClaudeAdapter._MODELS_URL, 500, b"boom")
+        self.assertEqual(self.adapter.models(), set())
+        self.assertIsNone(self.adapter.model_info("claude-x"))
+
+
+STALE_MODEL_INFO: dict[str, ModelInfo] = {
+    "claude-old": {"context_window": None, "max_output_tokens": None}
+}
 
 
 class ClaudeModelsCacheInvalidationTests(unittest.TestCase):
     def setUp(self):
         self.adapter = ClaudeAdapter(api_key="test")
-        self.adapter._models_cache = {"claude-old"}
+        self.adapter._models_cache = dict(STALE_MODEL_INFO)
         self.adapter._cache_time = time.monotonic()
 
     @patch("urllib.request.urlopen")
@@ -1272,7 +1533,7 @@ class ClaudeModelsCacheInvalidationTests(unittest.TestCase):
         mock_urlopen.side_effect = http_error(ClaudeAdapter._MESSAGES_URL, 500, b"boom")
         with self.assertRaises(APIError):
             self.adapter.chat("claude-x", MESSAGES)
-        self.assertEqual(self.adapter._models_cache, {"claude-old"})
+        self.assertEqual(self.adapter._models_cache, STALE_MODEL_INFO)
 
 
 if __name__ == "__main__":

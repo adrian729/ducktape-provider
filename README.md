@@ -2,7 +2,7 @@
 
 Simple AI chat provider to normalize usage of different APIs.
 
-Claude, OpenAI and local Ollama adapters included. Extensible by subclassing `Adapter`.
+Claude, OpenAI and self-hosted Ollama adapters included. Extensible by subclassing `Adapter`.
 
 Stdlib only, no dependencies.
 
@@ -31,6 +31,8 @@ Vendor availability and model listing come from environment variables — no con
 | `claude`       | `ANTHROPIC_API_KEY`                              |
 | `openai`       | `OPENAI_API_KEY`                                 |
 | `ollama-local` | `OLLAMA_HOST` (default `http://127.0.0.1:11434`) |
+
+`ollama-local` works with any self-hosted Ollama: set `OLLAMA_HOST` to its `http(s)://` URL.
 
 Or pass API keys in code with `api_keys`:
 
@@ -69,6 +71,7 @@ response = provider.chat(
 | `autodiscover` | `bool \| Collection[str]` | `False` | Load [third-party adapters](#third-party-adapters) |
 | `executor` | `Executor \| None` | asyncio default | Thread pool for async calls, except streams |
 | `api_keys` | `Mapping[str, str \| Callable] \| Callable \| None` | env vars | API keys, see [Provider setup](#provider-setup) |
+| `config` | `Config \| Mapping[str, Any] \| None` | none | Defaults for every call, see [Configuration](#configuration) |
 
 ### Chat methods
 
@@ -92,8 +95,12 @@ response = provider.chat(
 |---|---|---|
 | `providers()` | Configured providers and whether each is available (configured; for Ollama, running) | `dict[str, bool]` |
 | `models()` | Model ids of each available provider | `dict[str, list[str]]` |
+| `model_info(model, *, provider=None)` | Context window / max output for a model, when known | `ModelInfo \| None` |
 | `async_providers()` | `await`able `providers` | `dict[str, bool]` |
 | `async_models()` | `await`able `models` | `dict[str, list[str]]` |
+| `async_model_info(model, *, provider=None)` | `await`able `model_info` | `ModelInfo \| None` |
+
+`model_info` is best-effort: `None` means the provider doesn't expose it for that model, not that the model doesn't exist. Claude and self-hosted Ollama read it live from the vendor; OpenAI's API doesn't expose it, so it's always `None` there. `ModelInfo`'s fields are in [`types.py`](src/ducktape_provider/types.py).
 
 ## Configuration
 
@@ -114,6 +121,11 @@ provider.chat(
 `providers` holds per-provider config that overrides the rest for that provider; its fields are the same as that vendor's API.
 
 `headers` merge key by key: a per-provider header adds to the call's headers rather than replacing them. Keys the call already sets (`model`, `messages`/`input`, `stream`) raise `ValueError`.
+
+- `Provider(config=...)` sets the same options for every call; a call's `config` overrides it.
+- Headers go per provider (`providers.<name>.headers`); values can be functions called per request.
+- They are also sent when checking availability and listing models.
+- They are only sent over https, or http to a loopback IP with no proxy; otherwise the provider reports unavailable and calls raise `ValueError`.
 
 ## Streaming
 
@@ -137,6 +149,8 @@ for event in provider.stream_chat("claude-opus-5", messages):
 | `message_stop` | `response` | Full `Response` |
 
 `index` is the block's position in `response["content"]`. Errors mid-stream raise the same exceptions as `chat` (see [Errors](#errors)).
+
+- The iterator `stream_chat` returns has a `cancel()` method for the built-in adapters: call it from another thread to stop the connection immediately, instead of waiting for the current read to finish. Safe at any point, including after the stream is already done. A third-party adapter's stream may not have it — check with `getattr(stream, "cancel", None)` if you need to support arbitrary ones uniformly.
 
 ## Latency
 
@@ -175,7 +189,7 @@ Subclass `Adapter` and implement its four methods:
 |---|---|
 | `is_available()` | `bool`: whether the vendor is configured and usable |
 | `models()` | `set[str]`: model ids it can serve; empty when unreachable |
-| `chat(model, messages, system, tools, config)` | `Response`: only `content` and `stop_reason` are required |
+| `chat(model, messages, system, tools, config)` | `Response`: only `content`, `stop_reason` and `usage` are required; `usage` is `None` when not known |
 | `stream_chat(model, messages, system, tools, config)` | `Iterator[StreamEvent]`, ending with `message_stop` |
 
 `config` arrives already merged (per-provider overrides applied); apply its `timeout` and `headers` to your HTTP request and send the rest to your vendor. Raise the errors from [Errors](#errors) so callers can handle every provider the same way.
@@ -214,7 +228,7 @@ async with contextlib.aclosing(
 ```
 
 - Use `contextlib.aclosing` to close a stream right away if you stop reading early.
-- Cancelling a call doesn't stop its HTTP request; it runs until done or `timeout`.
+- Cancelling an `async_stream_chat` call stops its HTTP request immediately, for the built-in adapters. A `chat`/`async_chat` call, or a stream from a third-party adapter that doesn't support this, still runs until done or `timeout`.
 - `Provider(executor=...)` sets the thread pool for `async_chat`, `async_providers` and `async_models`; it must be thread-based.
 
 ## Development

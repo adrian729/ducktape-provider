@@ -244,11 +244,12 @@ class OpenAIDeserializeTests(unittest.TestCase):
             },
         }
         response = self.adapter._deserialize(data, 0.0)
+        usage = response["usage"]
+        assert usage is not None
         self.assertEqual(
-            response["usage"],
-            {"input_tokens": 3, "output_tokens": 5, "cache_read_tokens": 100},
+            usage, {"input_tokens": 3, "output_tokens": 5, "cache_read_tokens": 100}
         )
-        self.assertNotIn("cache_write_tokens", response["usage"])
+        self.assertNotIn("cache_write_tokens", usage)
 
     def test_maps_cache_write_only(self):
         data = {
@@ -261,11 +262,12 @@ class OpenAIDeserializeTests(unittest.TestCase):
             },
         }
         response = self.adapter._deserialize(data, 0.0)
+        usage = response["usage"]
+        assert usage is not None
         self.assertEqual(
-            response["usage"],
-            {"input_tokens": 3, "output_tokens": 5, "cache_write_tokens": 20},
+            usage, {"input_tokens": 3, "output_tokens": 5, "cache_write_tokens": 20}
         )
-        self.assertNotIn("cache_read_tokens", response["usage"])
+        self.assertNotIn("cache_read_tokens", usage)
 
     def test_omits_cache_usage_fields_when_absent(self):
         data = {
@@ -274,8 +276,10 @@ class OpenAIDeserializeTests(unittest.TestCase):
             "usage": {"input_tokens": 3, "output_tokens": 5},
         }
         response = self.adapter._deserialize(data, 0.0)
-        self.assertNotIn("cache_read_tokens", response["usage"])
-        self.assertNotIn("cache_write_tokens", response["usage"])
+        usage = response["usage"]
+        assert usage is not None
+        self.assertNotIn("cache_read_tokens", usage)
+        self.assertNotIn("cache_write_tokens", usage)
 
     def test_reasoning_item_produces_thinking_block(self):
         data = {
@@ -593,6 +597,118 @@ class OpenAIBlockShapeTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_tool_result_with_list_content_serializes_text_and_image_blocks(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "name": "screenshot",
+                        "content": [
+                            {"type": "text", "text": "here"},
+                            {
+                                "type": "image",
+                                "source": "url",
+                                "url": "https://x/img.png",
+                            },
+                        ],
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(
+            serialized,
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {"type": "input_text", "text": "here"},
+                        {"type": "input_image", "image_url": "https://x/img.png"},
+                    ],
+                }
+            ],
+        )
+
+    def test_tool_result_with_empty_list_content_sends_an_empty_array(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "name": "noop",
+                        "content": [],
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(serialized[0]["output"], [])
+
+    def test_tool_result_is_error_with_list_content_prepends_error_text(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "name": "screenshot",
+                        "content": [{"type": "text", "text": "failed"}],
+                        "is_error": True,
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(
+            serialized[0]["output"],
+            [
+                {"type": "input_text", "text": "ERROR:"},
+                {"type": "input_text", "text": "failed"},
+            ],
+        )
+
+    def test_tool_result_is_error_with_str_content_still_prefixes_error(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "name": "get_weather",
+                        "content": "sunny",
+                        "is_error": True,
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(serialized[0]["output"], "ERROR: sunny")
+
+    def test_tool_result_plain_str_content_still_passes_through(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "name": "get_weather",
+                        "content": "sunny",
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        self.assertEqual(serialized[0]["output"], "sunny")
 
 
 REASONING_ITEM = {
@@ -1077,7 +1193,9 @@ class OpenAILatencyTests(unittest.TestCase):
         mock_urlopen.return_value = FakeStreamResponse(sse_lines(*STREAM_EVENTS))
         clock = [100.0 + i * 0.25 for i in range(len(STREAM_EVENTS) + 1)]
         with patch("time.monotonic", side_effect=clock):
-            events = list(self.adapter.stream_chat("gpt-x", MESSAGES))
+            events = list(
+                self.adapter.stream_chat("gpt-x", MESSAGES, config={"timeout": None})
+            )
         final = final_response(events)
         self.assertEqual(final["ttft_ms"], 500.0)
         self.assertEqual(final["latency_ms"], 1750.0)
@@ -1120,7 +1238,15 @@ class OpenAIInvalidToolArgsTests(unittest.TestCase):
         response = self.adapter._deserialize(data, 0.0)
         self.assertEqual(
             response["content"],
-            [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}],
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call_1",
+                    "name": "get_weather",
+                    "input": {},
+                    "truncated": True,
+                }
+            ],
         )
 
     @patch("urllib.request.urlopen")
@@ -1155,7 +1281,15 @@ class OpenAIInvalidToolArgsTests(unittest.TestCase):
         response = final_response(list(self.adapter.stream_chat("gpt-x", MESSAGES)))
         self.assertEqual(
             response["content"],
-            [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}],
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call_1",
+                    "name": "get_weather",
+                    "input": {},
+                    "truncated": True,
+                }
+            ],
         )
 
     def test_non_object_arguments_fall_back_to_empty_input_in_chat(self):
@@ -1181,6 +1315,7 @@ class OpenAIInvalidToolArgsTests(unittest.TestCase):
                             "id": "call_1",
                             "name": "get_weather",
                             "input": {},
+                            "truncated": True,
                         }
                     ],
                 )
@@ -1226,9 +1361,98 @@ class OpenAIInvalidToolArgsTests(unittest.TestCase):
                             "id": "call_1",
                             "name": "get_weather",
                             "input": {},
+                            "truncated": True,
                         }
                     ],
                 )
+
+    def test_legitimately_empty_arguments_are_not_marked_truncated_in_chat(self):
+        for arguments in ("", "{}"):
+            with self.subTest(arguments=arguments):
+                data = {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "get_weather",
+                            "arguments": arguments,
+                        }
+                    ],
+                }
+                response = self.adapter._deserialize(data, 0.0)
+                self.assertEqual(
+                    response["content"],
+                    [
+                        {
+                            "type": "tool_use",
+                            "id": "call_1",
+                            "name": "get_weather",
+                            "input": {},
+                        }
+                    ],
+                )
+
+    @patch("urllib.request.urlopen")
+    def test_legitimately_empty_arguments_are_not_marked_truncated_in_stream(
+        self, mock_urlopen
+    ):
+        for arguments in ("", "{}"):
+            with self.subTest(arguments=arguments):
+                final = {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "name": "get_weather",
+                            "arguments": arguments,
+                        }
+                    ],
+                }
+                events = [
+                    {
+                        "type": "response.output_item.added",
+                        "item": {"id": "fc_1", "type": "function_call"},
+                    },
+                    {
+                        "type": "response.function_call_arguments.delta",
+                        "item_id": "fc_1",
+                        "delta": arguments,
+                    },
+                    {"type": "response.completed", "response": final},
+                ]
+                mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events))
+                response = final_response(
+                    list(self.adapter.stream_chat("gpt-x", MESSAGES))
+                )
+                self.assertEqual(
+                    response["content"],
+                    [
+                        {
+                            "type": "tool_use",
+                            "id": "call_1",
+                            "name": "get_weather",
+                            "input": {},
+                        }
+                    ],
+                )
+
+
+class OpenAIModelInfoTests(unittest.TestCase):
+    """OpenAI's models list/get endpoints expose no context-window or
+    max-output field at all, so `model_info` is the unmodified `Adapter`
+    default: always `None`, and never touches the network."""
+
+    def setUp(self):
+        self.adapter = OpenAIAdapter(api_key="test")
+
+    @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
+    def test_always_returns_none_without_any_request(self, mock_urlopen):
+        for model in ("gpt-x", "gpt-nonexistent", ""):
+            with self.subTest(model=model):
+                self.assertIsNone(self.adapter.model_info(model))
+        mock_urlopen.assert_not_called()
 
 
 class OpenAIModelsCacheInvalidationTests(unittest.TestCase):

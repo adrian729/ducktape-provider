@@ -4,7 +4,9 @@ import json
 import logging
 import os
 import re
+import sys
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
 from typing import Any, NoReturn
@@ -12,17 +14,21 @@ from typing import Any, NoReturn
 from .. import errors
 from ..adapter import (
     Adapter,
-    _current_key,
     _key_url_allowed,
     _merge_config,
     _new_request,
     _request_key,
+    _resolve_headers,
+    _resolve_probe_auth,
     _Secret,
     _validate_headers,
+    _warn_headers_refused,
 )
 from ..streaming import (
     _PROBE_ERRORS,
+    _CancellableStream,
     _clear_tracebacks,
+    _ErrorHookedStream,
     _iter_sse,
     _loads_tool_input,
     _read_json,
@@ -31,7 +37,18 @@ from ..streaming import (
     _stream_request,
     _StreamTimer,
 )
-from ..types import Block, Message, Response, StopReason, StreamEvent, ToolDef, Usage
+from ..types import (
+    Block,
+    ImageBlock,
+    Message,
+    Response,
+    StopReason,
+    StreamEvent,
+    TextBlock,
+    ToolDef,
+    ToolUseBlock,
+    Usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +77,11 @@ class OpenAIAdapter(Adapter):
     _MODELS_TTL = 60
     _CHAT_TIMEOUT = 120
     _RESERVED_CONFIG = frozenset({"model", "input", "stream"})
+    _AUTH_HEADER = "authorization"
     _key_source: _Secret | None = None
+    _provider_headers: tuple[_Secret, ...] = ()
+    _provider_name: str | None = None
+    _warned_transport = False
 
     def __init__(self, api_key: str | Callable[[], str | None] | None = None):
         """`api_key` is the key, or a function called for it on every request.
@@ -70,7 +91,8 @@ class OpenAIAdapter(Adapter):
         that env var is read per request. A function may be called from several
         threads at once: `Provider`'s async executor workers and stream reader
         threads, and concurrent `async_models()` probes. A subclass overriding
-        `_build_request` or `models()` must send the key itself.
+        `_build_request` or `models()` must send the key and any configured
+        Provider headers (`self._provider_headers`) itself.
         """
         source = None if api_key is None else _Secret(api_key)
         api_key = None
@@ -83,6 +105,8 @@ class OpenAIAdapter(Adapter):
     def is_available(self) -> bool:
         if self._key_source is not None:
             return True
+        if any(h.sets({self._AUTH_HEADER}) for h in self._provider_headers):
+            return True
         return bool(os.environ.get("OPENAI_API_KEY"))
 
     def models(self) -> set[str]:
@@ -90,16 +114,31 @@ class OpenAIAdapter(Adapter):
         if self._models_cache is not None and now - self._cache_time < self._MODELS_TTL:
             return set(self._models_cache)
         url = self._MODELS_URL
-        if not _key_url_allowed(url):
+        resolved = _resolve_probe_auth(
+            "openai",
+            url,
+            self._key_source,
+            "OPENAI_API_KEY",
+            self._AUTH_HEADER,
+            self._provider_headers,
+        )
+        if resolved is None:
+            if self._provider_headers and not _key_url_allowed(url):
+                _warn_headers_refused(self, logger, "openai")
             return set()
-        key = _current_key(self._key_source, "OPENAI_API_KEY")
+        key, headers = resolved
+        stop = sys.exception()
         try:
-            key.check("openai")
-        except (errors.AuthError, TypeError, ValueError):
-            return set()
-        req = _new_request(url, auth=("Authorization", "Bearer ", lambda: key))
-        try:
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with urllib.request.urlopen(
+                _new_request(
+                    url,
+                    resolved=headers,
+                    auth=None
+                    if key is None
+                    else ("Authorization", "Bearer ", lambda: key),
+                ),
+                timeout=3,
+            ) as resp:
                 data = _read_json(resp, "openai")
             model_ids = {
                 m["id"]
@@ -107,10 +146,13 @@ class OpenAIAdapter(Adapter):
                 if self._CHAT_MODEL_RE.match(m["id"])
                 and not self._NON_CHAT_RE.search(m["id"])
             }
+        except urllib.error.HTTPError as e:
+            e.close()
+            return set()
         except _PROBE_ERRORS:
             return set()
         except BaseException as e:
-            _clear_tracebacks(e)
+            _clear_tracebacks(e, stop)
             raise
         self._models_cache = model_ids
         self._cache_time = now
@@ -142,12 +184,9 @@ class OpenAIAdapter(Adapter):
                 if block["type"] == "text":
                     content.append({"type": "input_text", "text": block["text"]})
                 elif block["type"] == "image":
-                    image_url = (
-                        block["url"]
-                        if block["source"] == "url"
-                        else f"data:{block['media_type']};base64,{block['data']}"
+                    content.append(
+                        {"type": "input_image", "image_url": self._image_url(block)}
                     )
-                    content.append({"type": "input_image", "image_url": image_url})
                 elif block["type"] == "document":
                     logger.warning(
                         "openai adapter does not support document blocks yet — "
@@ -167,9 +206,13 @@ class OpenAIAdapter(Adapter):
                     )
                 elif block["type"] == "tool_result":
                     flush()
-                    output = block["content"]
+                    output = self._tool_result_output(block["content"])
                     if block.get("is_error"):
-                        output = f"ERROR: {output}"
+                        output = (
+                            f"ERROR: {output}"
+                            if isinstance(output, str)
+                            else [{"type": "input_text", "text": "ERROR:"}, *output]
+                        )
                     serialized.append(
                         {
                             "type": "function_call_output",
@@ -185,6 +228,25 @@ class OpenAIAdapter(Adapter):
                 dropped_thinking,
             )
         return serialized
+
+    def _image_url(self, block: ImageBlock) -> str:
+        return (
+            block["url"]
+            if block["source"] == "url"
+            else f"data:{block['media_type']};base64,{block['data']}"
+        )
+
+    def _tool_result_output(
+        self, content: str | list[TextBlock | ImageBlock]
+    ) -> str | list[dict[str, Any]]:
+        if isinstance(content, str):
+            return content
+        return [
+            {"type": "input_text", "text": b["text"]}
+            if b["type"] == "text"
+            else {"type": "input_image", "image_url": self._image_url(b)}
+            for b in content
+        ]
 
     def _serialize_tools(self, tools: list[ToolDef]) -> list[dict[str, Any]]:
         return [
@@ -211,15 +273,16 @@ class OpenAIAdapter(Adapter):
                         blocks.append({"type": "text", "text": part["refusal"]})
                         has_refusal = True
             elif item.get("type") == "function_call":
-                args = _loads_tool_input(item["arguments"])
-                blocks.append(
-                    {
-                        "type": "tool_use",
-                        "id": item["call_id"],
-                        "name": item["name"],
-                        "input": args,
-                    }
-                )
+                args, truncated = _loads_tool_input(item["arguments"])
+                tool_use_block: ToolUseBlock = {
+                    "type": "tool_use",
+                    "id": item["call_id"],
+                    "name": item["name"],
+                    "input": args,
+                }
+                if truncated:
+                    tool_use_block["truncated"] = True
+                blocks.append(tool_use_block)
             elif item.get("type") == "reasoning":
                 thinking = "\n".join(
                     part["text"]
@@ -303,11 +366,15 @@ class OpenAIAdapter(Adapter):
         )
         _validate_headers("openai", extra_headers)
         url = self._RESPONSES_URL
+        resolved = _resolve_headers(
+            "openai", url, self._provider_headers, extra_headers
+        )
         req = _new_request(
             url,
             json.dumps(payload).encode(),
             {"Content-Type": "application/json"},
             extra_headers,
+            resolved,
             auth=(
                 "Authorization",
                 "Bearer ",
@@ -324,11 +391,13 @@ class OpenAIAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
-        req, timeout = self._build_request(
-            model, messages, system, tools, config, stream=False
-        )
         try:
-            data, latency_ms = _request_json("openai", req, timeout)
+            data, latency_ms = _request_json(
+                "openai",
+                *self._build_request(
+                    model, messages, system, tools, config, stream=False
+                ),
+            )
             with _shape_checked("openai"):
                 if data.get("status") == "failed":
                     self._raise_for_error(data.get("error"))
@@ -345,21 +414,18 @@ class OpenAIAdapter(Adapter):
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
-        req, timeout = self._build_request(
-            model, messages, system, tools, config, stream=True
-        )
-        try:
-            yield from _stream_request(
+        def start() -> _CancellableStream:
+            return _stream_request(
                 "openai",
-                req,
-                timeout,
+                *self._build_request(
+                    model, messages, system, tools, config, stream=True
+                ),
                 frames=_iter_sse,
                 handler=self._stream_handler,
                 terminal="response.completed",
             )
-        except errors.APIError as e:
-            self._invalidate_models_cache_on_404(e)
-            raise
+
+        return _ErrorHookedStream("openai", start, self._invalidate_models_cache_on_404)
 
     def _stream_handler(
         self, timer: _StreamTimer

@@ -67,6 +67,15 @@ class FakeEntryPoint:
         return self._target
 
 
+class AdapterModelInfoDefaultTests(unittest.TestCase):
+    """A third-party `Adapter` subclass that predates `model_info` (like
+    `StubAdapter`, which only implements the four originally-abstract methods)
+    must keep instantiating and fall through to the base's default."""
+
+    def test_unmodified_subclass_returns_none_without_error(self):
+        self.assertIsNone(StubAdapter().model_info("anything"))
+
+
 class TestProviderDiscovery(unittest.TestCase):
     def setUp(self):
         _clear_discovery_cache()

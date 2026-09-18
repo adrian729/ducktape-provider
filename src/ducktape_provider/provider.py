@@ -7,17 +7,19 @@ import functools
 import importlib.metadata
 import logging
 import re
+import sys
 import threading
 import urllib.error
 from collections.abc import AsyncGenerator, Callable, Collection, Iterator, Mapping
 from typing import Any, Literal, TypeVar
 
-from .adapter import Adapter, _Secret, _validate_timeout
+from .adapter import Adapter, _is_key_like, _Secret, _validate_timeout
 from .adapters.claude import ClaudeAdapter
 from .adapters.ollama import OllamaLocalAdapter
 from .adapters.openai import OpenAIAdapter
 from .errors import APIError, AuthError
-from .types import Config, Message, Response, StreamEvent, ToolDef
+from .streaming import _clear_tracebacks
+from .types import Config, Message, ModelInfo, Response, StreamEvent, ToolDef
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,213 @@ def _clear_discovery_cache() -> None:
     _loaded_adapter_classes.clear()
 
 
+_HEADERED_ADAPTER_CLASSES = (ClaudeAdapter, OpenAIAdapter, OllamaLocalAdapter)
+
+
+def _snapshot_config(config: Config | Mapping[str, Any] | None) -> dict[str, Any]:
+    """A frame-safe snapshot of `Provider(config=...)`, read with one `items()`
+    pass per container.
+
+    A header (legal only under `providers[name]["headers"]`, since it must
+    never reach another vendor or plugin) is wrapped as a `_Secret((name,
+    value))` the moment it is read off its mapping, then checked through
+    `_Secret.validate_header` — so no free function here ever takes a header's
+    name or value as a parameter, and neither ever sits in a frame local as
+    plain text. Every other key is `copy.deepcopy`d. Runs inside
+    `Provider.__init__`'s guarded step.
+    """
+    if config is None:
+        return {}
+    if not isinstance(config, Mapping):
+        raise TypeError(
+            f"Provider config must be a Mapping, not a {type(config).__name__}"
+        )
+    top = dict(config.items())
+    if "headers" in top:
+        raise ValueError(
+            "Provider config cannot set headers at the top level; set them per "
+            "provider instead, as config['providers'][name]['headers'], so a "
+            "header never reaches another vendor or plugin"
+        )
+    providers_in = top.pop("providers", None)
+    snapshot = {k: copy.deepcopy(v) for k, v in top.items()}
+    if providers_in is not None:
+        snapshot["providers"] = _snapshot_providers(providers_in)
+    return snapshot
+
+
+def _snapshot_providers(providers_in: object) -> dict[str, dict[str, Any]]:
+    if not isinstance(providers_in, Mapping):
+        raise TypeError(
+            "Provider config['providers'] must be a Mapping, not a "
+            f"{type(providers_in).__name__}"
+        )
+    out: dict[str, dict[str, Any]] = {}
+    for name, entry in dict(providers_in.items()).items():
+        if type(name) is not str:
+            raise TypeError(
+                "Provider config['providers'] names must be str, got "
+                f"{type(name).__name__}"
+            )
+        out[name] = _snapshot_provider_entry(name, entry)
+    return out
+
+
+def _snapshot_provider_entry(name: str, entry: object) -> dict[str, Any]:
+    if not isinstance(entry, Mapping):
+        raise TypeError(
+            f"Provider config['providers'][{name!r}] must be a Mapping, not a "
+            f"{type(entry).__name__}"
+        )
+    items = dict(entry.items())
+    headers_in = items.pop("headers", None)
+    out = {k: copy.deepcopy(v) for k, v in items.items()}
+    if headers_in is not None:
+        out["headers"] = _snapshot_headers(name, headers_in)
+    return out
+
+
+def _snapshot_headers(provider: str, headers_in: object) -> tuple[_Secret, ...]:
+    if not isinstance(headers_in, Mapping):
+        raise TypeError(
+            f"Provider config['providers'][{provider!r}]['headers'] must be a "
+            f"Mapping, not a {type(headers_in).__name__}"
+        )
+    secrets = [_Secret(pair) for pair in dict(headers_in.items()).items()]
+    for secret in secrets:
+        secret.validate_header(provider)
+    return tuple(secrets)
+
+
+def _check_non_header_keys(
+    owner: str, entry: Mapping[str, Any], reserved: frozenset[str]
+) -> None:
+    """Raises for a top-level or per-provider config key that isn't a plain
+    vendor field: `timeout` is validated, `providers`/`headers` are skipped
+    (handled elsewhere), a key-like key or one reserved by the adapter raises
+    ValueError."""
+    for key in entry:
+        if key in ("providers", "headers"):
+            continue
+        if key == "timeout":
+            _validate_timeout(owner, entry[key])
+            continue
+        if isinstance(key, str) and _is_key_like(key):
+            raise ValueError(
+                f"{owner} cannot set {key!r}: it looks like an API key; pass it "
+                "as api_key= on the adapter or Provider(api_keys=...) instead"
+            )
+        if key in reserved:
+            raise ValueError(
+                f"{owner} cannot set {key!r}: it is reserved for the "
+                "chat()/stream_chat() call itself"
+            )
+
+
+def _validate_provider_config(
+    adapters: Mapping[str, Adapter], snapshot: Mapping[str, Any]
+) -> None:
+    """Checks a config snapshot against the registered adapters: provider
+    names, reserved/key-like config keys, and (for headers) that the target is
+    a built-in adapter or a subclass of one. Touches provider names and
+    non-header keys only — headers were already checked while the snapshot
+    was taken, in `_snapshot_config`.
+    """
+    reserved_union: frozenset[str] = frozenset[str]().union(
+        *(getattr(a, "_RESERVED_CONFIG", frozenset()) for a in adapters.values())
+    )
+    _check_non_header_keys("Provider config", snapshot, reserved_union)
+    providers = snapshot.get("providers") or {}
+    if unknown := sorted(set(providers) - set(adapters)):
+        registered = ", ".join(repr(n) for n in adapters) or "none"
+        names = ", ".join(repr(n) for n in unknown)
+        verb = "is" if len(unknown) == 1 else "are"
+        raise ValueError(
+            f"Provider config['providers'] names {names}, which {verb} not a "
+            f"registered provider; registered providers: {registered}"
+        )
+    for name, entry in providers.items():
+        adapter = adapters[name]
+        if entry.get("headers") and not isinstance(adapter, _HEADERED_ADAPTER_CLASSES):
+            raise ValueError(
+                f"provider {name!r} cannot take configured headers: only "
+                "built-in adapters (ClaudeAdapter, OpenAIAdapter, "
+                "OllamaLocalAdapter, or a subclass) support them; pass them "
+                "per call instead"
+            )
+        _check_non_header_keys(
+            f"provider {name!r} config",
+            entry,
+            getattr(adapter, "_RESERVED_CONFIG", frozenset()),
+        )
+
+
+class _EvictingStream:
+    """Wraps an auto-matched stream so an `APIError` that reaches the consumer can
+    evict the cache entry — and forwards `close`/`cancel` to the wrapped stream
+    unchanged, so wrapping it here doesn't hide either from whatever holds this
+    object (a direct sync consumer, or `_stream_off_loop`'s reader thread). A
+    generator can't carry those methods, which is why this is a class."""
+
+    __slots__ = ("_inner", "_model", "_provider", "_resolved_name", "cancel")
+
+    def __init__(
+        self,
+        inner: Iterator[StreamEvent],
+        provider: "Provider",
+        model: str,
+        resolved_name: str,
+    ) -> None:
+        self._inner = inner
+        self._provider = provider
+        self._model = model
+        self._resolved_name = resolved_name
+        cancel = getattr(inner, "cancel", None)
+        if cancel is not None:
+            self.cancel = cancel
+
+    def __iter__(self) -> "_EvictingStream":
+        return self
+
+    def __next__(self) -> StreamEvent:
+        try:
+            return next(self._inner)
+        except APIError as exc:
+            self._provider._maybe_evict_auto_match(
+                exc, self._model, self._resolved_name
+            )
+            raise
+
+    def close(self) -> None:
+        close = getattr(self._inner, "close", None)
+        if close is not None:
+            close()
+
+    def throw(self, *args: Any, **kwargs: Any) -> StreamEvent:
+        throw = getattr(self._inner, "throw", None)
+        if throw is None:
+            raise AttributeError("wrapped stream has no throw()")
+        try:
+            return throw(*args, **kwargs)
+        except APIError as exc:
+            self._provider._maybe_evict_auto_match(
+                exc, self._model, self._resolved_name
+            )
+            raise
+
+    def send(self, value: None) -> StreamEvent:
+        send = getattr(self._inner, "send", None)
+        if send is None:
+            raise AttributeError("wrapped stream has no send()")
+        try:
+            return send(value)
+        except APIError as exc:
+            self._provider._maybe_evict_auto_match(
+                exc, self._model, self._resolved_name
+            )
+            raise
+
+
 class Provider:
     def __init__(
         self,
@@ -154,6 +363,7 @@ class Provider:
         api_keys: Mapping[str, str | Callable[[], str | None]]
         | Callable[[str], str | None]
         | None = None,
+        config: Config | Mapping[str, Any] | None = None,
     ):
         """`timeout=None` disables timeouts for every call; leaving it out keeps each adapter's default.
 
@@ -166,26 +376,48 @@ class Provider:
         threads at once. A passed adapter is never modified; a shallow copy gets
         the key, so a subclass's own mutable state (locks, dicts) stays shared
         with the original.
+
+        `config` sets defaults for every call, with the same shape as a call's
+        own `config`; see the README's Configuration section. `headers` are only
+        allowed per provider, as `config["providers"][name]["headers"]`, never
+        at the top level: a header must never reach another vendor or plugin.
+        They are only allowed for built-in adapters (or a subclass, built in or
+        passed in `adapters`), get the same guarantees as `api_keys` (redacted,
+        never pickled, never in a frame local of ours, sent only over https or
+        to an unproxied loopback address), and are also sent when checking
+        availability and listing models. A configured auth header (`x-api-key`
+        for Claude, `authorization` for OpenAI) replaces the key.
         """
-        if isinstance(api_keys, Mapping):
-            credentials: list[tuple[_Secret, _Secret]] | _Secret | None = [
-                (_Secret(name), _Secret(value)) for name, value in api_keys.items()
-            ]
+        stop = sys.exception()
+        try:
+            if isinstance(api_keys, Mapping):
+                credentials: list[tuple[_Secret, _Secret]] | _Secret | None = [
+                    (_Secret(name), _Secret(value))
+                    for name, value in dict(api_keys.items()).items()
+                ]
+            elif callable(api_keys):
+                credentials = _Secret(api_keys)
+            elif api_keys is not None:
+                raise TypeError(
+                    "api_keys must be a mapping of provider name to key or a "
+                    f"function, not a {type(api_keys).__name__}"
+                )
+            else:
+                credentials = None
+            provider_config = _snapshot_config(config)
+        except BaseException as e:
+            _clear_tracebacks(e, stop)
+            raise
+        finally:
             api_keys = None
-        elif callable(api_keys):
-            credentials = _Secret(api_keys)
-            api_keys = None
-        elif api_keys is not None:
-            api_keys_type = type(api_keys).__name__
-            api_keys = None
-            raise TypeError(
-                "api_keys must be a mapping of provider name to key or a function, "
-                f"not a {api_keys_type}"
-            )
-        else:
-            credentials = None
+            config = None
         if timeout is not _Default.TIMEOUT:
             _validate_timeout("Provider", timeout)
+        if timeout is not _Default.TIMEOUT and "timeout" in provider_config:
+            raise ValueError(
+                "Provider got a timeout both as timeout= and in config['timeout']; "
+                "pass just one"
+            )
         self._adapters: dict[str, Adapter] = (
             dict(adapters)
             if adapters is not None
@@ -214,12 +446,43 @@ class Provider:
             self._register_plugins(
                 None if autodiscover is True else frozenset(autodiscover)
             )
-        self._executor = executor
-        self._config: dict[str, Any] = {}
+        _validate_provider_config(self._adapters, provider_config)
+        self._config: dict[str, Any] = provider_config
         if timeout is not _Default.TIMEOUT:
             self._config["timeout"] = timeout
+        self._apply_provider_headers()
+        self._executor = executor
         self._auto_match_cache: dict[str, str] = {}
         self._auto_match_lock = threading.Lock()
+
+    def _apply_provider_headers(self) -> None:
+        """Copies each targeted adapter with its configured Provider headers,
+        the same way `_apply_api_keys` copies a keyed adapter — validated by
+        `_validate_provider_config` first, so every target here is a built-in
+        adapter or a subclass of one."""
+        headered = {
+            name: adapter
+            for name, adapter in self._adapters.items()
+            if isinstance(adapter, _HEADERED_ADAPTER_CLASSES)
+        }
+        for name, entry in (self._config.get("providers") or {}).items():
+            headers = entry.get("headers")
+            if not headers:
+                continue
+            adapter = headered[name]
+            copied = copy.copy(adapter)
+            if copied is adapter:
+                raise TypeError(
+                    f"cannot configure headers for {name!r}: copying its "
+                    "adapter returned the same instance, which would change "
+                    "the caller's"
+                )
+            copied._models_cache = None
+            copied._cache_time = 0.0
+            copied._warned_transport = False
+            copied._provider_headers = headers
+            copied._provider_name = name
+            self._adapters[name] = copied
 
     def _apply_api_keys(
         self, credentials: list[tuple[_Secret, _Secret]] | _Secret
@@ -454,16 +717,6 @@ class Provider:
         if _should_evict_cache(exc):
             self._evict_auto_match(model, resolved_name)
 
-    def _evict_on_error(
-        self, stream: Iterator[StreamEvent], model: str, resolved_name: str
-    ) -> Iterator[StreamEvent]:
-        """Wraps an auto-matched stream so an error that reaches the consumer can evict the cache entry."""
-        try:
-            yield from stream
-        except APIError as exc:
-            self._maybe_evict_auto_match(exc, model, resolved_name)
-            raise
-
     async def _run_off_loop(self, func: Callable[[], _T]) -> _T:
         """Runs func on self._executor (or the loop's default) with the caller's contextvars."""
         loop = asyncio.get_running_loop()
@@ -511,19 +764,57 @@ class Provider:
             if result is not None
         }
 
+    def model_info(
+        self, model: str, *, provider: str | None = None
+    ) -> ModelInfo | None:
+        """Context window and max output for `model`, when the provider knows it.
+        `None` if unknown, or if the resolved provider doesn't expose it at all
+        (e.g. `openai`). Resolves the provider the same way `chat` does — an
+        explicit `provider` short-circuits; omitted, the same auto-match/cache
+        used by `chat` and `models`. An adapter's `model_info` raising is not
+        swallowed here, same as `chat`/`stream_chat`.
+        """
+        _, adapter = self._resolve_provider(provider, model)
+        return adapter.model_info(model)
+
+    async def async_model_info(
+        self, model: str, *, provider: str | None = None
+    ) -> ModelInfo | None:
+        """`model_info`, off the event loop — resolution included, the same way
+        `async_chat` resolves an omitted `provider` off the loop rather than on it.
+        """
+
+        def call() -> ModelInfo | None:
+            _, adapter = self._resolve_provider(provider, model)
+            return adapter.model_info(model)
+
+        return await self._run_off_loop(call)
+
     def _resolve_config(
         self, provider: str, config: Config | Mapping[str, Any] | None
     ) -> dict[str, Any]:
-        """Layers self._config, config, config["providers"][provider] — each overrides the previous.
+        """Layers Provider top-level config, Provider `config["providers"][provider]`,
+        call top-level config, call `config["providers"][provider]` — each
+        overriding the previous.
 
-        `headers` merge key by key instead, so a per-provider header adds to the
-        call's headers rather than dropping them.
+        `headers` merge key by key instead, so a later layer's header adds to
+        the earlier layers' rather than dropping them. The Provider's own
+        configured headers never enter this dict — they are secrets, sent
+        straight from each adapter's `_provider_headers`, not through `config`.
         """
         config = config or {}
-        call_level = {k: v for k, v in config.items() if k != "providers"}
-        per_provider = (config.get("providers") or {}).get(provider) or {}
+        provider_top = {k: v for k, v in self._config.items() if k != "providers"}
+        provider_per = {
+            k: v
+            for k, v in (
+                (self._config.get("providers") or {}).get(provider) or {}
+            ).items()
+            if k != "headers"
+        }
+        call_top = {k: v for k, v in config.items() if k != "providers"}
+        call_per = (config.get("providers") or {}).get(provider) or {}
         merged: dict[str, Any] = {}
-        for layer in (self._config, call_level, per_provider):
+        for layer in (provider_top, provider_per, call_top, call_per):
             for key, value in layer.items():
                 if key == "headers" and isinstance(value, Mapping):
                     current = merged.get(key)
@@ -573,7 +864,7 @@ class Provider:
         )
         if provider is not None:
             return stream
-        return self._evict_on_error(stream, model, resolved_name)
+        return _EvictingStream(stream, self, model, resolved_name)
 
     async def async_chat(
         self,
@@ -633,7 +924,7 @@ class Provider:
                     tools,
                     self._resolve_config(resolved_name, config),
                 )
-                return self._evict_on_error(inner, model, resolved_name)
+                return _EvictingStream(inner, self, model, resolved_name)
 
         return self._stream_off_loop(open_stream)
 
@@ -644,13 +935,17 @@ class Provider:
 
         The reader creates, iterates, and closes the sync iterator, so no
         adapter code ever runs on the event loop. When the consumer stops early
-        (break, exception, cancellation) the reader is told to stop and closes
-        the iterator as soon as its current blocking read returns.
+        (break, exception, cancellation) the reader is told to stop, and — for a
+        stream that supports `cancel()` (the built-in adapters' streams do) — its
+        socket is force-closed immediately rather than waiting for the current
+        blocked read to return on its own; a stream that doesn't support it
+        degrades to the old wait-for-it behavior.
         """
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         slots = threading.Semaphore(_STREAM_BUFFER_SIZE)
         stopped = threading.Event()
+        live: list[Iterator[StreamEvent]] = []
 
         def put(item: tuple[str, Any]) -> bool:
             while not slots.acquire(timeout=_READER_POLL_SECONDS):
@@ -670,6 +965,11 @@ class Provider:
             iterator: Iterator[StreamEvent] | None = None
             try:
                 iterator = iter(open_stream())
+                live.append(iterator)
+                if stopped.is_set():
+                    cancel = getattr(iterator, "cancel", None)
+                    if cancel is not None:
+                        cancel()
                 for event in iterator:
                     if not put((_EVENT, event)):
                         consumer_gone = True
@@ -706,4 +1006,8 @@ class Provider:
                 return
         finally:
             stopped.set()
+            if live:
+                cancel = getattr(live[0], "cancel", None)
+                if cancel is not None:
+                    cancel()
             slots.release()

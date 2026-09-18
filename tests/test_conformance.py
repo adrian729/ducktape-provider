@@ -151,6 +151,8 @@ class _ConformanceBase(unittest.TestCase):
         self.assertEqual(response["stop_reason"], "end_turn")
         text_blocks = [b for b in response["content"] if b["type"] == "text"]
         self.assertGreaterEqual(len(text_blocks), 1)
+        self.assertIn("usage", response)
+        self.assertIsInstance(response["usage"], dict)
         self.assertIsInstance(response["usage"]["input_tokens"], int)
         self.assertIsInstance(response["usage"]["output_tokens"], int)
 

@@ -14,6 +14,7 @@ from http_test_utils import (
     http_error,
     ndjson_lines,
 )
+from test_provider_api_keys import clean_env, pointed_at, secret_headers
 
 from ducktape_provider import (
     APIError,
@@ -21,6 +22,7 @@ from ducktape_provider import (
     MalformedResponseError,
     Message,
     OllamaLocalAdapter,
+    Provider,
     ServerError,
     ToolDef,
     UnsupportedBlockError,
@@ -146,6 +148,79 @@ class OllamaSerializeTests(unittest.TestCase):
             ],
         )
 
+    def test_tool_result_with_list_content_joins_text_sub_blocks(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_0",
+                        "name": "search",
+                        "content": [
+                            {"type": "text", "text": "first"},
+                            {"type": "text", "text": "second"},
+                        ],
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages, system=None)
+        self.assertEqual(serialized[0]["content"], "first\nsecond")
+
+    def test_tool_result_is_error_with_list_content_prefixes_joined_text(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_0",
+                        "name": "search",
+                        "content": [{"type": "text", "text": "failed"}],
+                        "is_error": True,
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages, system=None)
+        self.assertEqual(serialized[0]["content"], "ERROR: failed")
+
+    def test_tool_result_is_error_with_str_content_still_prefixes(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_0",
+                        "name": "get_weather",
+                        "content": "sunny",
+                        "is_error": True,
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages, system=None)
+        self.assertEqual(serialized[0]["content"], "ERROR: sunny")
+
+    def test_tool_result_empty_list_content_becomes_empty_string(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_0",
+                        "name": "search",
+                        "content": [],
+                    }
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages, system=None)
+        self.assertEqual(serialized[0]["content"], "")
+
 
 class OllamaDeserializeTests(unittest.TestCase):
     def setUp(self):
@@ -223,6 +298,16 @@ class OllamaChatHTTPTests(unittest.TestCase):
         self.assertTrue(request.full_url.endswith("/api/chat"))
         sent = json.loads(request.data)
         self.assertEqual(sent["stream"], False)
+
+    @patch("urllib.request.urlopen")
+    def test_base_url_strips_trailing_slash(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(json.dumps(FINAL_DATA).encode())
+
+        with patch.dict("os.environ", {"OLLAMA_HOST": "http://127.0.0.1:11434/"}):
+            self.adapter.chat("llama3", MESSAGES)
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/chat")
 
     @patch("urllib.request.urlopen")
     def test_chat_raises_server_error_on_500(self, mock_urlopen):
@@ -398,6 +483,34 @@ class OllamaUnsupportedBlockTests(unittest.TestCase):
             serialized = self.adapter._serialize(messages, system=None)
         self.assertEqual(serialized, [])
 
+    def test_image_in_tool_result_content_raises_before_any_network_request(self):
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = AssertionError("urlopen should never be called")
+            messages: list[Message] = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_0",
+                            "name": "screenshot",
+                            "content": [
+                                {"type": "text", "text": "here"},
+                                {
+                                    "type": "image",
+                                    "source": "base64",
+                                    "media_type": "image/png",
+                                    "data": "abc",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+            with self.assertRaises(UnsupportedBlockError):
+                self.adapter.chat("llama3", messages)
+            mock_urlopen.assert_not_called()
+
 
 class OllamaStreamContentTests(unittest.TestCase):
     def setUp(self):
@@ -501,14 +614,14 @@ class OllamaStreamContentTests(unittest.TestCase):
         self, mock_urlopen
     ):
         cases = {
-            "missing": ({"name": "f"}, {}),
-            "null": ({"name": "f", "arguments": None}, {}),
-            "unparseable string": ({"name": "f", "arguments": "{oops"}, {}),
-            "non-object string": ({"name": "f", "arguments": "[1]"}, {}),
-            "json string": ({"name": "f", "arguments": '{"a": 1}'}, {"a": 1}),
-            "object": ({"name": "f", "arguments": {"a": 1}}, {"a": 1}),
+            "missing": ({"name": "f"}, {}, False),
+            "null": ({"name": "f", "arguments": None}, {}, False),
+            "unparseable string": ({"name": "f", "arguments": "{oops"}, {}, True),
+            "non-object string": ({"name": "f", "arguments": "[1]"}, {}, True),
+            "json string": ({"name": "f", "arguments": '{"a": 1}'}, {"a": 1}, False),
+            "object": ({"name": "f", "arguments": {"a": 1}}, {"a": 1}, False),
         }
-        for label, (function, expected_input) in cases.items():
+        for label, (function, expected_input, expected_truncated) in cases.items():
             with self.subTest(label):
                 mock_urlopen.return_value = FakeStreamResponse(
                     ndjson_lines(
@@ -525,6 +638,7 @@ class OllamaStreamContentTests(unittest.TestCase):
                 self.assertEqual(json.loads(partial), expected_input)
                 [block] = final_response(events)["content"]
                 self.assertEqual(block, {**block, "input": expected_input})
+                self.assertEqual(block.get("truncated", False), expected_truncated)
 
     @patch("urllib.request.urlopen")
     def test_multiple_tool_calls_across_chunks_get_sequential_ids(self, mock_urlopen):
@@ -633,7 +747,9 @@ class OllamaLatencyTests(unittest.TestCase):
     def test_stream_latency_and_ttft_use_wire_read_times(self, mock_urlopen):
         mock_urlopen.return_value = FakeStreamResponse(ndjson_lines(*STREAM_CHUNKS))
         with patch("time.monotonic", side_effect=[100.0, 100.25, 100.5, 101.0]):
-            events = list(self.adapter.stream_chat("llama3", MESSAGES))
+            events = list(
+                self.adapter.stream_chat("llama3", MESSAGES, config={"timeout": None})
+            )
         final = final_response(events)
         self.assertEqual(final["ttft_ms"], 250.0)
         self.assertEqual(final["latency_ms"], 1000.0)
@@ -656,7 +772,11 @@ class OllamaLatencyTests(unittest.TestCase):
                 mock_urlopen.return_value = FakeStreamResponse(ndjson_lines(*chunks))
                 clock = [100.0 + i * 0.5 for i in range(len(chunks) + 1)]
                 with patch("time.monotonic", side_effect=clock):
-                    events = list(self.adapter.stream_chat("llama3", MESSAGES))
+                    events = list(
+                        self.adapter.stream_chat(
+                            "llama3", MESSAGES, config={"timeout": None}
+                        )
+                    )
                 final = final_response(events)
                 self.assertEqual(final["ttft_ms"], len(chunks) * 500.0)
                 self.assertEqual(final["latency_ms"], final["ttft_ms"])
@@ -700,7 +820,15 @@ class OllamaInvalidToolArgsTests(unittest.TestCase):
         response = self.adapter.chat("llama3", MESSAGES)
         self.assertEqual(
             response["content"],
-            [{"type": "tool_use", "id": "call_0", "name": "f", "input": {}}],
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call_0",
+                    "name": "f",
+                    "input": {},
+                    "truncated": True,
+                }
+            ],
         )
 
     @patch("urllib.request.urlopen")
@@ -719,7 +847,15 @@ class OllamaInvalidToolArgsTests(unittest.TestCase):
         response = self.adapter.chat("llama3", MESSAGES)
         self.assertEqual(
             response["content"],
-            [{"type": "tool_use", "id": "call_0", "name": "f", "input": {}}],
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call_0",
+                    "name": "f",
+                    "input": {},
+                    "truncated": True,
+                }
+            ],
         )
 
     @patch("urllib.request.urlopen")
@@ -735,8 +871,38 @@ class OllamaInvalidToolArgsTests(unittest.TestCase):
         response = final_response(list(self.adapter.stream_chat("llama3", MESSAGES)))
         self.assertEqual(
             response["content"],
-            [{"type": "tool_use", "id": "call_0", "name": "f", "input": {}}],
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call_0",
+                    "name": "f",
+                    "input": {},
+                    "truncated": True,
+                }
+            ],
         )
+
+    @patch("urllib.request.urlopen")
+    def test_legitimately_empty_arguments_are_not_marked_truncated_in_chat(
+        self, mock_urlopen
+    ):
+        for arguments in ("", "{}"):
+            with self.subTest(arguments=arguments):
+                data = {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {"function": {"name": "f", "arguments": arguments}}
+                        ],
+                    },
+                    "done_reason": "stop",
+                }
+                mock_urlopen.return_value = buffered_response(json.dumps(data).encode())
+                response = self.adapter.chat("llama3", MESSAGES)
+                self.assertEqual(
+                    response["content"],
+                    [{"type": "tool_use", "id": "call_0", "name": "f", "input": {}}],
+                )
 
 
 class OllamaStreamAccumulationTests(unittest.TestCase):
@@ -781,6 +947,105 @@ class OllamaStreamAccumulationTests(unittest.TestCase):
             )
         )
         self.assertEqual(response["content"], [{"type": "text", "text": "ab" * n}])
+
+
+class OllamaModelInfoTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+        self.enterContext(clean_env(OLLAMA_HOST="http://127.0.0.1:9"))
+
+    @patch("urllib.request.urlopen")
+    def test_reads_context_window_from_a_context_length_key(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps({"model_info": {"llama.context_length": 8192}}).encode()
+        )
+        self.assertEqual(
+            self.adapter.model_info("llama3"),
+            {"context_window": 8192, "max_output_tokens": None},
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_sends_the_model_name_in_the_request_body(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps({"model_info": {}}).encode()
+        )
+        self.adapter.model_info("llama3")
+        request = mock_urlopen.call_args.args[0]
+        self.assertTrue(request.full_url.endswith("/api/show"))
+        self.assertEqual(json.loads(request.data), {"model": "llama3"})
+
+    @patch("urllib.request.urlopen")
+    def test_no_matching_key_returns_none_context_window(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps({"model_info": {"some.other_field": 1}}).encode()
+        )
+        self.assertEqual(
+            self.adapter.model_info("llama3"),
+            {"context_window": None, "max_output_tokens": None},
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_a_bool_valued_context_length_key_is_not_mistaken_for_an_int(
+        self, mock_urlopen
+    ):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps({"model_info": {"llama.context_length": True}}).encode()
+        )
+        self.assertEqual(
+            self.adapter.model_info("llama3"),
+            {"context_window": None, "max_output_tokens": None},
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_missing_model_info_returns_none_context_window(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(json.dumps({}).encode())
+        self.assertEqual(
+            self.adapter.model_info("llama3"),
+            {"context_window": None, "max_output_tokens": None},
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_max_output_tokens_is_always_none(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps({"model_info": {"llama.context_length": 4096}}).encode()
+        )
+        info = self.adapter.model_info("llama3")
+        assert info is not None
+        self.assertIsNone(info["max_output_tokens"])
+
+    @patch("urllib.request.urlopen")
+    def test_404_returns_none_not_raised(self, mock_urlopen):
+        mock_urlopen.side_effect = http_error(
+            "http://127.0.0.1:9/api/show", 404, b"not found"
+        )
+        self.assertIsNone(self.adapter.model_info("llama3"))
+
+    @patch("urllib.request.urlopen")
+    def test_connection_error_returns_none_not_raised(self, mock_urlopen):
+        mock_urlopen.side_effect = ConnectionRefusedError()
+        self.assertIsNone(self.adapter.model_info("llama3"))
+
+    @patch("urllib.request.urlopen")
+    def test_timeout_returns_none_not_raised(self, mock_urlopen):
+        mock_urlopen.side_effect = TimeoutError()
+        self.assertIsNone(self.adapter.model_info("llama3"))
+
+    def test_transport_refusal_gate_returns_none_with_one_warning(self):
+        provider = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", "t"),
+        )
+        adapter = provider._adapters["ollama-local"]
+        with (
+            pointed_at(provider, "ollama-local", "http://gateway.example"),
+            patch("urllib.request.urlopen", side_effect=AssertionError("no request")),
+            self.assertLogs("ducktape_provider", "WARNING") as logs,
+        ):
+            self.assertIsNone(adapter.model_info("llama3"))
+            self.assertEqual(adapter.models(), set())
+            self.assertFalse(adapter.is_available())
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("ollama-local", logs.records[0].getMessage())
 
 
 class OllamaModelsCacheInvalidationTests(unittest.TestCase):

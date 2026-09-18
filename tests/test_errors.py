@@ -39,6 +39,14 @@ class RaiseForHttpErrorTests(unittest.TestCase):
         self.assertIs(type(ctx.exception), errors.APIError)
         self.assertEqual(ctx.exception.status, 400)
 
+    def test_413_raises_context_overflow_error_regardless_of_body(self):
+        for body in (b"", b"unrelated gateway error"):
+            with self.subTest(body=body):
+                e = http_error("http://x", 413, body)
+                with self.assertRaises(errors.ContextOverflowError) as ctx:
+                    errors.raise_for_http_error("test", e)
+                self.assertEqual(ctx.exception.status, 413)
+
     def test_404_raises_plain_api_error(self):
         e = http_error("http://x", 404, b"not found")
         with self.assertRaises(errors.APIError) as ctx:
@@ -150,12 +158,18 @@ class RaiseForVendorErrorTests(unittest.TestCase):
             (429, errors.RateLimitError),
             (529, errors.ServerError),
             (404, errors.APIError),
+            (413, errors.ContextOverflowError),
         ]
         for status, expected in cases:
             with self.subTest(status=status), self.assertRaises(errors.APIError) as ctx:
                 errors.raise_for_vendor_error("test", "boom", status=status)
             self.assertIs(type(ctx.exception), expected)
             self.assertEqual(ctx.exception.status, status)
+
+    def test_413_raises_context_overflow_regardless_of_body(self):
+        with self.assertRaises(errors.ContextOverflowError) as ctx:
+            errors.raise_for_vendor_error("test", "boom", status=413, body="unrelated")
+        self.assertEqual(ctx.exception.status, 413)
 
     def test_unknown_status_with_overflow_marker_raises_context_overflow(self):
         with self.assertRaises(errors.ContextOverflowError):
