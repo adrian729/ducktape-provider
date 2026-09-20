@@ -10,16 +10,36 @@ import re
 import sys
 import threading
 import urllib.error
-from collections.abc import AsyncGenerator, Callable, Collection, Iterator, Mapping
-from typing import Any, Literal, TypeVar
+from collections.abc import (
+    AsyncGenerator,
+    Callable,
+    Collection,
+    Iterator,
+    Mapping,
+    Sequence,
+)
+from typing import Any, Literal, TypeVar, cast
 
 from .adapter import Adapter, _is_key_like, _Secret, _validate_timeout
 from .adapters.claude import ClaudeAdapter
 from .adapters.ollama import OllamaLocalAdapter
 from .adapters.openai import OpenAIAdapter
-from .errors import APIError, AuthError
+from .errors import (
+    APIError,
+    AuthError,
+    UnsupportedOperationError,
+    raise_for_malformed_response,
+)
 from .streaming import _clear_tracebacks
-from .types import Config, Message, ModelInfo, Response, StreamEvent, ToolDef
+from .types import (
+    Config,
+    EmbedResponse,
+    Message,
+    ModelInfo,
+    Response,
+    StreamEvent,
+    ToolDef,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +86,24 @@ def _probe_available(name: str, adapter: Adapter) -> bool:
         return False
 
 
-def _usable_models(name: str, adapter: Adapter) -> list[str] | None:
-    """Sorted adapter.models(), or None if the adapter is unavailable or raises."""
+def _list_models(adapter: Adapter) -> set[str]:
+    """The adapter's chat model ids."""
+    return adapter.models()
+
+
+def _list_embed_models(adapter: Adapter) -> set[str]:
+    """The adapter's embedding model ids."""
+    return adapter.embed_models()
+
+
+def _usable_models(
+    name: str, adapter: Adapter, lister: Callable[[Adapter], set[str]]
+) -> list[str] | None:
+    """Sorted lister(adapter), or None if the adapter is unavailable or raises."""
     if not _probe_available(name, adapter):
         return None
     try:
-        return sorted(adapter.models())
+        return sorted(lister(adapter))
     except Exception:
         logger.warning("provider %r raised while listing models", name, exc_info=True)
         return None
@@ -244,8 +276,7 @@ def _check_non_header_keys(
             )
         if key in reserved:
             raise ValueError(
-                f"{owner} cannot set {key!r}: it is reserved for the "
-                "chat()/stream_chat() call itself"
+                f"{owner} cannot set {key!r}: it is reserved by the adapter's calls"
             )
 
 
@@ -259,7 +290,11 @@ def _validate_provider_config(
     was taken, in `_snapshot_config`.
     """
     reserved_union: frozenset[str] = frozenset[str]().union(
-        *(getattr(a, "_RESERVED_CONFIG", frozenset()) for a in adapters.values())
+        *(
+            getattr(a, "_RESERVED_CONFIG", frozenset())
+            | getattr(a, "_EMBED_RESERVED_CONFIG", frozenset())
+            for a in adapters.values()
+        )
     )
     _check_non_header_keys("Provider config", snapshot, reserved_union)
     providers = snapshot.get("providers") or {}
@@ -283,7 +318,8 @@ def _validate_provider_config(
         _check_non_header_keys(
             f"provider {name!r} config",
             entry,
-            getattr(adapter, "_RESERVED_CONFIG", frozenset()),
+            getattr(adapter, "_RESERVED_CONFIG", frozenset())
+            | getattr(adapter, "_EMBED_RESERVED_CONFIG", frozenset()),
         )
 
 
@@ -453,6 +489,7 @@ class Provider:
         self._apply_provider_headers()
         self._executor = executor
         self._auto_match_cache: dict[str, str] = {}
+        self._auto_match_embed_cache: dict[str, str] = {}
         self._auto_match_lock = threading.Lock()
 
     def _apply_provider_headers(self) -> None:
@@ -477,8 +514,7 @@ class Provider:
                     "adapter returned the same instance, which would change "
                     "the caller's"
                 )
-            copied._models_cache = None
-            copied._cache_time = 0.0
+            copied._reset_caches()
             copied._warned_transport = False
             copied._provider_headers = headers
             copied._provider_name = name
@@ -524,8 +560,7 @@ class Provider:
                     f"api_keys cannot set a key for {name!r}: copying its adapter "
                     "returned the same instance, which would change the caller's"
                 )
-            copied._models_cache = None
-            copied._cache_time = 0.0
+            copied._reset_caches()
             copied._key_source = source
             self._adapters[name] = copied
 
@@ -659,19 +694,26 @@ class Provider:
             raise KeyError(message) from None
 
     def _resolve_provider(
-        self, provider: str | None, model: str
+        self,
+        provider: str | None,
+        model: str,
+        *,
+        cache: dict[str, str] | None = None,
+        lister: Callable[[Adapter], set[str]] = _list_models,
     ) -> tuple[str, Adapter]:
         """An explicit provider resolves eagerly (unknown name raises); omitted,
-        the first available adapter (in registration order) whose models()
+        the first available adapter (in registration order) whose `lister`
         contains `model` is matched, and the match is cached on this instance
-        so a repeat call skips the is_available()/models() I/O. Auto-match (on
+        so a repeat call skips the is_available()/lister() I/O. Auto-match (on
         a cache miss) does that I/O, so callers on the event loop must run this
         off it.
         """
+        if cache is None:
+            cache = self._auto_match_cache
         if provider is not None:
             return provider, self._adapter(provider)
         with self._auto_match_lock:
-            cached_name = self._auto_match_cache.get(model)
+            cached_name = cache.get(model)
             if cached_name is not None:
                 return cached_name, self._adapters[cached_name]
         checked: list[str] = []
@@ -680,7 +722,7 @@ class Provider:
                 continue
             checked.append(name)
             try:
-                models = adapter.models()
+                models = lister(adapter)
             except Exception:
                 logger.warning(
                     "provider %r raised while listing models during auto-match",
@@ -690,8 +732,8 @@ class Provider:
                 continue
             if model in models:
                 with self._auto_match_lock:
-                    first_fill = model not in self._auto_match_cache
-                    self._auto_match_cache[model] = name
+                    first_fill = model not in cache
+                    cache[model] = name
                 if first_fill:
                     logger.warning(
                         "no provider given; matched model %r to provider %r",
@@ -704,18 +746,27 @@ class Provider:
             f"no provider serves model {model!r}; available providers checked: {available}"
         )
 
-    def _evict_auto_match(self, model: str, resolved_name: str) -> None:
+    def _evict_auto_match(
+        self, model: str, resolved_name: str, *, cache: dict[str, str] | None = None
+    ) -> None:
         """Drops a stale cache entry after a call through it fails in a way that
         implicates the provider itself, not just the request (see `_should_evict_cache`)."""
+        if cache is None:
+            cache = self._auto_match_cache
         with self._auto_match_lock:
-            if self._auto_match_cache.get(model) == resolved_name:
-                del self._auto_match_cache[model]
+            if cache.get(model) == resolved_name:
+                del cache[model]
 
     def _maybe_evict_auto_match(
-        self, exc: APIError, model: str, resolved_name: str
+        self,
+        exc: APIError,
+        model: str,
+        resolved_name: str,
+        *,
+        cache: dict[str, str] | None = None,
     ) -> None:
         if _should_evict_cache(exc):
-            self._evict_auto_match(model, resolved_name)
+            self._evict_auto_match(model, resolved_name, cache=cache)
 
     async def _run_off_loop(self, func: Callable[[], _T]) -> _T:
         """Runs func on self._executor (or the loop's default) with the caller's contextvars."""
@@ -730,12 +781,13 @@ class Provider:
             for name, adapter in self._adapters.items()
         }
 
-    def models(self) -> dict[str, list[str]]:
+    def models(self, *, embeddings: bool = False) -> dict[str, list[str]]:
         """Usable model ids by provider; nothing from unreachable vendors."""
+        lister = _list_embed_models if embeddings else _list_models
         return {
             name: models
             for name, adapter in self._adapters.items()
-            if (models := _usable_models(name, adapter)) is not None
+            if (models := _usable_models(name, adapter, lister)) is not None
         }
 
     async def async_providers(self) -> dict[str, bool]:
@@ -749,12 +801,15 @@ class Provider:
         )
         return {name: result for (name, _), result in zip(adapters, results)}
 
-    async def async_models(self) -> dict[str, list[str]]:
+    async def async_models(self, *, embeddings: bool = False) -> dict[str, list[str]]:
         """models(), querying every adapter concurrently off the event loop."""
+        lister = _list_embed_models if embeddings else _list_models
         adapters = list(self._adapters.items())
         results = await asyncio.gather(
             *(
-                self._run_off_loop(functools.partial(_usable_models, name, adapter))
+                self._run_off_loop(
+                    functools.partial(_usable_models, name, adapter, lister)
+                )
                 for name, adapter in adapters
             )
         )
@@ -791,7 +846,11 @@ class Provider:
         return await self._run_off_loop(call)
 
     def _resolve_config(
-        self, provider: str, config: Config | Mapping[str, Any] | None
+        self,
+        provider: str,
+        config: Config | Mapping[str, Any] | None,
+        *,
+        embed: bool = False,
     ) -> dict[str, Any]:
         """Layers Provider top-level config, Provider `config["providers"][provider]`,
         call top-level config, call `config["providers"][provider]` — each
@@ -801,6 +860,9 @@ class Provider:
         the earlier layers' rather than dropping them. The Provider's own
         configured headers never enter this dict — they are secrets, sent
         straight from each adapter's `_provider_headers`, not through `config`.
+
+        For `embed`, the two Provider-level layers contribute only `timeout`, so
+        a chat default like `temperature` never reaches an embeddings body.
         """
         config = config or {}
         provider_top = {k: v for k, v in self._config.items() if k != "providers"}
@@ -811,6 +873,9 @@ class Provider:
             ).items()
             if k != "headers"
         }
+        if embed:
+            provider_top = {k: v for k, v in provider_top.items() if k == "timeout"}
+            provider_per = {k: v for k, v in provider_per.items() if k == "timeout"}
         call_top = {k: v for k, v in config.items() if k != "providers"}
         call_per = (config.get("providers") or {}).get(provider) or {}
         merged: dict[str, Any] = {}
@@ -847,6 +912,110 @@ class Provider:
             if provider is None:
                 self._maybe_evict_auto_match(exc, model, resolved_name)
             raise
+
+    @staticmethod
+    def _normalize_embed_input(input: str | Sequence[str]) -> list[str]:
+        """One text or a sequence of texts, validated and as a list."""
+        if isinstance(input, str):
+            items = [input]
+        elif isinstance(input, (bytes, bytearray, memoryview)):
+            raise TypeError(
+                "embed() input must be a str or a sequence of str, not "
+                f"{type(input).__name__}"
+            )
+        elif isinstance(input, (set, frozenset)):
+            raise TypeError(
+                "embed() input must be a str or a sequence of str, not a "
+                f"{type(input).__name__}, whose order is not defined"
+            )
+        elif isinstance(input, Mapping):
+            raise TypeError(
+                "embed() input must be a str or a sequence of str, not a mapping"
+            )
+        else:
+            try:
+                items = list(input)
+            except TypeError:
+                raise TypeError(
+                    "embed() input must be a str or a sequence of str, not "
+                    f"{type(input).__name__}"
+                ) from None
+        if not items:
+            raise ValueError("embed() input must not be empty")
+        for item in items:
+            if not isinstance(item, str):
+                raise TypeError(
+                    f"embed() input elements must be str, got {type(item).__name__}"
+                )
+            if not item:
+                raise ValueError("embed() input elements must not be empty strings")
+        return items
+
+    def embed(
+        self,
+        model: str,
+        input: str | Sequence[str],
+        config: Config | Mapping[str, Any] | None = None,
+        *,
+        provider: str | None = None,
+    ) -> EmbedResponse:
+        input_list = self._normalize_embed_input(input)
+        resolved_name, adapter = self._resolve_provider(
+            provider,
+            model,
+            cache=self._auto_match_embed_cache,
+            lister=_list_embed_models,
+        )
+        try:
+            response = adapter.embed(
+                model,
+                input_list,
+                self._resolve_config(resolved_name, config, embed=True),
+            )
+        except UnsupportedOperationError as exc:
+            raise UnsupportedOperationError(
+                f"provider {resolved_name!r} does not support embed()"
+            ) from exc
+        except APIError as exc:
+            if provider is None:
+                self._maybe_evict_auto_match(
+                    exc, model, resolved_name, cache=self._auto_match_embed_cache
+                )
+            raise
+        try:
+            embeddings = response["embeddings"]
+            if len(embeddings) != len(input_list):
+                raise_for_malformed_response(
+                    resolved_name,
+                    ValueError(
+                        f"expected {len(input_list)} embeddings, got {len(embeddings)}"
+                    ),
+                    operation="embed",
+                )
+            dimensions = len(embeddings[0])
+            if dimensions == 0 or not all(
+                len(vector) == dimensions for vector in embeddings
+            ):
+                raise_for_malformed_response(
+                    resolved_name,
+                    ValueError("embeddings vectors are empty or ragged"),
+                    operation="embed",
+                )
+            normalized: list[list[float]] = []
+            for vector in embeddings:
+                row: list[float] = []
+                for value in vector:
+                    if isinstance(value, bool) or not hasattr(value, "__float__"):
+                        raise TypeError("embeddings vectors must contain numbers")
+                    row.append(float(value))
+                normalized.append(row)
+        except (AttributeError, KeyError, IndexError, TypeError, ValueError) as exc:
+            raise_for_malformed_response(resolved_name, exc, operation="embed")
+        response = cast(
+            EmbedResponse,
+            {**response, "embeddings": normalized, "dimensions": dimensions},
+        )
+        return response
 
     def stream_chat(
         self,
@@ -892,6 +1061,21 @@ class Provider:
                 raise
 
         return await self._run_off_loop(call)
+
+    async def async_embed(
+        self,
+        model: str,
+        input: str | Sequence[str],
+        config: Config | Mapping[str, Any] | None = None,
+        *,
+        provider: str | None = None,
+    ) -> EmbedResponse:
+        """`embed`, off the event loop — validation, resolution and the request
+        all run in the executor thread.
+        """
+        return await self._run_off_loop(
+            lambda: self.embed(model, input, config, provider=provider)
+        )
 
     def async_stream_chat(
         self,

@@ -142,7 +142,7 @@ class ClaudeAdapter(Adapter):
                     ),
                     timeout=3,
                 ) as resp:
-                    data = _read_json(resp, "claude")
+                    data = _read_json(resp, "claude", operation="models")
                 for m in data.get("data", []):
                     model_infos[m["id"]] = {
                         "context_window": m.get("max_input_tokens"),
@@ -177,9 +177,13 @@ class ClaudeAdapter(Adapter):
             return None
         return self._models_cache.get(model) if self._models_cache else None
 
+    def _reset_caches(self) -> None:
+        self._models_cache = None
+        self._cache_time = 0.0
+
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
         if e.status == 404:
-            self._models_cache = None
+            self._reset_caches()
 
     def _content_source(self, block: ImageBlock | DocumentBlock) -> dict[str, Any]:
         if block["source"] == "url":

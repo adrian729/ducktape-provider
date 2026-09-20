@@ -1,4 +1,4 @@
-"""One normalized chat/tool-use interface over Claude, OpenAI, and local Ollama."""
+"""One normalized chat, tool-use and embeddings interface over Claude, OpenAI, and local Ollama."""
 
 from .adapters.claude import ClaudeAdapter
 from .adapters.ollama import OllamaLocalAdapter
@@ -17,6 +17,8 @@ from .types import (
     ContextOverflowError,
     DocumentBlock,
     DucktapeError,
+    EmbedResponse,
+    EmbedUsage,
     ImageBlock,
     JsonSchema,
     MalformedResponseError,
@@ -41,6 +43,7 @@ from .types import (
     ToolUseDeltaEvent,
     ToolUseStartEvent,
     UnsupportedBlockError,
+    UnsupportedOperationError,
     UrlDocumentBlock,
     UrlImageBlock,
     Usage,
@@ -60,6 +63,8 @@ __all__ = [
     "ContextOverflowError",
     "DocumentBlock",
     "DucktapeError",
+    "EmbedResponse",
+    "EmbedUsage",
     "ImageBlock",
     "JsonSchema",
     "MalformedResponseError",
@@ -87,6 +92,7 @@ __all__ = [
     "ToolUseDeltaEvent",
     "ToolUseStartEvent",
     "UnsupportedBlockError",
+    "UnsupportedOperationError",
     "UrlDocumentBlock",
     "UrlImageBlock",
     "Usage",

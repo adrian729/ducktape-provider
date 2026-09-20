@@ -13,9 +13,10 @@ from typing import Any, Self
 from unittest.mock import patch
 
 from ducktape_provider.adapter import Adapter
-from ducktape_provider.errors import APIError
+from ducktape_provider.errors import APIError, UnsupportedOperationError
 from ducktape_provider.provider import _STREAM_BUFFER_SIZE, Provider
 from ducktape_provider.types import (
+    EmbedResponse,
     Message,
     ModelInfo,
     Response,
@@ -38,6 +39,13 @@ FIXED_STREAM: list[StreamEvent] = [
     {"type": "block_stop", "index": 0},
     {"type": "message_stop", "response": FIXED_RESPONSE},
 ]
+
+FIXED_EMBED: EmbedResponse = {
+    "embeddings": [[0.1, 0.2, 0.3]],
+    "usage": {"input_tokens": 1},
+    "raw": {},
+    "latency_ms": 0.0,
+}
 
 MESSAGES: list[Message] = [
     {"role": "user", "content": [{"type": "text", "text": "hi"}]},
@@ -62,12 +70,20 @@ class FakeAdapter(Adapter):
         is_available: Callable[[], bool] = lambda: True,
         models: Callable[[], set[str]] = lambda: {"fake-model"},
         model_info: Callable[[], ModelInfo | None] = lambda: None,
+        embed: Callable[[str, list[str], dict[str, Any] | None], EmbedResponse]
+        | None = None,
+        embed_models: Callable[[], set[str]] = lambda: set(),
     ):
         self._chat = chat
         self._stream = stream
         self._is_available = is_available
         self._models = models
         self._model_info = model_info
+        self._embed = embed
+        self._embed_models = embed_models
+        self.embed_calls = 0
+        self.embed_models_calls = 0
+        self.embed_models_threads: list[threading.Thread] = []
 
     def is_available(self) -> bool:
         return self._is_available()
@@ -77,6 +93,22 @@ class FakeAdapter(Adapter):
 
     def model_info(self, model: str) -> ModelInfo | None:
         return self._model_info()
+
+    def embed_models(self) -> set[str]:
+        self.embed_models_calls += 1
+        self.embed_models_threads.append(threading.current_thread())
+        return self._embed_models()
+
+    def embed(
+        self,
+        model: str,
+        input: list[str],
+        config: dict[str, Any] | None = None,
+    ) -> EmbedResponse:
+        self.embed_calls += 1
+        if self._embed is not None:
+            return self._embed(model, input, config)
+        return super().embed(model, input, config)
 
     def chat(
         self,
@@ -762,6 +794,132 @@ class TestProviderAsyncExecutorAndDiscovery(unittest.IsolatedAsyncioTestCase):
             provider.async_stream_chat("fake-model", MESSAGES, provider="nope")
         with self.assertRaisesRegex(KeyError, "unknown provider 'nope'"):
             await provider.async_chat("fake-model", MESSAGES, provider="nope")
+
+
+class TestProviderAsyncEmbed(unittest.IsolatedAsyncioTestCase):
+    """Async embed mirrors sync embed but off the event loop."""
+
+    async def test_async_embed_matches_sync_embed_for_str_and_batch(self):
+        """async_embed returns the same result as sync embed."""
+
+        def embed(
+            model: str, input: list[str], config: dict[str, Any] | None = None
+        ) -> EmbedResponse:
+            return {
+                "embeddings": [[float(len(t))] * 2 for t in input],
+                "usage": {"input_tokens": len(input)},
+                "raw": {},
+                "latency_ms": 0.0,
+            }
+
+        provider = Provider(
+            adapters={
+                "fake": FakeAdapter(embed=embed, embed_models=lambda: {"embed-model"})
+            }
+        )
+        for inp in ["hello", ["a", "b", "c"]]:
+            with self.subTest(input=inp):
+                expected = provider.embed("embed-model", inp, provider="fake")
+                actual = await provider.async_embed("embed-model", inp, provider="fake")
+                self.assertEqual(actual, expected)
+
+    async def test_async_embed_does_not_block_event_loop(self):
+        """A slow embed does not stall the event loop."""
+
+        def slow_embed(
+            model: str, input: list[str], config: dict[str, Any] | None = None
+        ) -> EmbedResponse:
+            time.sleep(0.2)
+            return FIXED_EMBED
+
+        provider = Provider(adapters={"slow": FakeAdapter(embed=slow_embed)})
+        with LoopTicker() as ticker:
+            await provider.async_embed("m", "hi", provider="slow")
+        self.assertGreater(ticker.count, 5)
+
+    async def test_async_embed_propagates_api_error(self):
+        """APIError from embed propagates unwrapped."""
+
+        failing = FakeAdapter(
+            embed=lambda *_a, **_k: raise_(APIError("boom", status=500))
+        )
+        provider = Provider(adapters={"failing": failing})
+        with self.assertRaises(APIError):
+            await provider.async_embed("m", "hi", provider="failing")
+
+    async def test_async_embed_propagates_unsupported_operation(self):
+        """UnsupportedOperationError propagates with provider name."""
+
+        provider = Provider(adapters={"fake": FakeAdapter()})
+        with self.assertRaises(UnsupportedOperationError) as ctx:
+            await provider.async_embed("m", "hi", provider="fake")
+        self.assertEqual(str(ctx.exception), "provider 'fake' does not support embed()")
+        self.assertIsInstance(ctx.exception.__cause__, UnsupportedOperationError)
+
+    async def test_async_embed_propagates_contextvars(self):
+        """Contextvars propagate into the embed worker."""
+
+        request_id = contextvars.ContextVar("request_id", default="unset")
+        seen: list[str] = []
+
+        def embed(
+            model: str, input: list[str], config: dict[str, Any] | None = None
+        ) -> EmbedResponse:
+            seen.append(request_id.get())
+            return FIXED_EMBED
+
+        provider = Provider(adapters={"fake": FakeAdapter(embed=embed)})
+        request_id.set("abc")
+        await provider.async_embed("m", "hi", provider="fake")
+        self.assertEqual(seen, ["abc"])
+
+    async def test_async_embed_resolves_auto_match_off_the_loop(self):
+        """Auto-match via embed_models runs off the event loop."""
+
+        provider = Provider(
+            adapters={
+                "fake": FakeAdapter(
+                    embed=lambda _m, _i, _c: FIXED_EMBED,
+                    embed_models=lambda: {"embed-model"},
+                )
+            }
+        )
+        loop_thread = threading.current_thread()
+        fake = provider._adapters["fake"]
+        assert isinstance(fake, FakeAdapter)
+        fake.embed_models_threads.clear()
+        with self.assertLogs(LOGGER, "WARNING"):
+            result = await provider.async_embed("embed-model", "hi")
+        self.assertEqual(result["embeddings"], FIXED_EMBED["embeddings"])
+        self.assertEqual(len(fake.embed_models_threads), 1)
+        self.assertNotEqual(fake.embed_models_threads[0], loop_thread)
+
+    async def test_async_embed_input_validation_raises_before_adapter_call(self):
+        """ValueError and TypeError raise before any adapter call."""
+
+        cases: list[tuple[str, Any, type[BaseException]]] = [
+            ("empty list", [], ValueError),
+            ("empty string", "", ValueError),
+            ("empty string in batch", ["hi", ""], ValueError),
+            ("non-str element", ["hi", 123], TypeError),
+            ("dict input", {"a": "b"}, TypeError),
+            ("bytes input", b"hi", TypeError),
+            ("bytearray input", bytearray(b"hi"), TypeError),
+        ]
+        for label, bad_input, exc_type in cases:
+            with self.subTest(label=label):
+                adapter = FakeAdapter(
+                    embed=lambda _m, _i, _c: FIXED_EMBED,
+                    embed_models=lambda: {"m"},
+                )
+                provider = Provider(adapters={"fake": adapter})
+                with self.assertRaises(exc_type):
+                    await provider.async_embed("m", bad_input, provider="fake")
+                self.assertEqual(adapter.embed_calls, 0)
+                with self.assertRaises(exc_type):
+                    await provider.async_embed("m", bad_input)
+                self.assertEqual(adapter.embed_models_calls, 0)
+                self.assertEqual(adapter.embed_calls, 0)
 
 
 class TestStreamReaderAfterLoopCloses(unittest.TestCase):

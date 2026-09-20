@@ -13,6 +13,8 @@ from http_test_utils import (
     final_response,
     http_error,
     ndjson_lines,
+    ollama_embed_response,
+    request_body,
 )
 from test_provider_api_keys import clean_env, pointed_at, secret_headers
 
@@ -1080,6 +1082,246 @@ class OllamaModelsCacheInvalidationTests(unittest.TestCase):
         with self.assertRaises(APIError):
             self.adapter.chat("llama3", MESSAGES)
         self.assertEqual(self.adapter._models_cache, {"llama-old"})
+
+
+class TestOllamaEmbedHTTP(unittest.TestCase):
+    """Ollama embed HTTP contract."""
+
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+
+    @patch("urllib.request.urlopen")
+    def test_posts_to_api_embed_with_list_input(self, mock_urlopen):
+        """POST /api/embed with list input."""
+        vectors = [[0.1, 0.2, 0.3]]
+        payload = ollama_embed_response(
+            "nomic-embed-text:latest", vectors, prompt_eval_count=5
+        )
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed("nomic-embed-text:latest", ["hello"])
+        self.assertEqual(resp["embeddings"], vectors)
+        req = mock_urlopen.call_args.args[0]
+        self.assertTrue(req.full_url.endswith("/api/embed"))
+        body = request_body(req)
+        self.assertEqual(body["model"], "nomic-embed-text:latest")
+        self.assertEqual(body["input"], ["hello"])
+
+    @patch("urllib.request.urlopen")
+    def test_batch_input_sends_list(self, mock_urlopen):
+        """Batch input is sent as a list."""
+        vectors = [[0.1], [0.2], [0.3]]
+        payload = ollama_embed_response("nomic-embed-text:latest", vectors)
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed("nomic-embed-text:latest", ["a", "b", "c"])
+        self.assertEqual(resp["embeddings"], vectors)
+        body = request_body(mock_urlopen.call_args.args[0])
+        self.assertEqual(body["input"], ["a", "b", "c"])
+
+    @patch("urllib.request.urlopen")
+    def test_optional_fields_only_when_present(self, mock_urlopen):
+        """Optional fields reach body only when present."""
+        vectors = [[0.1]]
+        payload = ollama_embed_response("nomic-embed-text:latest", vectors)
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        self.adapter.embed("nomic-embed-text:latest", ["hi"])
+        body = request_body(mock_urlopen.call_args.args[0])
+        self.assertNotIn("keep_alive", body)
+        self.assertNotIn("truncate", body)
+        self.assertNotIn("dimensions", body)
+        self.assertNotIn("options", body)
+        cases = [
+            ({"keep_alive": "10m"}, "keep_alive", "10m"),
+            ({"truncate": False}, "truncate", False),
+            ({"dimensions": 512}, "dimensions", 512),
+            ({"options": {"num_ctx": 2048}}, "options", {"num_ctx": 2048}),
+        ]
+        for config, key, expected in cases:
+            with self.subTest(key=key):
+                mock_urlopen.return_value = buffered_response(
+                    json.dumps(payload).encode()
+                )
+                self.adapter.embed("nomic-embed-text:latest", ["hi"], config=config)
+                body = request_body(mock_urlopen.call_args.args[0])
+                self.assertEqual(body[key], expected)
+
+    @patch("urllib.request.urlopen")
+    def test_returns_ordered_vectors(self, mock_urlopen):
+        """Returned vectors match input order."""
+        vectors = [[0.1, 0.2], [0.3, 0.4]]
+        payload = ollama_embed_response(
+            "nomic-embed-text:latest", vectors, prompt_eval_count=2
+        )
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed("nomic-embed-text:latest", ["first", "second"])
+        self.assertEqual(resp["embeddings"], vectors)
+
+    @patch("urllib.request.urlopen")
+    def test_count_mismatch_raises(self, mock_urlopen):
+        """Count mismatch raises MalformedResponseError."""
+        for vectors in [[[0.1]], [[0.1], [0.2], [0.3]]]:
+            payload = ollama_embed_response("nomic-embed-text:latest", vectors)
+            mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+            with (
+                self.subTest(vectors=vectors),
+                self.assertRaises(MalformedResponseError),
+            ):
+                self.adapter.embed("nomic-embed-text:latest", ["a", "b"])
+
+    @patch("urllib.request.urlopen")
+    def test_prompt_eval_count_maps_to_usage_and_raw(self, mock_urlopen):
+        """prompt_eval_count maps to usage and raw."""
+        vectors = [[0.1, 0.2]]
+        payload = ollama_embed_response(
+            "nomic-embed-text:latest", vectors, prompt_eval_count=9
+        )
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed("nomic-embed-text:latest", ["hi"])
+        self.assertEqual(resp["usage"], {"input_tokens": 9})
+        self.assertEqual(resp["raw"]["total_duration"], 1000)
+        self.assertEqual(resp["raw"]["load_duration"], 500)
+        self.assertIsInstance(resp["latency_ms"], float)
+        self.assertGreaterEqual(resp["latency_ms"], 0)
+
+    @patch("urllib.request.urlopen")
+    def test_404_clears_cache(self, mock_urlopen):
+        """404 raises APIError and clears cache."""
+        self.adapter._models_cache = {"llama-old"}
+        self.adapter._cache_time = time.monotonic()
+        mock_urlopen.side_effect = http_error(
+            "http://127.0.0.1:11434/api/embed", 404, b"not found"
+        )
+        with self.assertRaises(APIError) as ctx:
+            self.adapter.embed("nomic-embed-text:latest", ["hi"])
+        self.assertEqual(ctx.exception.status, 404)
+        self.assertIsNone(self.adapter._models_cache)
+
+    @patch("urllib.request.urlopen")
+    def test_malformed_body_raises(self, mock_urlopen):
+        """Malformed body raises MalformedResponseError."""
+        for body in [
+            b"not json",
+            json.dumps({"model": "x"}).encode(),
+            json.dumps({"embeddings": "bad"}).encode(),
+        ]:
+            mock_urlopen.return_value = buffered_response(body)
+            with self.subTest(body=body), self.assertRaises(MalformedResponseError):
+                self.adapter.embed("nomic-embed-text:latest", ["hi"])
+
+    def test_refusal_raises_value_error_without_request_or_warning(self):
+        """Provider headers with disallowed host raise ValueError."""
+        provider = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", "t"),
+        )
+        adapter = provider._adapters["ollama-local"]
+        with (
+            pointed_at(provider, "ollama-local", "http://gateway.example"),
+            patch(
+                "urllib.request.urlopen", side_effect=AssertionError("no request")
+            ) as mock_urlopen,
+        ):
+            with self.assertRaises(ValueError):
+                adapter.embed("nomic-embed-text:latest", ["hi"])
+            mock_urlopen.assert_not_called()
+
+    def test_refusal_logs_no_warning(self):
+        """Embed refusal logs no warning."""
+        provider = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", "t"),
+        )
+        adapter = provider._adapters["ollama-local"]
+        with (
+            pointed_at(provider, "ollama-local", "http://gateway.example"),
+            patch(
+                "urllib.request.urlopen", side_effect=AssertionError("no request")
+            ) as mock_urlopen,
+            patch.object(ollama_module.logger, "warning") as mock_warn,
+        ):
+            with self.assertRaises(ValueError):
+                adapter.embed("nomic-embed-text:latest", ["hi"])
+            mock_warn.assert_not_called()
+            mock_urlopen.assert_not_called()
+
+    @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
+    def test_reserved_key_clash_raises(self, mock_urlopen):
+        """Reserved key clash raises ValueError mentioning embed()."""
+        with self.assertRaises(ValueError) as ctx:
+            self.adapter.embed("nomic-embed-text:latest", ["hi"], config={"model": "x"})
+        self.assertIn("embed()", str(ctx.exception))
+        mock_urlopen.assert_not_called()
+        with self.assertRaises(ValueError) as ctx:
+            self.adapter.embed(
+                "nomic-embed-text:latest", ["hi"], config={"input": ["x"]}
+            )
+        self.assertIn("embed()", str(ctx.exception))
+
+
+class TestOllamaEmbedModels(unittest.TestCase):
+    """Ollama embed_models delegation."""
+
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+
+    @patch("urllib.request.urlopen")
+    def test_embed_models_equals_models_with_latest_tag(self, mock_urlopen):
+        """embed_models equals models including :latest."""
+        payload = {"models": [{"name": "nomic-embed-text:latest"}, {"name": "llama3"}]}
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        models = self.adapter.models()
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        self.adapter._models_cache = None
+        self.adapter._cache_time = 0.0
+        embed_models = self.adapter.embed_models()
+        self.assertEqual(models, {"nomic-embed-text:latest", "llama3"})
+        self.assertEqual(embed_models, models)
+
+    @patch("urllib.request.urlopen")
+    def test_embed_models_uses_same_cache_as_models(self, mock_urlopen):
+        """embed_models returns same set as models."""
+        payload = {
+            "models": [
+                {"name": "nomic-embed-text:latest"},
+                {"name": "mxbai-embed-large"},
+            ]
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        self.assertEqual(
+            self.adapter.embed_models(),
+            {"nomic-embed-text:latest", "mxbai-embed-large"},
+        )
+        self.assertEqual(
+            self.adapter.models(), {"nomic-embed-text:latest", "mxbai-embed-large"}
+        )
+        mock_urlopen.assert_called_once()
+
+    def test_embed_models_inherits_probe_gate(self):
+        """embed_models inherits probe gate."""
+        provider = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", "t"),
+        )
+        adapter = provider._adapters["ollama-local"]
+        with (
+            pointed_at(provider, "ollama-local", "http://gateway.example"),
+            patch("urllib.request.urlopen", side_effect=AssertionError("no request")),
+            self.assertLogs("ducktape_provider", "WARNING") as logs,
+        ):
+            self.assertEqual(adapter.embed_models(), set())
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("ollama-local", logs.records[0].getMessage())
+        provider2 = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", "t"),
+        )
+        adapter2 = provider2._adapters["ollama-local"]
+        with (
+            pointed_at(provider2, "ollama-local", "http://gateway.example"),
+            patch("urllib.request.urlopen", side_effect=AssertionError("no request")),
+            self.assertLogs("ducktape_provider", "WARNING") as logs2,
+        ):
+            self.assertEqual(adapter2.models(), set())
+        self.assertEqual(len(logs2.records), 1)
 
 
 if __name__ == "__main__":

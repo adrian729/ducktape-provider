@@ -20,7 +20,7 @@ import unittest
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 from unittest.mock import Mock, patch
 
 from http_test_utils import (
@@ -134,11 +134,29 @@ def fake_urlopen(case: Keyed) -> Callable[..., Any]:
     """A urlopen stand-in answering models, chat and stream requests for `case`."""
 
     def urlopen(req: Any, timeout: float | None = None) -> Any:
+        if "/embeddings" in req.full_url:
+            return buffered_response(
+                json.dumps(
+                    {
+                        "object": "list",
+                        "data": [
+                            {
+                                "object": "embedding",
+                                "embedding": [0.1, 0.2, 0.3],
+                                "index": 0,
+                            }
+                        ],
+                        "model": case.model,
+                        "usage": {"prompt_tokens": 5, "total_tokens": 5},
+                    }
+                ).encode()
+            )
         if "/models" in req.full_url:
             return buffered_response(
                 json.dumps({"data": [{"id": case.model}]}).encode()
             )
-        if json.loads(req.data)["stream"]:
+        data = req.data and json.loads(cast(bytes, req.data))
+        if isinstance(data, dict) and data.get("stream"):
             return FakeStreamResponse(case.stream_lines)
         return buffered_response(json.dumps(case.chat_body).encode())
 
@@ -217,7 +235,12 @@ def pointed_at(provider: Provider, name: str, url: str) -> Iterator[None]:
         return
     attrs = [
         attr
-        for attr in ("_MESSAGES_URL", "_RESPONSES_URL", "_MODELS_URL")
+        for attr in (
+            "_MESSAGES_URL",
+            "_RESPONSES_URL",
+            "_MODELS_URL",
+            "_EMBEDDINGS_URL",
+        )
         if hasattr(adapter, attr)
     ]
     with contextlib.ExitStack() as stack:
@@ -231,10 +254,13 @@ def drain(adapter: Adapter, model: str) -> list[Any]:
 
 
 def request_calls(case: Keyed, adapter: Any) -> dict[str, Callable[[], object]]:
-    return {
+    calls: dict[str, Callable[[], object]] = {
         "chat": lambda: adapter.chat(case.model, MESSAGES),
         "stream_chat": lambda: list(adapter.stream_chat(case.model, MESSAGES)),
     }
+    if isinstance(adapter, OpenAIAdapter):
+        calls["embed"] = lambda: adapter.embed(case.model, ["hi"])
+    return calls
 
 
 class SecretTests(unittest.TestCase):

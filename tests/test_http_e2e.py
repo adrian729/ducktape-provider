@@ -66,6 +66,9 @@ def serving(adapter: Adapter, *replies: Reply) -> Iterator[LocalServer]:
             stack.enter_context(
                 patch.object(adapter, "_RESPONSES_URL", f"{server.url}/v1/responses")
             )
+            stack.enter_context(
+                patch.object(adapter, "_EMBEDDINGS_URL", f"{server.url}/v1/embeddings")
+            )
         if isinstance(adapter, (ClaudeAdapter, OpenAIAdapter)):
             stack.enter_context(
                 patch.object(adapter, "_MODELS_URL", f"{server.url}/v1/models")

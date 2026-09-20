@@ -39,6 +39,8 @@ from ..streaming import (
 )
 from ..types import (
     Block,
+    EmbedResponse,
+    EmbedUsage,
     ImageBlock,
     Message,
     Response,
@@ -72,11 +74,14 @@ _ERROR_CODE_STATUS = {
 class OpenAIAdapter(Adapter):
     _MODELS_URL = "https://api.openai.com/v1/models"
     _RESPONSES_URL = "https://api.openai.com/v1/responses"
+    _EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
     _CHAT_MODEL_RE = re.compile(r"^(gpt-|chatgpt-|o\d)")
     _NON_CHAT_RE = re.compile(r"-(audio|realtime|transcribe|tts|search)|^gpt-image")
     _MODELS_TTL = 60
     _CHAT_TIMEOUT = 120
+    _EMBED_TIMEOUT = 120
     _RESERVED_CONFIG = frozenset({"model", "input", "stream"})
+    _EMBED_RESERVED_CONFIG = frozenset({"model", "input"})
     _AUTH_HEADER = "authorization"
     _key_source: _Secret | None = None
     _provider_headers: tuple[_Secret, ...] = ()
@@ -97,6 +102,7 @@ class OpenAIAdapter(Adapter):
         source = None if api_key is None else _Secret(api_key)
         api_key = None
         self._models_cache: set[str] | None = None
+        self._embed_models_cache: set[str] | None = None
         self._cache_time = 0.0
         if source is not None:
             source.validate("openai")
@@ -109,10 +115,11 @@ class OpenAIAdapter(Adapter):
             return True
         return bool(os.environ.get("OPENAI_API_KEY"))
 
-    def models(self) -> set[str]:
+    def _fetch_models(self, cache: set[str] | None) -> bool:
+        """Fills both listing projections from one `GET /v1/models`; False if unusable."""
         now = time.monotonic()
-        if self._models_cache is not None and now - self._cache_time < self._MODELS_TTL:
-            return set(self._models_cache)
+        if cache is not None and now - self._cache_time < self._MODELS_TTL:
+            return True
         url = self._MODELS_URL
         resolved = _resolve_probe_auth(
             "openai",
@@ -125,7 +132,7 @@ class OpenAIAdapter(Adapter):
         if resolved is None:
             if self._provider_headers and not _key_url_allowed(url):
                 _warn_headers_refused(self, logger, "openai")
-            return set()
+            return False
         key, headers = resolved
         stop = sys.exception()
         try:
@@ -139,28 +146,49 @@ class OpenAIAdapter(Adapter):
                 ),
                 timeout=3,
             ) as resp:
-                data = _read_json(resp, "openai")
+                data = _read_json(resp, "openai", operation="models")
             model_ids = {
                 m["id"]
                 for m in data.get("data", [])
                 if self._CHAT_MODEL_RE.match(m["id"])
                 and not self._NON_CHAT_RE.search(m["id"])
             }
+            embed_ids = {
+                m["id"]
+                for m in data.get("data", [])
+                if m["id"].startswith("text-embedding-")
+            }
         except urllib.error.HTTPError as e:
             e.close()
-            return set()
+            return False
         except _PROBE_ERRORS:
-            return set()
+            return False
         except BaseException as e:
             _clear_tracebacks(e, stop)
             raise
         self._models_cache = model_ids
+        self._embed_models_cache = embed_ids
         self._cache_time = now
-        return set(model_ids)
+        return True
+
+    def models(self) -> set[str]:
+        if not self._fetch_models(self._models_cache):
+            return set()
+        return set(self._models_cache or ())
+
+    def embed_models(self) -> set[str]:
+        if not self._fetch_models(self._embed_models_cache):
+            return set()
+        return set(self._embed_models_cache or ())
+
+    def _reset_caches(self) -> None:
+        self._models_cache = None
+        self._embed_models_cache = None
+        self._cache_time = 0.0
 
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
         if e.status == 404:
-            self._models_cache = None
+            self._reset_caches()
 
     def _serialize(self, messages: list[Message]) -> list[dict[str, Any]]:
         """The Responses API's "input" is a flat, order-significant list of items, not messages
@@ -382,6 +410,89 @@ class OpenAIAdapter(Adapter):
             ),
         )
         return req, timeout
+
+    def _build_embed_request(
+        self, model: str, input: list[str], config: dict[str, Any] | None
+    ) -> tuple[urllib.request.Request, float | None]:
+        if config and config.get("encoding_format") == "base64":
+            raise ValueError(
+                "embed() always returns float vectors; base64 passthrough is "
+                "not supported"
+            )
+        payload: dict[str, Any] = {"model": model, "input": input}
+        timeout, extra_headers = _merge_config(
+            "openai",
+            payload,
+            config,
+            self._EMBED_RESERVED_CONFIG,
+            self._EMBED_TIMEOUT,
+            operation="embed",
+        )
+        _validate_headers("openai", extra_headers)
+        url = self._EMBEDDINGS_URL
+        resolved = _resolve_headers(
+            "openai", url, self._provider_headers, extra_headers
+        )
+        req = _new_request(
+            url,
+            json.dumps(payload).encode(),
+            {"Content-Type": "application/json"},
+            extra_headers,
+            resolved,
+            auth=(
+                "Authorization",
+                "Bearer ",
+                lambda: _request_key("openai", url, self._key_source, "OPENAI_API_KEY"),
+            ),
+        )
+        return req, timeout
+
+    def embed(
+        self, model: str, input: list[str], config: dict[str, Any] | None = None
+    ) -> EmbedResponse:
+        try:
+            data, latency_ms = _request_json(
+                "openai",
+                *self._build_embed_request(model, input, config),
+                operation="embed",
+            )
+            with _shape_checked("openai", operation="embed"):
+                if not isinstance(data, dict):
+                    raise TypeError("embedding response is not an object")
+                rows = data["data"]
+                if len(rows) != len(input):
+                    raise errors.MalformedResponseError(
+                        f"openai embed failed: expected {len(input)} embeddings, "
+                        f"got {len(rows)}"
+                    )
+                if sorted(row["index"] for row in rows) != list(range(len(input))):
+                    raise errors.MalformedResponseError(
+                        "openai embed failed: embeddings are not indexed 0..n-1"
+                    )
+                embeddings = [
+                    list(row["embedding"])
+                    for row in sorted(rows, key=lambda r: r["index"])
+                ]
+                raw: dict[str, Any] = {}
+                if data.get("model") is not None:
+                    raw["model"] = data["model"]
+                usage_obj = data.get("usage")
+                usage: EmbedUsage | None
+                if usage_obj is not None:
+                    if usage_obj.get("total_tokens") is not None:
+                        raw["total_tokens"] = usage_obj["total_tokens"]
+                    usage = {"input_tokens": usage_obj.get("prompt_tokens") or 0}
+                else:
+                    usage = None
+                return {
+                    "embeddings": embeddings,
+                    "usage": usage,
+                    "raw": raw,
+                    "latency_ms": latency_ms,
+                }
+        except errors.APIError as e:
+            self._invalidate_models_cache_on_404(e)
+            raise
 
     def chat(
         self,

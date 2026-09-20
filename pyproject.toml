@@ -1,7 +1,7 @@
 [project]
 name = "ducktape-provider"
 version = "0.1.0"
-description = "One normalized chat/tool-use interface over Claude, OpenAI, and local Ollama — stdlib only."
+description = "One normalized chat, tool-use and embeddings interface over Claude, OpenAI, and local Ollama — stdlib only."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -10,7 +10,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = []
-keywords = ["llm", "anthropic", "claude", "openai", "ollama", "chat", "tool-use", "ai"]
+keywords = ["llm", "anthropic", "claude", "openai", "ollama", "chat", "tool-use", "embeddings", "embed", "ai"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

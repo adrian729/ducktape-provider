@@ -13,6 +13,7 @@ from .types import (
     RequestTimeoutError,
     ServerError,
     UnsupportedBlockError,
+    UnsupportedOperationError,
 )
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "RequestTimeoutError",
     "ServerError",
     "UnsupportedBlockError",
+    "UnsupportedOperationError",
 ]
 
 _CONTEXT_OVERFLOW_MARKERS = (
@@ -82,7 +84,9 @@ def _cap_body(body: str) -> str:
     return body[:_MAX_ERROR_BODY_BYTES]
 
 
-def raise_for_http_error(vendor: str, e: urllib.error.HTTPError) -> NoReturn:
+def raise_for_http_error(
+    vendor: str, e: urllib.error.HTTPError, *, operation: str = "chat"
+) -> NoReturn:
     try:
         body = e.read(_MAX_ERROR_BODY_BYTES).decode(errors="replace")
     except (OSError, http.client.HTTPException, ValueError):
@@ -90,7 +94,7 @@ def raise_for_http_error(vendor: str, e: urllib.error.HTTPError) -> NoReturn:
     finally:
         e.close()
     raise _classify(
-        f"{vendor} chat failed: {e.code} {_truncate(body)}",
+        f"{vendor} {operation} failed: {e.code} {_truncate(body)}",
         e.code,
         body,
         _parse_retry_after(e),
@@ -98,7 +102,12 @@ def raise_for_http_error(vendor: str, e: urllib.error.HTTPError) -> NoReturn:
 
 
 def raise_for_vendor_error(
-    vendor: str, message: str, *, status: int | None = None, body: str = ""
+    vendor: str,
+    message: str,
+    *,
+    status: int | None = None,
+    body: str = "",
+    operation: str = "chat",
 ) -> NoReturn:
     """Raises for an error the vendor reported inside a 200 response body or stream.
 
@@ -106,31 +115,39 @@ def raise_for_vendor_error(
     returned outside a stream, so both paths land on the same exception class.
     """
     raise _classify(
-        f"{vendor} chat failed: {_truncate(message)}",
+        f"{vendor} {operation} failed: {_truncate(message)}",
         status,
         _cap_body(body or message),
     )
 
 
-def raise_for_connection_error(vendor: str, e: BaseException) -> NoReturn:
+def raise_for_connection_error(
+    vendor: str, e: BaseException, *, operation: str = "chat"
+) -> NoReturn:
     if isinstance(e, TimeoutError) or (
         isinstance(e, urllib.error.URLError) and isinstance(e.reason, TimeoutError)
     ):
-        raise RequestTimeoutError(f"{vendor} chat timed out") from e
+        raise RequestTimeoutError(f"{vendor} {operation} timed out") from e
     if isinstance(e, http.client.IncompleteRead):
-        raise APIError(f"{vendor} chat failed: connection closed mid-response") from e
+        raise APIError(
+            f"{vendor} {operation} failed: connection closed mid-response"
+        ) from e
     reason = e.reason if isinstance(e, urllib.error.URLError) else e
     raise APIError(
-        f"{vendor} chat failed: {str(reason) or type(reason).__name__}"
+        f"{vendor} {operation} failed: {str(reason) or type(reason).__name__}"
     ) from e
 
 
-def raise_for_malformed_response(vendor: str, e: BaseException) -> NoReturn:
+def raise_for_malformed_response(
+    vendor: str, e: BaseException, *, operation: str = "chat"
+) -> NoReturn:
     detail = f"{type(e).__name__}: {e}" if isinstance(e, LookupError) else str(e)
     raise MalformedResponseError(
-        f"{vendor} chat failed: malformed response: {_truncate(detail)}"
+        f"{vendor} {operation} failed: malformed response: {_truncate(detail)}"
     ) from e
 
 
-def raise_for_truncated_stream(vendor: str, terminal: str) -> NoReturn:
-    raise APIError(f"{vendor} chat failed: stream ended before {terminal}")
+def raise_for_truncated_stream(
+    vendor: str, terminal: str, *, operation: str = "chat"
+) -> NoReturn:
+    raise APIError(f"{vendor} {operation} failed: stream ended before {terminal}")

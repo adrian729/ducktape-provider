@@ -2,14 +2,17 @@
 with urllib.request.urlopen mocked out. No real network call is ever made."""
 
 import json
+import os
 import time
 import unittest
+import urllib.error
 from typing import Any
 from unittest.mock import Mock, patch
 
 from http_test_utils import (
     FakeStreamResponse,
     buffered_response,
+    embed_response,
     final_response,
     http_error,
     request_body,
@@ -1459,6 +1462,7 @@ class OpenAIModelsCacheInvalidationTests(unittest.TestCase):
     def setUp(self):
         self.adapter = OpenAIAdapter(api_key="test")
         self.adapter._models_cache = {"gpt-old"}
+        self.adapter._embed_models_cache = {"text-embedding-old"}
         self.adapter._cache_time = time.monotonic()
 
     @patch("urllib.request.urlopen")
@@ -1469,6 +1473,7 @@ class OpenAIModelsCacheInvalidationTests(unittest.TestCase):
         with self.assertRaises(APIError):
             self.adapter.chat("gpt-x", MESSAGES)
         self.assertIsNone(self.adapter._models_cache)
+        self.assertIsNone(self.adapter._embed_models_cache)
 
     @patch("urllib.request.urlopen")
     def test_stream_chat_404_invalidates_models_cache(self, mock_urlopen):
@@ -1478,6 +1483,7 @@ class OpenAIModelsCacheInvalidationTests(unittest.TestCase):
         with self.assertRaises(APIError):
             list(self.adapter.stream_chat("gpt-x", MESSAGES))
         self.assertIsNone(self.adapter._models_cache)
+        self.assertIsNone(self.adapter._embed_models_cache)
 
     @patch("urllib.request.urlopen")
     def test_non_404_error_leaves_models_cache_untouched(self, mock_urlopen):
@@ -1487,6 +1493,352 @@ class OpenAIModelsCacheInvalidationTests(unittest.TestCase):
         with self.assertRaises(APIError):
             self.adapter.chat("gpt-x", MESSAGES)
         self.assertEqual(self.adapter._models_cache, {"gpt-old"})
+        self.assertEqual(self.adapter._embed_models_cache, {"text-embedding-old"})
+
+
+class TestOpenAIEmbedHTTP(unittest.TestCase):
+    """Embed HTTP behaviour."""
+
+    def setUp(self):
+        self.adapter = OpenAIAdapter(api_key="test")
+
+    @patch("urllib.request.urlopen")
+    def test_single_input_happy_path(self, mock_urlopen):
+        """Single input returns correctly shaped response."""
+        model = "text-embedding-3-small"
+        vectors = [[0.1, 0.2, 0.3]]
+        payload = embed_response(model, vectors, prompt_tokens=7)
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed(model, ["hello"])
+        self.assertEqual(resp["embeddings"], vectors)
+        self.assertEqual(resp["usage"], {"input_tokens": 7})
+        self.assertEqual(resp["raw"]["model"], model)
+        self.assertNotIn("model", resp)
+        self.assertIsInstance(resp["latency_ms"], float)
+        self.assertGreaterEqual(resp["latency_ms"], 0)
+        req = mock_urlopen.call_args.args[0]
+        self.assertEqual(req.full_url, OpenAIAdapter._EMBEDDINGS_URL)
+        body = request_body(req)
+        self.assertEqual(body["input"], ["hello"])
+        self.assertEqual(body["model"], model)
+
+    @patch("urllib.request.urlopen")
+    def test_batch_happy_path(self, mock_urlopen):
+        """Batch input returns one vector per input in order."""
+        model = "text-embedding-3-small"
+        vectors = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+        payload = embed_response(model, vectors, prompt_tokens=10)
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed(model, ["a", "b", "c"])
+        self.assertEqual(resp["embeddings"], vectors)
+        req = mock_urlopen.call_args.args[0]
+        self.assertEqual(request_body(req)["input"], ["a", "b", "c"])
+
+    @patch("urllib.request.urlopen")
+    def test_dimensions_passthrough_unvalidated(self, mock_urlopen):
+        """Dimensions config reaches body unvalidated."""
+        model = "text-embedding-3-small"
+        vectors = [[0.1, 0.2]]
+        payload = embed_response(model, vectors, prompt_tokens=1)
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        self.adapter.embed(model, ["hi"], config={"dimensions": 512})
+        body = request_body(mock_urlopen.call_args.args[0])
+        self.assertEqual(body["dimensions"], 512)
+
+    @patch("urllib.request.urlopen")
+    def test_unsorted_indices_are_ordered(self, mock_urlopen):
+        """Unsorted data indices yield correctly ordered vectors."""
+        model = "text-embedding-3-small"
+        payload = {
+            "object": "list",
+            "data": [
+                {"object": "embedding", "embedding": [0.3, 0.4], "index": 1},
+                {"object": "embedding", "embedding": [0.1, 0.2], "index": 0},
+            ],
+            "model": model,
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed(model, ["first", "second"])
+        self.assertEqual(resp["embeddings"], [[0.1, 0.2], [0.3, 0.4]])
+
+    @patch("urllib.request.urlopen")
+    def test_count_mismatch_raises(self, mock_urlopen):
+        """Count mismatch raises MalformedResponseError."""
+        model = "text-embedding-3-small"
+        for vectors in ([[0.1]], [[0.1], [0.2], [0.3]]):
+            payload = embed_response(model, vectors, prompt_tokens=1)
+            mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+            with (
+                self.subTest(vectors=vectors),
+                self.assertRaises(MalformedResponseError),
+            ):
+                self.adapter.embed(model, ["a", "b"])
+
+    @patch("urllib.request.urlopen")
+    def test_duplicate_and_missing_index_raises(self, mock_urlopen):
+        """Duplicate or missing index raises MalformedResponseError."""
+        model = "text-embedding-3-small"
+        cases = [
+            [
+                {"object": "embedding", "embedding": [0.1], "index": 0},
+                {"object": "embedding", "embedding": [0.2], "index": 0},
+            ],
+            [
+                {"object": "embedding", "embedding": [0.1], "index": 0},
+                {"object": "embedding", "embedding": [0.2], "index": 2},
+            ],
+        ]
+        for data in cases:
+            payload = {"object": "list", "data": data, "model": model}
+            mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+            with self.subTest(data=data), self.assertRaises(MalformedResponseError):
+                self.adapter.embed(model, ["a", "b"])
+
+    @patch("urllib.request.urlopen")
+    def test_absent_usage_is_none(self, mock_urlopen):
+        """Absent usage yields None."""
+        model = "text-embedding-3-small"
+        payload = embed_response(model, [[0.1, 0.2]])
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed(model, ["hi"])
+        self.assertIsNone(resp["usage"])
+
+    @patch("urllib.request.urlopen")
+    def test_empty_usage_object_is_zero_tokens(self, mock_urlopen):
+        """A present but empty usage object is zero tokens, not None."""
+        model = "text-embedding-3-small"
+        payload = embed_response(model, [[0.1, 0.2]])
+        payload["usage"] = {}
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed(model, ["hi"])
+        self.assertEqual(resp["usage"], {"input_tokens": 0})
+        self.assertNotIn("total_tokens", resp["raw"])
+
+    @patch("urllib.request.urlopen")
+    def test_usage_without_total_tokens_omits_raw_key(self, mock_urlopen):
+        """A usage object lacking total_tokens leaves it out of raw."""
+        model = "text-embedding-3-small"
+        payload = embed_response(model, [[0.1, 0.2]])
+        payload["usage"] = {"prompt_tokens": 5}
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        resp = self.adapter.embed(model, ["hi"])
+        self.assertEqual(resp["usage"], {"input_tokens": 5})
+        self.assertNotIn("total_tokens", resp["raw"])
+
+    @patch("urllib.request.urlopen")
+    def test_context_overflow_maps_with_embed_label(self, mock_urlopen):
+        """A context-overflow 400 maps to ContextOverflowError with embed label."""
+        mock_urlopen.side_effect = http_error(
+            OpenAIAdapter._EMBEDDINGS_URL, 400, b"context_length_exceeded"
+        )
+        with self.assertRaises(ContextOverflowError) as ctx:
+            self.adapter.embed("text-embedding-3-small", ["hi"])
+        self.assertIn("embed", str(ctx.exception))
+        self.assertNotIn("chat", str(ctx.exception))
+
+    @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
+    def test_reserved_key_clash_raises_before_request(self, mock_urlopen):
+        """Reserved key clash raises ValueError before request."""
+        with self.assertRaises(ValueError) as ctx:
+            self.adapter.embed("text-embedding-3-small", ["hi"], config={"model": "x"})
+        self.assertIn("embed()", str(ctx.exception))
+        mock_urlopen.assert_not_called()
+
+    @patch("urllib.request.urlopen", side_effect=AssertionError("request sent"))
+    def test_encoding_format_base64_raises_before_request(self, mock_urlopen):
+        """Base64 encoding format raises ValueError before request."""
+        with self.assertRaises(ValueError) as ctx:
+            self.adapter.embed(
+                "text-embedding-3-small", ["hi"], config={"encoding_format": "base64"}
+            )
+        self.assertIn("base64", str(ctx.exception).lower())
+        mock_urlopen.assert_not_called()
+
+    @patch("urllib.request.urlopen")
+    def test_404_invalidates_both_caches(self, mock_urlopen):
+        """404 clears both listing caches."""
+        self.adapter._models_cache = {"gpt-old"}
+        self.adapter._embed_models_cache = {"text-embedding-old"}
+        self.adapter._cache_time = time.monotonic()
+        mock_urlopen.side_effect = http_error(
+            OpenAIAdapter._EMBEDDINGS_URL, 404, b"nope"
+        )
+        with self.assertRaises(APIError) as ctx:
+            self.adapter.embed("text-embedding-3-small", ["hi"])
+        self.assertEqual(ctx.exception.status, 404)
+        self.assertIsNone(self.adapter._models_cache)
+        self.assertIsNone(self.adapter._embed_models_cache)
+
+    @patch("urllib.request.urlopen")
+    def test_401_429_500_raise_with_embed_label(self, mock_urlopen):
+        """401/429/500 map to correct errors with embed in message."""
+        cases = [
+            (401, AuthError),
+            (429, RateLimitError),
+            (500, ServerError),
+        ]
+        for code, exc_type in cases:
+            with self.subTest(code=code):
+                mock_urlopen.side_effect = http_error(
+                    OpenAIAdapter._EMBEDDINGS_URL, code, b"boom"
+                )
+                with self.assertRaises(exc_type) as ctx:
+                    self.adapter.embed("text-embedding-3-small", ["hi"])
+                self.assertIn("embed", str(ctx.exception))
+                self.assertNotIn("chat", str(ctx.exception))
+                self.assertEqual(ctx.exception.status, code)
+
+    @patch("urllib.request.urlopen")
+    def test_malformed_body_raises(self, mock_urlopen):
+        """Malformed body raises MalformedResponseError."""
+        for body in [b"not json", json.dumps({"object": "list"}).encode()]:
+            mock_urlopen.return_value = buffered_response(body)
+            with self.subTest(body=body), self.assertRaises(MalformedResponseError):
+                self.adapter.embed("text-embedding-3-small", ["hi"])
+
+    @patch("urllib.request.urlopen")
+    def test_header_override_reaches_request(self, mock_urlopen):
+        """Call-level header override reaches request."""
+        model = "text-embedding-3-small"
+        payload = embed_response(model, [[0.1]], prompt_tokens=1)
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        self.adapter.embed(model, ["hi"], config={"headers": {"X-Custom": "yes"}})
+        req = mock_urlopen.call_args.args[0]
+        self.assertEqual(req.get_header("X-custom"), "yes")
+
+
+class TestOpenAIEmbedModels(unittest.TestCase):
+    """Embed models listing."""
+
+    def setUp(self):
+        self.adapter = OpenAIAdapter(api_key="test")
+
+    @patch("urllib.request.urlopen")
+    def test_embed_models_and_models_share_single_fetch(self, mock_urlopen):
+        """Models and embed_models are projections of one fetch."""
+        data = {
+            "data": [
+                {"id": "gpt-4"},
+                {"id": "gpt-4o"},
+                {"id": "gpt-image-1"},
+                {"id": "text-embedding-3-small"},
+                {"id": "text-embedding-ada-002"},
+                {"id": "whisper-1"},
+                {"id": "tts-1"},
+            ]
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(data).encode())
+        chat_ids = self.adapter.models()
+        embed_ids = self.adapter.embed_models()
+        self.assertEqual(chat_ids, {"gpt-4", "gpt-4o"})
+        self.assertEqual(
+            embed_ids, {"text-embedding-3-small", "text-embedding-ada-002"}
+        )
+        mock_urlopen.assert_called_once()
+
+    @patch("urllib.request.urlopen")
+    def test_one_fetch_serves_both_within_ttl_and_refetches_after(self, mock_urlopen):
+        """One GET serves both within TTL, second after expiry."""
+        data = {"data": [{"id": "gpt-4"}, {"id": "text-embedding-3-small"}]}
+        mock_urlopen.side_effect = lambda *a, **k: buffered_response(
+            json.dumps(data).encode()
+        )
+        base = 1000.0
+        with patch("ducktape_provider.adapters.openai.time.monotonic") as mock_time:
+            mock_time.return_value = base
+            self.adapter.models()
+            self.adapter.embed_models()
+            self.assertEqual(mock_urlopen.call_count, 1)
+            mock_time.return_value = base + 10
+            self.adapter.models()
+            self.adapter.embed_models()
+            self.assertEqual(mock_urlopen.call_count, 1)
+            mock_time.return_value = base + 61
+            self.adapter.models()
+            self.assertEqual(mock_urlopen.call_count, 2)
+            mock_time.return_value = base + 62
+            self.adapter.embed_models()
+            self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("urllib.request.urlopen")
+    def test_failed_refresh_returns_empty_not_stale(self, mock_urlopen):
+        """An expired cache whose refresh fails yields empty, not stale ids."""
+        data = {"data": [{"id": "gpt-4"}, {"id": "text-embedding-3-small"}]}
+        mock_urlopen.return_value = buffered_response(json.dumps(data).encode())
+        base = 1000.0
+        with patch("ducktape_provider.adapters.openai.time.monotonic") as mock_time:
+            mock_time.return_value = base
+            self.assertEqual(self.adapter.models(), {"gpt-4"})
+            self.assertEqual(self.adapter.embed_models(), {"text-embedding-3-small"})
+            mock_urlopen.side_effect = http_error(
+                OpenAIAdapter._MODELS_URL, 500, b"boom"
+            )
+            mock_time.return_value = base + 61
+            self.assertEqual(self.adapter.models(), set())
+            self.assertEqual(self.adapter.embed_models(), set())
+
+    @patch("urllib.request.urlopen")
+    def test_probe_http_error_swallowed(self, mock_urlopen):
+        """HTTP probe error returns empty set."""
+        mock_urlopen.side_effect = http_error(OpenAIAdapter._MODELS_URL, 500, b"boom")
+        self.assertEqual(self.adapter.models(), set())
+        self.assertEqual(self.adapter.embed_models(), set())
+
+    @patch("urllib.request.urlopen")
+    def test_probe_connection_error_swallowed(self, mock_urlopen):
+        """Connection probe error returns empty set."""
+        mock_urlopen.side_effect = urllib.error.URLError("down")
+        self.assertEqual(self.adapter.models(), set())
+        self.assertEqual(self.adapter.embed_models(), set())
+
+    def test_missing_api_key_returns_empty_without_request(self):
+        """Missing key returns empty set with no request."""
+        with patch.dict(os.environ, {}, clear=False):
+            for key in list(os.environ):
+                if key.lower() == "openai_api_key":
+                    del os.environ[key]
+            adapter = OpenAIAdapter()
+            with patch(
+                "urllib.request.urlopen", side_effect=AssertionError("request sent")
+            ) as m:
+                self.assertEqual(adapter.embed_models(), set())
+                self.assertEqual(adapter.models(), set())
+                m.assert_not_called()
+
+    def test_copied_adapter_starts_with_empty_caches(self):
+        """Copied adapter starts with both caches empty."""
+        from ducktape_provider import Provider
+
+        original = OpenAIAdapter()
+        original._models_cache = {"gpt-old"}
+        original._embed_models_cache = {"text-embedding-old"}
+        original._cache_time = time.monotonic()
+        provider = Provider(
+            adapters={"openai": original}, api_keys={"openai": "sk-new"}
+        )
+        copied = provider._adapters["openai"]
+        self.assertIsNot(copied, original)
+        assert isinstance(copied, OpenAIAdapter)
+        self.assertIsNone(copied._models_cache)
+        self.assertIsNone(copied._embed_models_cache)
+        self.assertEqual(copied._cache_time, 0.0)
+        self.assertEqual(original._models_cache, {"gpt-old"})
+        self.assertEqual(original._embed_models_cache, {"text-embedding-old"})
+
+        original2 = OpenAIAdapter(api_key="test")
+        original2._models_cache = {"gpt-old"}
+        original2._embed_models_cache = {"text-embedding-old"}
+        original2._cache_time = time.monotonic()
+        provider2 = Provider(
+            adapters={"openai": original2},
+            config={"providers": {"openai": {"headers": {"X-Custom": "v"}}}},
+        )
+        copied2 = provider2._adapters["openai"]
+        assert isinstance(copied2, OpenAIAdapter)
+        self.assertIsNone(copied2._models_cache)
+        self.assertIsNone(copied2._embed_models_cache)
+        self.assertEqual(copied2._cache_time, 0.0)
 
 
 if __name__ == "__main__":

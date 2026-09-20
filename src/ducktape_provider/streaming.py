@@ -54,11 +54,11 @@ def _iter_lines(resp: _LineReader, vendor: str) -> Iterator[bytes]:
         yield line
 
 
-def _loads(payload: str | bytes, vendor: str) -> Any:
+def _loads(payload: str | bytes, vendor: str, *, operation: str = "chat") -> Any:
     try:
         return json.loads(payload)
     except (ValueError, RecursionError) as e:
-        errors.raise_for_malformed_response(vendor, e)
+        errors.raise_for_malformed_response(vendor, e, operation=operation)
 
 
 def _loads_tool_input(payload: str) -> tuple[dict[str, Any], bool]:
@@ -111,17 +111,19 @@ def _iter_ndjson(resp: _LineReader, vendor: str) -> Iterator[Any]:
             yield _loads(line, vendor)
 
 
-def _read_json(resp: _Reader, vendor: str) -> Any:
+def _read_json(resp: _Reader, vendor: str, *, operation: str = "chat") -> Any:
     chunks: list[bytes] = []
     size = 0
     while chunk := resp.read(min(_READ_CHUNK_BYTES, _MAX_EVENT_BYTES + 1 - size)):
         size += len(chunk)
         if size > _MAX_EVENT_BYTES:
             errors.raise_for_malformed_response(
-                vendor, ValueError(f"body exceeds {_MAX_EVENT_BYTES} bytes")
+                vendor,
+                ValueError(f"body exceeds {_MAX_EVENT_BYTES} bytes"),
+                operation=operation,
             )
         chunks.append(chunk)
-    return _loads(b"".join(chunks), vendor)
+    return _loads(b"".join(chunks), vendor, operation=operation)
 
 
 class _StreamTimer:
@@ -158,7 +160,7 @@ class _StreamTimer:
 
 
 @contextlib.contextmanager
-def _shape_checked(vendor: str) -> Iterator[None]:
+def _shape_checked(vendor: str, *, operation: str = "chat") -> Iterator[None]:
     """Reports a wire payload of unexpected shape as a malformed response.
 
     Wrap only the parsing of a payload, never a `yield` to the consumer: an
@@ -168,7 +170,7 @@ def _shape_checked(vendor: str) -> Iterator[None]:
     try:
         yield
     except _SHAPE_ERRORS as e:
-        errors.raise_for_malformed_response(vendor, e)
+        errors.raise_for_malformed_response(vendor, e, operation=operation)
 
 
 def _clear_tracebacks(exc: BaseException, stop: BaseException | None = None) -> None:
@@ -209,8 +211,9 @@ class _transport_errors:
     keep its own references to the original traceback.
     """
 
-    def __init__(self, vendor: str) -> None:
+    def __init__(self, vendor: str, *, operation: str = "chat") -> None:
         self._vendor = vendor
+        self._operation = operation
 
     def __enter__(self) -> None:
         self._stop = sys.exception()
@@ -226,13 +229,19 @@ class _transport_errors:
             return
         _clear_tracebacks(exc, self._stop)
         if isinstance(exc, urllib.error.HTTPError):
-            errors.raise_for_http_error(self._vendor, exc)
+            errors.raise_for_http_error(self._vendor, exc, operation=self._operation)
         if isinstance(exc, (OSError, http.client.HTTPException)):
-            errors.raise_for_connection_error(self._vendor, exc)
+            errors.raise_for_connection_error(
+                self._vendor, exc, operation=self._operation
+            )
 
 
 def _request_json(
-    vendor: str, req: urllib.request.Request, timeout: float | None
+    vendor: str,
+    req: urllib.request.Request,
+    timeout: float | None,
+    *,
+    operation: str = "chat",
 ) -> tuple[Any, float]:
     """Sends `req` and returns its parsed JSON body with the latency in ms.
 
@@ -240,14 +249,14 @@ def _request_json(
     as soon as `urlopen` returns or raises, so neither a connection failure's nor
     a malformed-response's traceback carries it as a frame local.
     """
-    with _transport_errors(vendor):
+    with _transport_errors(vendor, operation=operation):
         start = time.monotonic()
         try:
             resp = urllib.request.urlopen(req, timeout=timeout)
         finally:
             del req
         with resp:
-            data = _read_json(resp, vendor)
+            data = _read_json(resp, vendor, operation=operation)
     return data, (time.monotonic() - start) * 1000
 
 

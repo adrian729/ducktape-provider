@@ -184,6 +184,22 @@ class Usage(TypedDict):
     cache_write_tokens: NotRequired[int]
 
 
+class EmbedUsage(TypedDict):
+    """Token counts for an embed() call."""
+
+    input_tokens: int
+
+
+class EmbedResponse(TypedDict):
+    """Normalized result of embed()."""
+
+    embeddings: list[list[float]]
+    usage: EmbedUsage | None
+    raw: NotRequired[dict[str, Any]]
+    dimensions: NotRequired[int]
+    latency_ms: NotRequired[float]
+
+
 type StreamEvent = (
     TextDeltaEvent
     | ThinkingDeltaEvent
@@ -309,6 +325,10 @@ class UnsupportedBlockError(DucktapeError):
     """
 
 
+class UnsupportedOperationError(DucktapeError):
+    """The resolved provider does not support the requested operation."""
+
+
 """3. Everything else: extending
 
 Subclass `Adapter` to add a provider, then pass it to `Provider(adapters=...)` or
@@ -354,6 +374,21 @@ class Adapter(ABC):
         guessing.
         """
         return None
+
+    def embed(
+        self, model: str, input: list[str], config: dict[str, Any] | None = None
+    ) -> EmbedResponse:
+        """Embed texts; raises UnsupportedOperationError unless overridden."""
+        raise UnsupportedOperationError(
+            f"provider {type(self).__name__!r} does not support embed()"
+        )
+
+    def embed_models(self) -> set[str]:
+        """Model ids this adapter can embed with."""
+        return set()
+
+    def _reset_caches(self) -> None:
+        """Clear cached metadata."""
 
     @abstractmethod
     def chat(

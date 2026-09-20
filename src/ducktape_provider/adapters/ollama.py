@@ -38,6 +38,8 @@ from ..streaming import (
 )
 from ..types import (
     Block,
+    EmbedResponse,
+    EmbedUsage,
     ImageBlock,
     Message,
     ModelInfo,
@@ -89,8 +91,10 @@ def _tool_use_block(index: int, call: dict[str, Any]) -> ToolUseBlock:
 
 class OllamaLocalAdapter(Adapter):
     _CHAT_TIMEOUT = 300
+    _EMBED_TIMEOUT = 300
     _MODELS_TTL = 60
     _RESERVED_CONFIG = frozenset({"model", "messages", "stream"})
+    _EMBED_RESERVED_CONFIG = frozenset({"model", "input"})
     _provider_headers: tuple[_Secret, ...] = ()
     _provider_name: str | None = None
     _warned_transport = False
@@ -147,7 +151,7 @@ class OllamaLocalAdapter(Adapter):
             with urllib.request.urlopen(
                 _new_request(url, resolved=headers), timeout=3
             ) as resp:
-                data = _read_json(resp, "ollama")
+                data = _read_json(resp, "ollama", operation="models")
             model_ids = {m["name"] for m in data.get("models", [])}
         except urllib.error.HTTPError as e:
             e.close()
@@ -161,9 +165,16 @@ class OllamaLocalAdapter(Adapter):
         self._cache_time = now
         return set(model_ids)
 
+    def embed_models(self) -> set[str]:
+        return self.models()
+
+    def _reset_caches(self) -> None:
+        self._models_cache = None
+        self._cache_time = 0.0
+
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
         if e.status == 404:
-            self._models_cache = None
+            self._reset_caches()
 
     def model_info(self, model: str) -> ModelInfo | None:
         """The context window from Ollama's own GGUF metadata for `model` — its
@@ -191,7 +202,7 @@ class OllamaLocalAdapter(Adapter):
                 resolved=headers,
             )
             with urllib.request.urlopen(req, timeout=3) as resp:
-                data = _read_json(resp, "ollama")
+                data = _read_json(resp, "ollama", operation="model_info")
         except urllib.error.HTTPError as e:
             e.close()
             return None
@@ -367,6 +378,68 @@ class OllamaLocalAdapter(Adapter):
             resolved,
         )
         return req, timeout
+
+    def _build_embed_request(
+        self, model: str, input: list[str], config: dict[str, Any] | None
+    ) -> tuple[urllib.request.Request, float | None]:
+        payload: dict[str, Any] = {"model": model, "input": input}
+        timeout, extra_headers = _merge_config(
+            "ollama",
+            payload,
+            config,
+            self._EMBED_RESERVED_CONFIG,
+            self._EMBED_TIMEOUT,
+            operation="embed",
+        )
+        _validate_headers("ollama", extra_headers)
+        url = f"{self._base_url()}/api/embed"
+        resolved = _resolve_headers(
+            "ollama-local", url, self._provider_headers, extra_headers
+        )
+        req = _new_request(
+            url,
+            json.dumps(payload).encode(),
+            {"Content-Type": "application/json"},
+            extra_headers,
+            resolved,
+        )
+        return req, timeout
+
+    def embed(
+        self, model: str, input: list[str], config: dict[str, Any] | None = None
+    ) -> EmbedResponse:
+        try:
+            data, latency_ms = _request_json(
+                "ollama",
+                *self._build_embed_request(model, input, config),
+                operation="embed",
+            )
+            with _shape_checked("ollama", operation="embed"):
+                if not isinstance(data, dict):
+                    raise TypeError("embedding response is not an object")
+                vectors = data["embeddings"]
+                if len(vectors) != len(input):
+                    raise errors.MalformedResponseError(
+                        f"ollama embed failed: expected {len(input)} embeddings, "
+                        f"got {len(vectors)}"
+                    )
+                raw: dict[str, Any] = {}
+                if data.get("model") is not None:
+                    raw["model"] = data["model"]
+                if data.get("total_duration") is not None:
+                    raw["total_duration"] = data["total_duration"]
+                if data.get("load_duration") is not None:
+                    raw["load_duration"] = data["load_duration"]
+                usage: EmbedUsage = {"input_tokens": data.get("prompt_eval_count") or 0}
+                return {
+                    "embeddings": [list(v) for v in vectors],
+                    "usage": usage,
+                    "raw": raw,
+                    "latency_ms": latency_ms,
+                }
+        except errors.APIError as e:
+            self._invalidate_models_cache_on_404(e)
+            raise
 
     def chat(
         self,

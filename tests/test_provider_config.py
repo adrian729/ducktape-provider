@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import functools
 import itertools
+import json
 import os
 import pickle
 import unittest
@@ -19,7 +20,13 @@ from types import MappingProxyType
 from typing import Any, NoReturn, cast
 from unittest.mock import Mock, patch
 
-from http_test_utils import FakeStreamResponse, LocalServer, Reply, buffered_response
+from http_test_utils import (
+    FakeStreamResponse,
+    LocalServer,
+    Reply,
+    buffered_response,
+    ollama_embed_response,
+)
 from test_provider_api_keys import (
     KEYED,
     OLLAMA_MODEL,
@@ -50,7 +57,13 @@ from ducktape_provider import (
 )
 from ducktape_provider.adapters.ollama import OllamaLocalAdapter
 from ducktape_provider.streaming import _clear_tracebacks
-from ducktape_provider.types import Message, Response, StreamEvent, ToolDef
+from ducktape_provider.types import (
+    EmbedResponse,
+    Message,
+    Response,
+    StreamEvent,
+    ToolDef,
+)
 
 MESSAGES: list[Message] = [
     {"role": "user", "content": [{"type": "text", "text": "hi"}]},
@@ -73,12 +86,32 @@ class RecordingAdapter(Adapter):
 
     def __init__(self) -> None:
         self.configs: list[dict[str, Any] | None] = []
+        self.embed_configs: list[dict[str, Any] | None] = []
 
     def is_available(self) -> bool:
         return True
 
     def models(self) -> set[str]:
         return set()
+
+    def embed_models(self) -> set[str]:
+        """Model ids this adapter can embed with."""
+        return {"rec-embed"}
+
+    def embed(
+        self,
+        model: str,
+        input: list[str],
+        config: dict[str, Any] | None = None,
+    ) -> EmbedResponse:
+        """Embed texts."""
+        self.embed_configs.append(config)
+        return {
+            "embeddings": [[0.1]],
+            "usage": {"input_tokens": 1},
+            "raw": {},
+            "latency_ms": 0.0,
+        }
 
     def chat(
         self,
@@ -125,6 +158,24 @@ def resolve(
     )
     provider.chat("model", MESSAGES, config=config, provider="rec")
     [resolved] = adapter.configs
+    return resolved
+
+
+def resolve_embed(
+    config: Config | Mapping[str, Any] | None = None,
+    timeout: Any = _OMITTED,
+    provider_config: Config | Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """The config a "rec" adapter receives for one embed() call."""
+    adapter = RecordingAdapter()
+    kwargs: dict[str, Any] = {"config": provider_config}
+    if timeout is not _OMITTED:
+        kwargs["timeout"] = timeout
+    provider = Provider(
+        adapters={"rec": adapter, "other": RecordingAdapter()}, **kwargs
+    )
+    provider.embed("rec-embed", "hi", config=config, provider="rec")
+    [resolved] = adapter.embed_configs
     return resolved
 
 
@@ -511,6 +562,12 @@ class ProviderConfigValidationTests(unittest.TestCase):
                 ValueError,
                 lambda: Provider(
                     config=with_secret({"providers": {"openai": {"input": []}}})
+                ),
+            ),
+            "per-provider embed-reserved key": (
+                ValueError,
+                lambda: Provider(
+                    config=with_secret({"providers": {"ollama-local": {"input": []}}})
                 ),
             ),
             "third-party adapter headers": (
@@ -1269,6 +1326,227 @@ class UserTracebackTests(unittest.TestCase):
                 self.assertIsNone(ours.__traceback__)
                 self.assertIs(ours.__context__, own)
             self.assertIsNotNone(own.__traceback__)
+
+
+class TestProviderEmbedConfigResolution(unittest.TestCase):
+    def test_provider_level_temperature_not_in_embed_but_in_chat(self):
+        """Provider-level chat defaults do not reach embed but do reach chat."""
+        for provider_config in (
+            {"temperature": 0.2},
+            {"providers": {"rec": {"temperature": 0.2}}},
+        ):
+            with self.subTest(provider_config=provider_config):
+                adapter = RecordingAdapter()
+                provider = Provider(
+                    adapters={"rec": adapter, "other": RecordingAdapter()},
+                    config=provider_config,
+                )
+                provider.chat("model", MESSAGES, provider="rec")
+                provider.embed("rec-embed", "hi", provider="rec")
+                chat_config = adapter.configs[0]
+                embed_config = adapter.embed_configs[0]
+                assert chat_config is not None
+                assert embed_config is not None
+                self.assertIn("temperature", chat_config)
+                self.assertNotIn("temperature", embed_config)
+
+    def test_provider_level_timeout_reaches_embed(self):
+        """Provider-level timeout reaches embed."""
+        self.assertEqual(resolve_embed(provider_config={"timeout": 5}), {"timeout": 5})
+        self.assertEqual(
+            resolve_embed(provider_config={"providers": {"rec": {"timeout": 7}}}),
+            {"timeout": 7},
+        )
+        self.assertEqual(resolve_embed(timeout=10), {"timeout": 10})
+
+    def test_provider_level_timeout_none_disables(self):
+        """timeout=None disables timeout for embed."""
+        self.assertEqual(resolve_embed(timeout=None), {"timeout": None})
+        self.assertEqual(
+            resolve_embed(provider_config={"timeout": None}), {"timeout": None}
+        )
+
+    def test_call_level_body_keys_reach_embed(self):
+        """Call-level body keys reach embed."""
+        self.assertEqual(resolve_embed({"temperature": 0.7}), {"temperature": 0.7})
+        self.assertEqual(
+            resolve_embed({"providers": {"rec": {"top_p": 0.9}}}), {"top_p": 0.9}
+        )
+
+    def test_call_level_per_provider_wins_over_top_level(self):
+        """Call-level per-provider wins over top-level for embed."""
+        config: dict[str, Any] = {
+            "temperature": 0.1,
+            "providers": {"rec": {"temperature": 0.9}},
+        }
+        resolved = resolve_embed(config)
+        assert resolved is not None
+        self.assertEqual(resolved["temperature"], 0.9)
+
+    def test_call_level_headers_merge_key_by_key(self):
+        """Call-level headers merge key by key for embed."""
+        config = {
+            "headers": {"X-Global": "1", "X-Shared": "call"},
+            "providers": {"rec": {"headers": {"X-Prov": "2", "X-Shared": "prov"}}},
+        }
+        resolved = resolve_embed(config)
+        assert resolved is not None
+        self.assertEqual(
+            resolved["headers"], {"X-Global": "1", "X-Prov": "2", "X-Shared": "prov"}
+        )
+
+    def test_provider_level_body_filtered_but_timeout_kept_with_call_keys(self):
+        """Provider body filtered but timeout kept together with call keys for embed."""
+        provider_config: dict[str, Any] = {"temperature": 0.2, "timeout": 9}
+        call_config: dict[str, Any] = {"temperature": 0.7}
+        resolved = resolve_embed(call_config, provider_config=provider_config)
+        assert resolved is not None
+        self.assertEqual(resolved, {"timeout": 9, "temperature": 0.7})
+
+    def test_merged_headers_reach_embed_request(self):
+        """Call-level merged headers reach the embed request."""
+        sent: list[urllib.request.Request] = []
+
+        def capture(req: urllib.request.Request, timeout: float | None = None):
+            sent.append(req)
+            raise StopBeforeSending
+
+        provider = Provider(adapters={"ollama-local": OllamaLocalAdapter()})
+        config: Config = {
+            "headers": {"X-Global": "1"},
+            "providers": {"ollama-local": {"headers": {"X-Prov": "2"}}},
+        }
+        with (
+            patch.dict(os.environ, {"OLLAMA_HOST": "http://127.0.0.1:9"}),
+            patch("urllib.request.urlopen", capture),
+            self.assertRaises(StopBeforeSending),
+        ):
+            provider.embed(OLLAMA_MODEL, "hi", config=config, provider="ollama-local")
+        [req] = sent
+        headers = {k.lower(): v for k, v in req.header_items()}
+        self.assertEqual(headers["x-global"], "1")
+        self.assertEqual(headers["x-prov"], "2")
+
+    def test_provider_configured_headers_reach_embed_request(self):
+        """Provider-configured headers reach embed request."""
+        sent: list[urllib.request.Request] = []
+
+        def capture(req: urllib.request.Request, timeout: float | None = None):
+            sent.append(req)
+            raise StopBeforeSending
+
+        provider = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", "t"),
+        )
+        with (
+            patch.dict(os.environ, {"OLLAMA_HOST": "http://127.0.0.1:9"}),
+            patch("urllib.request.urlopen", capture),
+            self.assertRaises(StopBeforeSending),
+        ):
+            provider.embed(OLLAMA_MODEL, "hi", provider="ollama-local")
+        [req] = sent
+        self.assertEqual(sent_header(req), "t")
+
+
+class TestProviderEmbedSecretRedaction(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(clean_env(OLLAMA_HOST="http://127.0.0.1:9", no_proxy="*"))
+
+    def test_secret_not_in_repr_or_exception_for_embed(self):
+        """Secret header not in repr or exception for embed."""
+        provider = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", SENTINEL),
+        )
+        adapter = adapter_of(provider, "ollama-local")
+        for obj in (provider, adapter):
+            self.assertNotIn(SENTINEL, repr(vars(obj)))
+            self.assertFalse(_sentinel_in_value(vars(obj), set(), 0))
+        bad_provider = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", lambda: f"{SENTINEL}\n"),
+        )
+        bad_adapter = adapter_of(bad_provider, "ollama-local")
+        with patch("urllib.request.urlopen", side_effect=no_request):
+            for call in (
+                lambda: bad_provider.embed(OLLAMA_MODEL, "hi", provider="ollama-local"),
+                lambda: bad_adapter.embed(OLLAMA_MODEL, ["hi"]),
+            ):
+                exc = raised(self, ValueError, call)
+                assert_no_secret_in_messages(self, exc)
+                assert_no_sentinel_in_frames(self, exc)
+
+    def test_configured_state_redacted_for_embed_provider(self):
+        """Configured state redacted for embed provider."""
+        for target in TARGETS:
+            provider = target.provider({HEADER: SENTINEL}, key=SENTINEL)
+            adapter = adapter_of(provider, target.name)
+            for state in (vars(adapter), vars(provider)):
+                self.assertNotIn(SENTINEL, repr(state))
+                self.assertFalse(_sentinel_in_value(state, set(), 0))
+
+
+class TestProviderEmbedHeaderWireTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(clean_env(no_proxy="*"))
+
+    def test_missing_key_raises_auth_error_before_request_for_embed(self):
+        """Missing key raises AuthError before request for embed."""
+        for case in (c for c in KEYED if c.name == "openai"):
+            provider = Provider(
+                adapters={case.name: case.cls()},
+                api_keys={case.name: lambda: None},  # type: ignore[dict-item]
+            )
+            adapter = provider._adapters[case.name]
+            with (
+                self.subTest(case.name),
+                patch("urllib.request.urlopen", side_effect=no_request) as m,
+            ):
+                with self.assertRaises(AuthError):
+                    provider.embed(case.model, "hi", provider=case.name)
+                with self.assertRaises(AuthError):
+                    adapter.embed(case.model, ["hi"])
+                m.assert_not_called()
+
+    def test_configured_key_and_header_sent_on_embed_request(self):
+        """Configured key and header sent on embed request."""
+        for case in (c for c in KEYED if c.name == "openai"):
+            with self.subTest(case.name):
+                provider = Provider(
+                    adapters={case.name: case.cls()},
+                    api_keys={case.name: "k"},
+                    config=secret_headers(case.name, "t"),
+                )
+                adapter = adapter_of(provider, case.name)
+                with patch(
+                    "urllib.request.urlopen", side_effect=fake_urlopen(case)
+                ) as m:
+                    provider.embed(case.model, "hi", provider=case.name)
+                    adapter.embed(case.model, ["hi"])
+                headers = [sent_header(c.args[0]) for c in m.call_args_list]
+                self.assertTrue(all(h == "t" for h in headers))
+                keys = [case.sent_key(c.args[0]) for c in m.call_args_list]
+                self.assertTrue(all(k == "k" for k in keys))
+
+    def test_ollama_embed_sends_configured_header(self):
+        """Ollama embed sends configured header."""
+
+        def embed_aware(req: urllib.request.Request, timeout: float | None = None):
+            if req.full_url.endswith("/api/embed"):
+                payload = ollama_embed_response(OLLAMA_MODEL, [[0.1]])
+                return buffered_response(json.dumps(payload).encode())
+            return ollama_urlopen(req, timeout=timeout)
+
+        provider = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", "t"),
+        )
+        adapter = adapter_of(provider, "ollama-local")
+        with patch("urllib.request.urlopen", side_effect=embed_aware) as m:
+            provider.embed(OLLAMA_MODEL, "hi", provider="ollama-local")
+            adapter.embed(OLLAMA_MODEL, ["hi"])
+        self.assertEqual([sent_header(c.args[0]) for c in m.call_args_list], ["t"] * 2)
 
 
 if __name__ == "__main__":

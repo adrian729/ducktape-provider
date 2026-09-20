@@ -399,6 +399,8 @@ def _merge_config(
     config: dict[str, Any] | None,
     reserved: frozenset[str],
     default_timeout: float,
+    *,
+    operation: str = "chat",
 ) -> tuple[float | None, dict[str, str]]:
     """Merges `config` into the request body in place; returns its timeout and headers.
 
@@ -417,10 +419,10 @@ def _merge_config(
                 "Provider(api_keys=...)"
             )
     if clash := sorted(reserved & config.keys()):
+        caller = "chat()/stream_chat()" if operation == "chat" else f"{operation}()"
         raise ValueError(
             f"{vendor} config cannot set {', '.join(clash)}: these come from the "
-            "chat()/stream_chat() call itself (reserved: "
-            f"{', '.join(sorted(reserved))})"
+            f"{caller} call itself (reserved: {', '.join(sorted(reserved))})"
         )
     timeout = config.pop("timeout", default_timeout)
     _validate_timeout(f"{vendor} config", timeout)

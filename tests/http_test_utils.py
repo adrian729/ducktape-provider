@@ -20,6 +20,38 @@ from urllib.request import Request
 from ducktape_provider import Response, StreamEvent
 
 
+def embed_response(
+    model: str, vectors: Sequence[Sequence[float]], prompt_tokens: int | None = None
+) -> dict[str, Any]:
+    """OpenAI-shaped embed payload."""
+    payload: dict[str, Any] = {
+        "object": "list",
+        "data": [
+            {"object": "embedding", "embedding": list(v), "index": i}
+            for i, v in enumerate(vectors)
+        ],
+        "model": model,
+    }
+    if prompt_tokens is not None:
+        payload["usage"] = {
+            "prompt_tokens": prompt_tokens,
+            "total_tokens": prompt_tokens,
+        }
+    return payload
+
+
+def ollama_embed_response(
+    model: str, vectors: Sequence[Sequence[float]], prompt_eval_count: int | None = None
+) -> dict[str, Any]:
+    """Ollama-shaped embed payload."""
+    payload: dict[str, Any] = {"model": model, "embeddings": [list(v) for v in vectors]}
+    if prompt_eval_count is not None:
+        payload["prompt_eval_count"] = prompt_eval_count
+        payload["total_duration"] = 1000
+        payload["load_duration"] = 500
+    return payload
+
+
 def buffered_response(payload: bytes) -> io.BytesIO:
     """A urlopen() stand-in for the non-streaming path: readable and already a
     context manager via BytesIO's own __enter__/__exit__."""
