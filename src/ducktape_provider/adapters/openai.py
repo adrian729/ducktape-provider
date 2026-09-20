@@ -21,6 +21,7 @@ from ..adapter import (
     _resolve_headers,
     _resolve_probe_auth,
     _Secret,
+    _system_text,
     _validate_headers,
     _warn_headers_refused,
 )
@@ -46,6 +47,7 @@ from ..types import (
     Response,
     StopReason,
     StreamEvent,
+    SystemBlock,
     TextBlock,
     ToolDef,
     ToolUseBlock,
@@ -374,7 +376,7 @@ class OpenAIAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None,
+        system: str | list[SystemBlock] | None,
         tools: list[ToolDef] | None,
         config: dict[str, Any] | None,
         stream: bool,
@@ -386,7 +388,7 @@ class OpenAIAdapter(Adapter):
             "stream": stream,
         }
         if system:
-            payload["instructions"] = system
+            payload["instructions"] = _system_text(system)
         if tools:
             payload["tools"] = self._serialize_tools(tools)
         timeout, extra_headers = _merge_config(
@@ -498,7 +500,7 @@ class OpenAIAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
@@ -521,7 +523,7 @@ class OpenAIAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:

@@ -12,7 +12,7 @@ from collections.abc import Callable, Collection, Mapping
 from typing import Any, NoReturn, Self, cast
 
 from .streaming import _clear_tracebacks
-from .types import Adapter, AuthError
+from .types import Adapter, AuthError, SystemBlock
 
 __all__ = ["Adapter"]
 
@@ -371,6 +371,13 @@ def _warn_headers_refused(adapter: Any, logger_: logging.Logger, vendor: str) ->
 
 
 _MAX_TIMEOUT = 1e9
+
+
+def _system_text(system: str | list[SystemBlock]) -> str:
+    """Flattens a system prompt to text for vendors without block caching."""
+    if isinstance(system, str):
+        return system
+    return "\n".join(block["text"] for block in system)
 
 
 def _validate_timeout(owner: str, timeout: object) -> None:

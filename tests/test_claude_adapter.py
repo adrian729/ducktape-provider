@@ -3,6 +3,7 @@ with urllib.request.urlopen mocked out. No real network call is ever made."""
 
 import http.client
 import json
+import os
 import time
 import unittest
 from collections.abc import Generator
@@ -20,15 +21,19 @@ from http_test_utils import (
 
 from ducktape_provider import (
     APIError,
+    AuthError,
+    CacheControl,
     ClaudeAdapter,
     ContextOverflowError,
     MalformedResponseError,
     Message,
     ModelInfo,
+    Provider,
     RateLimitError,
     RequestTimeoutError,
     ServerError,
     StreamEvent,
+    SystemBlock,
     ThinkingBlock,
     ToolDef,
 )
@@ -149,6 +154,115 @@ class ClaudeSerializeTests(unittest.TestCase):
         self.assertEqual(
             self.adapter._serialize_tools(tools),
             [{"name": "get_weather", "description": "...", "input_schema": {"a": 1}}],
+        )
+
+    def test_serialize_preserves_cache_control_on_blocks(self):
+        cache: CacheControl = {"type": "ephemeral"}
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi", "cache_control": cache},
+                    {
+                        "type": "image",
+                        "source": "base64",
+                        "media_type": "image/png",
+                        "data": "abc",
+                        "cache_control": cache,
+                    },
+                    {
+                        "type": "document",
+                        "source": "url",
+                        "url": "https://example.test/doc",
+                        "cache_control": cache,
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_1",
+                        "name": "n",
+                        "content": "ok",
+                        "cache_control": cache,
+                    },
+                ],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        for block in serialized[0]["content"]:
+            self.assertEqual(block["cache_control"], cache)
+
+    def test_serialize_tools_preserves_cache_control(self):
+        cache: CacheControl = {"type": "ephemeral", "ttl": "1h"}
+        tools: list[ToolDef] = [
+            {
+                "name": "get_weather",
+                "description": "...",
+                "parameters": {"a": 1},
+                "cache_control": cache,
+            }
+        ]
+        self.assertEqual(
+            self.adapter._serialize_tools(tools)[0]["cache_control"], cache
+        )
+
+    def test_system_blocks_pass_through(self):
+        system: list[SystemBlock] = [
+            {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}
+        ]
+        req, _ = self.adapter._build_request("m", [], system, None, None, False)
+        self.assertEqual(request_body(req)["system"], system)
+
+    def test_system_string_passes_through_unchanged(self):
+        req, _ = self.adapter._build_request("m", [], "plain", None, None, False)
+        self.assertEqual(request_body(req)["system"], "plain")
+
+    def test_serialize_omits_cache_control_when_absent(self):
+        messages: list[Message] = [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]}
+        ]
+        self.assertNotIn(
+            "cache_control", self.adapter._serialize(messages)[0]["content"][0]
+        )
+
+    def test_serialize_tools_omits_cache_control_when_absent(self):
+        tools: list[ToolDef] = [{"name": "t", "description": "d", "parameters": {}}]
+        self.assertNotIn("cache_control", self.adapter._serialize_tools(tools)[0])
+
+    def test_serialize_copies_cache_control(self):
+        cache: CacheControl = {"type": "ephemeral"}
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "cache_control": cache}],
+            }
+        ]
+        serialized = self.adapter._serialize(messages)
+        cache["ttl"] = "1h"
+        self.assertEqual(
+            serialized[0]["content"][0]["cache_control"], {"type": "ephemeral"}
+        )
+
+    def test_system_blocks_are_copied(self):
+        cache: CacheControl = {"type": "ephemeral"}
+        system: list[SystemBlock] = [
+            {"type": "text", "text": "a", "cache_control": cache}
+        ]
+        req, _ = self.adapter._build_request("m", [], system, None, None, False)
+        cache["ttl"] = "1h"
+        self.assertEqual(
+            request_body(req)["system"],
+            [{"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}}],
+        )
+
+    def test_cache_control_ttl_preserved(self):
+        cache: CacheControl = {"type": "ephemeral", "ttl": "1h"}
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "cache_control": cache}],
+            }
+        ]
+        self.assertEqual(
+            self.adapter._serialize(messages)[0]["content"][0]["cache_control"], cache
         )
 
 
@@ -1534,6 +1648,506 @@ class ClaudeModelsCacheInvalidationTests(unittest.TestCase):
         with self.assertRaises(APIError):
             self.adapter.chat("claude-x", MESSAGES)
         self.assertEqual(self.adapter._models_cache, STALE_MODEL_INFO)
+
+
+class TestClaudeCapabilities(unittest.TestCase):
+    def setUp(self):
+        self.adapter = ClaudeAdapter(api_key="test")
+
+    def _paged_capabilities_payloads(self):
+        """Two pages where second page omits some capability keys."""
+        caps_a = {
+            "image_input": {"supported": True},
+            "pdf_input": {"supported": False},
+            "thinking": {"supported": True},
+            "citations": {"supported": True},
+            "batch": {"supported": False},
+        }
+        caps_b = {
+            "image_input": {"supported": False},
+            "thinking": {"supported": False},
+            "effort": {"supported": True},
+        }
+        page1 = {
+            "data": [
+                {
+                    "id": "claude-a",
+                    "max_input_tokens": 200000,
+                    "max_tokens": 8192,
+                    "capabilities": caps_a,
+                }
+            ],
+            "has_more": True,
+            "last_id": "claude-a",
+        }
+        page2 = {
+            "data": [
+                {
+                    "id": "claude-b",
+                    "max_input_tokens": 100000,
+                    "max_tokens": 4096,
+                    "capabilities": caps_b,
+                }
+            ],
+            "has_more": False,
+            "last_id": "claude-b",
+        }
+        return caps_a, caps_b, page1, page2
+
+    def _paged_urlopen(self, page1, page2):
+        """Mock urlopen returning page1 then page2 based on after_id."""
+
+        def urlopen(req, timeout=None):
+            url = req.full_url
+            if "after_id=claude-a" in url:
+                return buffered_response(json.dumps(page2).encode())
+            return buffered_response(json.dumps(page1).encode())
+
+        return urlopen
+
+    @patch("urllib.request.urlopen")
+    def test_paged_capabilities_projection_and_raw(self, mock_urlopen):
+        """Paged list projects capabilities and keeps raw equal to vendor map."""
+        caps_a, caps_b, page1, page2 = self._paged_capabilities_payloads()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        caps = self.adapter.capabilities("claude-a")
+        assert caps is not None
+        self.assertEqual(caps["vision"], True)
+        self.assertEqual(caps["pdf_input"], False)
+        self.assertEqual(caps["thinking"], True)
+        self.assertIsNone(caps["tools"])
+        assert "raw" in caps
+        self.assertEqual(caps["raw"], caps_a)
+        self.assertEqual(set(caps["raw"].keys()), set(caps_a.keys()))
+        caps_b_result = self.adapter.capabilities("claude-b")
+        assert caps_b_result is not None
+        self.assertEqual(caps_b_result["vision"], False)
+        self.assertEqual(caps_b_result["thinking"], False)
+        self.assertIsNone(caps_b_result["pdf_input"])
+        self.assertIsNone(caps_b_result["tools"])
+        assert "raw" in caps_b_result
+        self.assertEqual(caps_b_result["raw"], caps_b)
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("urllib.request.urlopen")
+    def test_capabilities_warms_model_info_and_reverse(self, mock_urlopen):
+        """Warm cache from one serves the other with no extra request."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        caps = self.adapter.capabilities("claude-a")
+        assert caps is not None
+        self.assertEqual(mock_urlopen.call_count, 2)
+        info = self.adapter.model_info("claude-a")
+        self.assertEqual(info, {"context_window": 200000, "max_output_tokens": 8192})
+        self.assertEqual(mock_urlopen.call_count, 2)
+        info_b = self.adapter.model_info("claude-b")
+        self.assertEqual(info_b, {"context_window": 100000, "max_output_tokens": 4096})
+        self.assertEqual(mock_urlopen.call_count, 2)
+        adapter2 = ClaudeAdapter(api_key="test")
+        mock_urlopen.reset_mock()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        self.assertEqual(adapter2.models(), {"claude-a", "claude-b"})
+        self.assertEqual(mock_urlopen.call_count, 2)
+        caps2 = adapter2.capabilities("claude-a")
+        assert caps2 is not None
+        self.assertEqual(caps2["vision"], True)
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("urllib.request.urlopen")
+    def test_absent_id_falls_back_to_single_model(self, mock_urlopen):
+        """An id absent from the listing resolves via the single-model endpoint."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+
+        def urlopen(req, timeout=None):
+            if "/models/" in req.full_url:
+                return buffered_response(
+                    json.dumps(
+                        {
+                            "id": "alias-model",
+                            "capabilities": {"image_input": {"supported": True}},
+                        }
+                    ).encode()
+                )
+            if "after_id=claude-a" in req.full_url:
+                return buffered_response(json.dumps(page2).encode())
+            return buffered_response(json.dumps(page1).encode())
+
+        mock_urlopen.side_effect = urlopen
+        caps = self.adapter.capabilities("alias-model")
+        assert caps is not None
+        self.assertEqual(caps["vision"], True)
+        self.assertEqual(
+            len(
+                [
+                    c
+                    for c in mock_urlopen.call_args_list
+                    if "/models/" in c.args[0].full_url
+                ]
+            ),
+            1,
+        )
+        mock_urlopen.reset_mock()
+        caps2 = self.adapter.capabilities("alias-model")
+        assert caps2 is not None
+        self.assertEqual(caps2["vision"], True)
+        self.assertEqual(mock_urlopen.call_count, 0)
+
+    @patch("urllib.request.urlopen")
+    def test_single_model_404_is_none_and_negative_cached(self, mock_urlopen):
+        """A single-model 404 yields None and is cached under the TTL."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+
+        def urlopen(req, timeout=None):
+            if "/models/" in req.full_url:
+                raise http_error(req.full_url, 404, b"not found")
+            if "after_id=claude-a" in req.full_url:
+                return buffered_response(json.dumps(page2).encode())
+            return buffered_response(json.dumps(page1).encode())
+
+        mock_urlopen.side_effect = urlopen
+        self.assertIsNone(self.adapter.capabilities("missing-model"))
+        mock_urlopen.reset_mock()
+        self.assertIsNone(self.adapter.capabilities("missing-model"))
+        self.assertEqual(mock_urlopen.call_count, 0)
+
+    @patch("urllib.request.urlopen")
+    def test_chat_404_clears_caches_and_next_refetches(self, mock_urlopen):
+        """Chat 404 clears models caches and next call refetches."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        self.adapter.capabilities("claude-a")
+        self.assertIsNotNone(self.adapter._models_cache)
+        self.assertIsNotNone(self.adapter._models_raw)
+        self.assertNotEqual(self.adapter._cache_time, 0.0)
+        mock_urlopen.side_effect = http_error(
+            ClaudeAdapter._MESSAGES_URL, 404, b"no such model"
+        )
+        with self.assertRaises(APIError) as ctx:
+            self.adapter.chat("claude-a", MESSAGES)
+        self.assertEqual(ctx.exception.status, 404)
+        self.assertIsNone(self.adapter._models_cache)
+        self.assertIsNone(self.adapter._models_raw)
+        self.assertEqual(self.adapter._cache_time, 0.0)
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        caps = self.adapter.capabilities("claude-a")
+        assert caps is not None
+        self.assertEqual(mock_urlopen.call_count, 5)
+        adapter2 = ClaudeAdapter(api_key="test")
+        mock_urlopen.reset_mock()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        adapter2.models()
+        mock_urlopen.side_effect = http_error(
+            ClaudeAdapter._MESSAGES_URL, 404, b"no such model"
+        )
+        with self.assertRaises(APIError):
+            adapter2.chat("claude-a", MESSAGES)
+        self.assertIsNone(adapter2._models_cache)
+        self.assertIsNone(adapter2._models_raw)
+        self.assertEqual(adapter2._cache_time, 0.0)
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        self.assertEqual(adapter2.models(), {"claude-a", "claude-b"})
+        self.assertEqual(mock_urlopen.call_count, 5)
+
+    def test_missing_api_key_raises_auth_error_while_models_empty(self):
+        """Missing key raises AuthError from capabilities and empty set from models."""
+        with patch.dict(os.environ, {}, clear=False):
+            for key in list(os.environ):
+                if key.lower() == "anthropic_api_key":
+                    del os.environ[key]
+            adapter = ClaudeAdapter()
+            provider = Provider(adapters={"claude": adapter})
+            with patch(
+                "urllib.request.urlopen", side_effect=AssertionError("no request")
+            ) as mock_urlopen:
+                with self.assertRaises(AuthError):
+                    provider.capabilities("claude-a", provider="claude")
+                mock_urlopen.assert_not_called()
+            self.assertEqual(adapter.models(), set())
+            self.assertEqual(provider.models(), {})
+
+    @patch("urllib.request.urlopen")
+    def test_401_from_listing_raises_auth_error(self, mock_urlopen):
+        """401 from listing raises AuthError from capabilities."""
+        mock_urlopen.side_effect = http_error(
+            ClaudeAdapter._MODELS_URL, 401, b"unauthorized"
+        )
+        with self.assertRaises(AuthError) as ctx:
+            self.adapter.capabilities("claude-a")
+        self.assertEqual(ctx.exception.status, 401)
+        with patch.dict(os.environ, {}, clear=False):
+            for key in list(os.environ):
+                if key.lower() == "anthropic_api_key":
+                    del os.environ[key]
+            with patch(
+                "urllib.request.urlopen",
+                side_effect=http_error(ClaudeAdapter._MODELS_URL, 401, b"unauthorized"),
+            ):
+                provider = Provider(adapters={"claude": ClaudeAdapter()})
+                with self.assertRaises(AuthError):
+                    provider.capabilities("claude-a", provider="claude")
+
+    @patch("urllib.request.urlopen")
+    def test_warm_cache_bidirectional_no_extra_request(self, mock_urlopen):
+        """Warm cache filled by either caller serves the other."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        self.assertEqual(self.adapter.models(), {"claude-a", "claude-b"})
+        self.assertEqual(mock_urlopen.call_count, 2)
+        caps = self.adapter.capabilities("claude-b")
+        assert caps is not None
+        self.assertEqual(caps["vision"], False)
+        self.assertEqual(mock_urlopen.call_count, 2)
+        adapter2 = ClaudeAdapter(api_key="test")
+        mock_urlopen.reset_mock()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        adapter2.capabilities("claude-a")
+        self.assertEqual(mock_urlopen.call_count, 2)
+        self.assertEqual(adapter2.models(), {"claude-a", "claude-b"})
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("urllib.request.urlopen")
+    def test_zero_tokens_preserved(self, mock_urlopen):
+        """Zero max tokens are preserved not coerced to None."""
+        payload = {
+            "data": [
+                {
+                    "id": "claude-zero",
+                    "max_input_tokens": 0,
+                    "max_tokens": 0,
+                    "capabilities": {"image_input": {"supported": True}},
+                }
+            ],
+            "has_more": False,
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        info = self.adapter.model_info("claude-zero")
+        self.assertEqual(info, {"context_window": 0, "max_output_tokens": 0})
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        adapter2 = ClaudeAdapter(api_key="test")
+        with patch(
+            "urllib.request.urlopen",
+            return_value=buffered_response(json.dumps(payload).encode()),
+        ):
+            caps = adapter2.capabilities("claude-zero")
+            assert caps is not None
+            self.assertEqual(caps["vision"], True)
+        self.assertEqual(self.adapter.models(), {"claude-zero"})
+        info2 = self.adapter.model_info("claude-zero")
+        self.assertEqual(info2, {"context_window": 0, "max_output_tokens": 0})
+
+    @patch("urllib.request.urlopen")
+    def test_cache_poisoning_via_raw_isolated(self, mock_urlopen):
+        """Mutating returned raw does not poison cache or model_info."""
+        caps_a, _caps_b, page1, page2 = self._paged_capabilities_payloads()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        caps = self.adapter.capabilities("claude-a")
+        assert caps is not None
+        assert "raw" in caps
+        caps["raw"]["image_input"]["supported"] = False
+        caps["raw"]["new_key"] = {"supported": True}
+        caps2 = self.adapter.capabilities("claude-a")
+        assert caps2 is not None
+        assert "raw" in caps2
+        self.assertEqual(caps2["raw"], caps_a)
+        self.assertNotIn("new_key", caps2["raw"])
+        self.assertEqual(caps2["vision"], True)
+        assert self.adapter._models_raw is not None
+        self.assertEqual(self.adapter._models_raw["claude-a"]["capabilities"], caps_a)
+        info = self.adapter.model_info("claude-a")
+        self.assertEqual(info, {"context_window": 200000, "max_output_tokens": 8192})
+
+    @patch("urllib.request.urlopen")
+    def test_raw_equals_vendor_capability_map(self, mock_urlopen):
+        """Raw equals vendor capability map with no extra keys."""
+        caps_a, caps_b, page1, page2 = self._paged_capabilities_payloads()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        caps = self.adapter.capabilities("claude-a")
+        assert caps is not None
+        self.assertEqual(caps["raw"], caps_a)
+        self.assertEqual(
+            set(caps.keys()), {"tools", "vision", "pdf_input", "thinking", "raw"}
+        )
+        self.assertIsNone(caps["tools"])
+        caps_b_result = self.adapter.capabilities("claude-b")
+        assert caps_b_result is not None
+        self.assertEqual(caps_b_result["raw"], caps_b)
+        self.assertIsNone(caps_b_result["tools"])
+
+    @patch("urllib.request.urlopen")
+    def test_ttl_expiry_refetches(self, mock_urlopen):
+        """Expired cache refetches on the 60s boundary."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+        base = 1000.0
+        with patch("ducktape_provider.adapters.claude.time.monotonic") as mock_time:
+            mock_time.return_value = base
+            mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+            self.adapter.capabilities("claude-a")
+            self.assertEqual(mock_urlopen.call_count, 2)
+            mock_time.return_value = base + 59
+            self.adapter.capabilities("claude-a")
+            self.assertEqual(mock_urlopen.call_count, 2)
+            mock_time.return_value = base + 61
+            self.adapter.capabilities("claude-a")
+            self.assertEqual(mock_urlopen.call_count, 4)
+
+    @patch("urllib.request.urlopen")
+    def test_configured_auth_header_covers_missing_key(self, mock_urlopen):
+        """A configured x-api-key header serves capabilities with no key source."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+        mock_urlopen.side_effect = self._paged_urlopen(page1, page2)
+        with patch.dict(os.environ, {}, clear=False):
+            for key in list(os.environ):
+                if key.lower() == "anthropic_api_key":
+                    del os.environ[key]
+            provider = Provider(
+                adapters={"claude": ClaudeAdapter()},
+                config={"providers": {"claude": {"headers": {"x-api-key": "t"}}}},
+            )
+            caps = provider.capabilities("claude-a", provider="claude")
+            assert caps is not None
+            self.assertEqual(caps["vision"], True)
+            req = mock_urlopen.call_args_list[0].args[0]
+            self.assertEqual(req.get_header("X-api-key"), "t")
+
+    @patch("urllib.request.urlopen")
+    def test_missing_data_key_is_malformed_for_capabilities(self, mock_urlopen):
+        """A listing without a data key raises for capabilities, empty for models."""
+        body = json.dumps({"has_more": False}).encode()
+        mock_urlopen.return_value = buffered_response(body)
+        with self.assertRaises(MalformedResponseError):
+            self.adapter.capabilities("claude-a")
+        mock_urlopen.return_value = buffered_response(body)
+        self.assertEqual(self.adapter.models(), set())
+
+    @patch("urllib.request.urlopen")
+    def test_non_bool_supported_raises_malformed(self, mock_urlopen):
+        """A non-bool supported value for a mapped key is malformed."""
+        payload = {
+            "data": [
+                {
+                    "id": "claude-x",
+                    "capabilities": {"image_input": {"supported": "yes"}},
+                }
+            ],
+            "has_more": False,
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        with self.assertRaises(MalformedResponseError):
+            self.adapter.capabilities("claude-x")
+
+    @patch("urllib.request.urlopen")
+    def test_duplicate_last_id_terminates_pagination(self, mock_urlopen):
+        """A repeated last_id terminates the page loop instead of looping."""
+        page = {
+            "data": [
+                {
+                    "id": "claude-a",
+                    "capabilities": {"image_input": {"supported": True}},
+                }
+            ],
+            "has_more": True,
+            "last_id": "claude-a",
+        }
+        mock_urlopen.side_effect = lambda *a, **k: buffered_response(
+            json.dumps(page).encode()
+        )
+        caps = self.adapter.capabilities("claude-a")
+        assert caps is not None
+        self.assertEqual(caps["vision"], True)
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("urllib.request.urlopen")
+    def test_fresh_per_id_cache_skips_list_fetch(self, mock_urlopen):
+        """A fresh per-id entry is served without touching the list cache."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+        alias = {"id": "alias", "capabilities": {"image_input": {"supported": True}}}
+
+        def urlopen(req, timeout=None):
+            if "/models/" in req.full_url:
+                return buffered_response(json.dumps(alias).encode())
+            if "after_id=claude-a" in req.full_url:
+                return buffered_response(json.dumps(page2).encode())
+            return buffered_response(json.dumps(page1).encode())
+
+        mock_urlopen.side_effect = urlopen
+        base = 1000.0
+        with patch("ducktape_provider.adapters.claude.time.monotonic") as mock_time:
+            mock_time.return_value = base
+            self.adapter.capabilities("claude-a")
+            mock_time.return_value = base + 30
+            self.adapter.capabilities("alias")
+            mock_urlopen.reset_mock()
+            mock_time.return_value = base + 70
+            caps = self.adapter.capabilities("alias")
+            assert caps is not None
+            self.assertEqual(caps["vision"], True)
+            self.assertEqual(mock_urlopen.call_count, 0)
+
+    @patch("urllib.request.urlopen")
+    def test_per_id_cache_ttl_expiry_refetches(self, mock_urlopen):
+        """An expired per-id entry refetches the list and the model."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+        alias = {"id": "alias", "capabilities": {"image_input": {"supported": True}}}
+
+        def urlopen(req, timeout=None):
+            if "/models/" in req.full_url:
+                return buffered_response(json.dumps(alias).encode())
+            if "after_id=claude-a" in req.full_url:
+                return buffered_response(json.dumps(page2).encode())
+            return buffered_response(json.dumps(page1).encode())
+
+        mock_urlopen.side_effect = urlopen
+        base = 1000.0
+        with patch("ducktape_provider.adapters.claude.time.monotonic") as mock_time:
+            mock_time.return_value = base
+            self.adapter.capabilities("alias")
+            mock_urlopen.reset_mock()
+            mock_time.return_value = base + 61
+            caps = self.adapter.capabilities("alias")
+            assert caps is not None
+            self.assertEqual(caps["vision"], True)
+            self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch("urllib.request.urlopen")
+    def test_single_model_path_is_percent_encoded(self, mock_urlopen):
+        """The single-model path percent-encodes the model id."""
+        _, _, page1, page2 = self._paged_capabilities_payloads()
+        seen: list[str] = []
+
+        def urlopen(req, timeout=None):
+            seen.append(req.full_url)
+            if "/models/" in req.full_url:
+                return buffered_response(
+                    json.dumps({"id": "x", "capabilities": {}}).encode()
+                )
+            if "after_id=claude-a" in req.full_url:
+                return buffered_response(json.dumps(page2).encode())
+            return buffered_response(json.dumps(page1).encode())
+
+        mock_urlopen.side_effect = urlopen
+        self.adapter.capabilities("foo/bar baz")
+        single = [url for url in seen if "/models/" in url]
+        self.assertEqual(len(single), 1)
+        self.assertIn("foo%2Fbar%20baz", single[0])
+
+    def test_invalidate_model_capabilities_drops_only_that_model(self):
+        """The per-model hook drops the model from every projection."""
+        self.adapter._models_cache = {
+            "a": {"context_window": 1, "max_output_tokens": 2},
+            "b": {"context_window": 3, "max_output_tokens": 4},
+        }
+        self.adapter._models_raw = {"a": {"id": "a"}, "b": {"id": "b"}}
+        self.adapter._model_raw_cache = {
+            "a": ({"id": "a"}, 1.0),
+            "b": ({"id": "b"}, 1.0),
+        }
+        self.adapter._invalidate_model_capabilities("a")
+        self.assertIn("a", self.adapter._models_cache)
+        self.assertIn("b", self.adapter._models_cache)
+        self.assertNotIn("a", self.adapter._models_raw)
+        self.assertIn("b", self.adapter._models_raw)
+        self.assertNotIn("a", self.adapter._model_raw_cache)
+        self.assertIn("b", self.adapter._model_raw_cache)
 
 
 if __name__ == "__main__":

@@ -32,12 +32,15 @@ from .errors import (
 )
 from .streaming import _clear_tracebacks
 from .types import (
+    Capabilities,
+    CapabilityName,
     Config,
     EmbedResponse,
     Message,
     ModelInfo,
     Response,
     StreamEvent,
+    SystemBlock,
     ToolDef,
 )
 
@@ -107,6 +110,18 @@ def _usable_models(
     except Exception:
         logger.warning("provider %r raised while listing models", name, exc_info=True)
         return None
+
+
+_CAPABILITY_NAMES = frozenset(Capabilities.__annotations__) - {"raw"}
+
+
+def _validate_capability(capability: object) -> None:
+    """Raises ValueError unless `capability` is a known capability name."""
+    if not isinstance(capability, str) or capability not in _CAPABILITY_NAMES:
+        known = ", ".join(sorted(_CAPABILITY_NAMES))
+        raise ValueError(
+            f"unknown capability {capability!r}; known capabilities: {known}"
+        )
 
 
 def _should_evict_cache(exc: APIError) -> bool:
@@ -764,9 +779,12 @@ class Provider:
         resolved_name: str,
         *,
         cache: dict[str, str] | None = None,
+        capabilities: bool = True,
     ) -> None:
         if _should_evict_cache(exc):
             self._evict_auto_match(model, resolved_name, cache=cache)
+            if capabilities:
+                self._adapters[resolved_name]._invalidate_model_capabilities(model)
 
     async def _run_off_loop(self, func: Callable[[], _T]) -> _T:
         """Runs func on self._executor (or the loop's default) with the caller's contextvars."""
@@ -845,6 +863,44 @@ class Provider:
 
         return await self._run_off_loop(call)
 
+    def capabilities(
+        self, model: str, *, provider: str | None = None
+    ) -> Capabilities | None:
+        """What the resolved provider's metadata says `model` can do, or `None`."""
+        _, adapter = self._resolve_provider(provider, model)
+        return adapter.capabilities(model)
+
+    async def async_capabilities(
+        self, model: str, *, provider: str | None = None
+    ) -> Capabilities | None:
+        """`capabilities`, off the event loop — resolution included."""
+
+        def call() -> Capabilities | None:
+            _, adapter = self._resolve_provider(provider, model)
+            return adapter.capabilities(model)
+
+        return await self._run_off_loop(call)
+
+    def supports(
+        self, model: str, capability: CapabilityName, *, provider: str | None = None
+    ) -> bool | None:
+        """One capability as `True`/`False`/`None`; a bad name raises `ValueError`."""
+        _validate_capability(capability)
+        caps = self.capabilities(model, provider=provider)
+        if caps is None:
+            return None
+        return caps[capability]
+
+    async def async_supports(
+        self, model: str, capability: CapabilityName, *, provider: str | None = None
+    ) -> bool | None:
+        """`supports`, off the event loop."""
+        _validate_capability(capability)
+        caps = await self.async_capabilities(model, provider=provider)
+        if caps is None:
+            return None
+        return caps[capability]
+
     def _resolve_config(
         self,
         provider: str,
@@ -893,7 +949,7 @@ class Provider:
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: Config | Mapping[str, Any] | None = None,
         *,
@@ -979,7 +1035,11 @@ class Provider:
         except APIError as exc:
             if provider is None:
                 self._maybe_evict_auto_match(
-                    exc, model, resolved_name, cache=self._auto_match_embed_cache
+                    exc,
+                    model,
+                    resolved_name,
+                    cache=self._auto_match_embed_cache,
+                    capabilities=False,
                 )
             raise
         try:
@@ -1021,7 +1081,7 @@ class Provider:
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: Config | Mapping[str, Any] | None = None,
         *,
@@ -1039,7 +1099,7 @@ class Provider:
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: Config | Mapping[str, Any] | None = None,
         *,
@@ -1081,7 +1141,7 @@ class Provider:
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: Config | Mapping[str, Any] | None = None,
         *,

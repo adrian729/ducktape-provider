@@ -1,5 +1,6 @@
 """Adapter for a locally running Ollama server's chat API."""
 
+import copy
 import http.client
 import json
 import logging
@@ -9,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, TypedDict, cast
 
 from .. import errors
 from ..adapter import (
@@ -20,6 +21,7 @@ from ..adapter import (
     _new_request,
     _resolve_headers,
     _Secret,
+    _system_text,
     _validate_headers,
     _warn_headers_refused,
 )
@@ -38,6 +40,7 @@ from ..streaming import (
 )
 from ..types import (
     Block,
+    Capabilities,
     EmbedResponse,
     EmbedUsage,
     ImageBlock,
@@ -46,6 +49,7 @@ from ..types import (
     Response,
     StopReason,
     StreamEvent,
+    SystemBlock,
     TextBlock,
     ToolDef,
     ToolUseBlock,
@@ -89,6 +93,14 @@ def _tool_use_block(index: int, call: dict[str, Any]) -> ToolUseBlock:
     return block
 
 
+class _ShowFacts(TypedDict):
+    """The `/api/show` facts both `model_info()` and `capabilities()` project."""
+
+    context_window: int | None
+    capabilities: list[str] | None
+    vision: bool | None
+
+
 class OllamaLocalAdapter(Adapter):
     _CHAT_TIMEOUT = 300
     _EMBED_TIMEOUT = 300
@@ -105,6 +117,7 @@ class OllamaLocalAdapter(Adapter):
         (`self._provider_headers`) itself."""
         self._models_cache: set[str] | None = None
         self._cache_time = 0.0
+        self._show_cache: dict[str, tuple[_ShowFacts | None, float]] = {}
 
     def _base_url(self) -> str:
         host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
@@ -171,58 +184,119 @@ class OllamaLocalAdapter(Adapter):
     def _reset_caches(self) -> None:
         self._models_cache = None
         self._cache_time = 0.0
+        self._show_cache = {}
+
+    def _invalidate_model_capabilities(self, model: str) -> None:
+        self._show_cache.pop(model, None)
 
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
         if e.status == 404:
             self._reset_caches()
+
+    def _show(self, model: str, operation: str = "capabilities") -> _ShowFacts | None:
+        """`/api/show` facts for `model`, cached; `None` for a vendor 404."""
+        now = time.monotonic()
+        cached = self._show_cache.get(model)
+        if cached is not None and now - cached[1] < self._MODELS_TTL:
+            return cached[0]
+        url = f"{self._base_url()}/api/show"
+        headers = _resolve_headers("ollama-local", url, self._provider_headers, ())
+        try:
+            data, _ = _request_json(
+                "ollama",
+                _new_request(
+                    url,
+                    json.dumps({"model": model}).encode(),
+                    {"Content-Type": "application/json"},
+                    resolved=headers,
+                ),
+                3,
+                operation=operation,
+            )
+        except errors.APIError as e:
+            if e.status != 404:
+                raise
+            facts: _ShowFacts | None = None
+        else:
+            with _shape_checked("ollama", operation=operation):
+                info = data.get("model_info") or {}
+                if not isinstance(info, dict):
+                    info = {}
+                context_window = next(
+                    (
+                        v
+                        for k, v in info.items()
+                        if k.endswith(".context_length")
+                        and isinstance(v, int)
+                        and not isinstance(v, bool)
+                    ),
+                    None,
+                )
+                caps = data.get("capabilities")
+                if isinstance(caps, list):
+                    vision: bool | None = "vision" in caps
+                elif any(key.startswith("clip.") or ".vision." in key for key in info):
+                    vision = True
+                else:
+                    vision = None
+                facts = cast(
+                    _ShowFacts,
+                    {
+                        "context_window": context_window,
+                        "capabilities": caps if isinstance(caps, list) else None,
+                        "vision": vision,
+                    },
+                )
+        for stale in [
+            key
+            for key, (_, stamp) in self._show_cache.items()
+            if now - stamp >= self._MODELS_TTL
+        ]:
+            del self._show_cache[stale]
+        self._show_cache[model] = (facts, now)
+        return facts
+
+    def capabilities(self, model: str) -> Capabilities | None:
+        facts = self._show(model)
+        if facts is None:
+            return None
+        caps = facts["capabilities"]
+        if not isinstance(caps, list):
+            return {
+                "tools": None,
+                "vision": facts["vision"],
+                "pdf_input": None,
+                "thinking": None,
+            }
+        return {
+            "tools": "tools" in caps,
+            "vision": "vision" in caps,
+            "pdf_input": None,
+            "thinking": "thinking" in caps,
+            "raw": {"capabilities": copy.deepcopy(caps)},
+        }
 
     def model_info(self, model: str) -> ModelInfo | None:
         """The context window from Ollama's own GGUF metadata for `model` — its
         maximum *supported* context, not necessarily what a given request
         actually gets: `num_ctx` can override the effective window smaller or
         larger per call. No max-output-tokens equivalent exists in Ollama's
-        API, so that field is always `None`. Unlike `models()`, this isn't
-        cached: it's a per-model lookup, rare enough that a fresh probe each
-        time is fine.
+        API, so that field is always `None`. Reads the shared `/api/show` cache
+        that `capabilities()` uses. `None` on any probe failure, as before.
         """
         url = f"{self._base_url()}/api/show"
         if self._provider_headers and not _key_url_allowed(url):
             _warn_headers_refused(self, logger, "ollama-local")
             return None
         try:
-            headers = _resolve_headers("ollama-local", url, self._provider_headers, ())
-        except _BadConfiguredHeader:
-            return None
-        stop = sys.exception()
-        try:
-            req = _new_request(
-                url,
-                json.dumps({"model": model}).encode(),
-                {"Content-Type": "application/json"},
-                resolved=headers,
-            )
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                data = _read_json(resp, "ollama", operation="model_info")
-        except urllib.error.HTTPError as e:
-            e.close()
+            facts = self._show(model, "model_info")
+        except errors.APIError:
             return None
         except _PROBE_ERRORS:
             return None
-        except BaseException as e:
-            _clear_tracebacks(e, stop)
-            raise
-        info = data.get("model_info") or {}
-        context_window = next(
-            (
-                v
-                for k, v in info.items()
-                if k.endswith(".context_length")
-                and isinstance(v, int)
-                and not isinstance(v, bool)
-            ),
-            None,
-        )
-        return {"context_window": context_window, "max_output_tokens": None}
+        if facts is None:
+            return None
+        return {"context_window": facts["context_window"], "max_output_tokens": None}
 
     def _tool_result_content(self, content: str | list[TextBlock | ImageBlock]) -> str:
         if isinstance(content, str):
@@ -235,11 +309,11 @@ class OllamaLocalAdapter(Adapter):
         return "\n".join(b["text"] for b in content if b["type"] == "text")
 
     def _serialize(
-        self, messages: list[Message], system: str | None
+        self, messages: list[Message], system: str | list[SystemBlock] | None
     ) -> list[dict[str, Any]]:
         serialized: list[dict[str, Any]] = []
         if system:
-            serialized.append({"role": "system", "content": system})
+            serialized.append({"role": "system", "content": _system_text(system)})
         for message in messages:
             for b in message["content"]:
                 if b["type"] == "document":
@@ -349,7 +423,7 @@ class OllamaLocalAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None,
+        system: str | list[SystemBlock] | None,
         tools: list[ToolDef] | None,
         config: dict[str, Any] | None,
         stream: bool,
@@ -445,7 +519,7 @@ class OllamaLocalAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
@@ -466,7 +540,7 @@ class OllamaLocalAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:

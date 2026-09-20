@@ -25,6 +25,13 @@ class Message(TypedDict):
     content: list[Block]
 
 
+class CacheControl(TypedDict):
+    """A prompt-cache breakpoint the vendor may honor."""
+
+    type: Literal["ephemeral"]
+    ttl: NotRequired[Literal["5m", "1h"]]
+
+
 type Block = (
     TextBlock
     | ImageBlock
@@ -38,6 +45,10 @@ type Block = (
 class TextBlock(TypedDict):
     type: Literal["text"]
     text: str
+    cache_control: NotRequired[CacheControl]
+
+
+type SystemBlock = TextBlock
 
 
 type ImageBlock = Base64ImageBlock | UrlImageBlock
@@ -48,12 +59,14 @@ class Base64ImageBlock(TypedDict):
     source: Literal["base64"]
     media_type: MimeType
     data: Base64Str
+    cache_control: NotRequired[CacheControl]
 
 
 class UrlImageBlock(TypedDict):
     type: Literal["image"]
     source: Literal["url"]
     url: str
+    cache_control: NotRequired[CacheControl]
 
 
 type DocumentBlock = Base64DocumentBlock | UrlDocumentBlock
@@ -64,12 +77,14 @@ class Base64DocumentBlock(TypedDict):
     source: Literal["base64"]
     media_type: MimeType
     data: Base64Str
+    cache_control: NotRequired[CacheControl]
 
 
 class UrlDocumentBlock(TypedDict):
     type: Literal["document"]
     source: Literal["url"]
     url: str
+    cache_control: NotRequired[CacheControl]
 
 
 class ToolUseBlock(TypedDict):
@@ -97,6 +112,7 @@ class ToolResultBlock(TypedDict):
     name: str
     content: str | list[TextBlock | ImageBlock]
     is_error: NotRequired[bool]
+    cache_control: NotRequired[CacheControl]
 
 
 class ThinkingBlock(TypedDict):
@@ -121,6 +137,7 @@ class ToolDef(TypedDict):
     name: str
     description: str
     parameters: JsonSchema
+    cache_control: NotRequired[CacheControl]
 
 
 type JsonSchema = dict[str, Any]
@@ -329,7 +346,7 @@ class UnsupportedOperationError(DucktapeError):
     """The resolved provider does not support the requested operation."""
 
 
-"""3. Everything else: extending
+"""3. Everything else: model metadata (`ModelInfo`, `Capabilities`) and extending
 
 Subclass `Adapter` to add a provider, then pass it to `Provider(adapters=...)` or
 register it as a plugin (see the README's "Third-party adapters").
@@ -342,6 +359,19 @@ class ModelInfo(TypedDict):
 
     context_window: int | None
     max_output_tokens: int | None
+
+
+type CapabilityName = Literal["tools", "vision", "pdf_input", "thinking"]
+
+
+class Capabilities(TypedDict):
+    """What the vendor's own metadata says a model can do; `None` when unknown."""
+
+    tools: bool | None
+    vision: bool | None
+    pdf_input: bool | None
+    thinking: bool | None
+    raw: NotRequired[dict[str, Any]]
 
 
 class Adapter(ABC):
@@ -375,6 +405,10 @@ class Adapter(ABC):
         """
         return None
 
+    def capabilities(self, model: str) -> Capabilities | None:
+        """Model capabilities the vendor reports, when it exposes them."""
+        return None
+
     def embed(
         self, model: str, input: list[str], config: dict[str, Any] | None = None
     ) -> EmbedResponse:
@@ -390,12 +424,15 @@ class Adapter(ABC):
     def _reset_caches(self) -> None:
         """Clear cached metadata."""
 
+    def _invalidate_model_capabilities(self, model: str) -> None:
+        """Drop cached capability metadata for `model`."""
+
     @abstractmethod
     def chat(
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response: ...
@@ -405,7 +442,7 @@ class Adapter(ABC):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]: ...

@@ -9,18 +9,21 @@ import threading
 import time
 import unittest
 from collections.abc import Callable, Iterator
-from typing import Any, Self
+from typing import Any, Self, cast
 from unittest.mock import patch
 
 from ducktape_provider.adapter import Adapter
-from ducktape_provider.errors import APIError, UnsupportedOperationError
+from ducktape_provider.errors import APIError, AuthError, UnsupportedOperationError
 from ducktape_provider.provider import _STREAM_BUFFER_SIZE, Provider
 from ducktape_provider.types import (
+    Capabilities,
+    CapabilityName,
     EmbedResponse,
     Message,
     ModelInfo,
     Response,
     StreamEvent,
+    SystemBlock,
     ToolDef,
 )
 
@@ -73,6 +76,12 @@ class FakeAdapter(Adapter):
         embed: Callable[[str, list[str], dict[str, Any] | None], EmbedResponse]
         | None = None,
         embed_models: Callable[[], set[str]] = lambda: set(),
+        capabilities: Callable[[str], Capabilities | None] = lambda m: {
+            "tools": True,
+            "vision": False,
+            "pdf_input": None,
+            "thinking": True,
+        },
     ):
         self._chat = chat
         self._stream = stream
@@ -81,6 +90,7 @@ class FakeAdapter(Adapter):
         self._model_info = model_info
         self._embed = embed
         self._embed_models = embed_models
+        self._capabilities = capabilities
         self.embed_calls = 0
         self.embed_models_calls = 0
         self.embed_models_threads: list[threading.Thread] = []
@@ -93,6 +103,9 @@ class FakeAdapter(Adapter):
 
     def model_info(self, model: str) -> ModelInfo | None:
         return self._model_info()
+
+    def capabilities(self, model: str) -> Capabilities | None:
+        return self._capabilities(model)
 
     def embed_models(self) -> set[str]:
         self.embed_models_calls += 1
@@ -114,7 +127,7 @@ class FakeAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
@@ -124,7 +137,7 @@ class FakeAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
@@ -794,6 +807,212 @@ class TestProviderAsyncExecutorAndDiscovery(unittest.IsolatedAsyncioTestCase):
             provider.async_stream_chat("fake-model", MESSAGES, provider="nope")
         with self.assertRaisesRegex(KeyError, "unknown provider 'nope'"):
             await provider.async_chat("fake-model", MESSAGES, provider="nope")
+
+
+class TestProviderAsyncCapabilities(unittest.IsolatedAsyncioTestCase):
+    """Async capabilities mirrors sync capabilities off the event loop."""
+
+    async def test_async_capabilities_matches_sync_capabilities(self):
+        """async_capabilities returns the same result as sync capabilities."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": False,
+            "pdf_input": None,
+            "thinking": True,
+            "raw": {"capabilities": ["tools"]},
+        }
+        provider = Provider(adapters={"fake": FakeAdapter(capabilities=lambda m: caps)})
+        expected = provider.capabilities("fake-model", provider="fake")
+        actual = await provider.async_capabilities("fake-model", provider="fake")
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual, caps)
+
+    async def test_async_supports_mirrors_sync_supports(self):
+        """async_supports returns True/False/None like sync supports."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": False,
+            "pdf_input": None,
+            "thinking": True,
+        }
+        provider = Provider(adapters={"fake": FakeAdapter(capabilities=lambda m: caps)})
+        cases: list[tuple[CapabilityName, bool | None]] = [
+            ("tools", True),
+            ("vision", False),
+            ("pdf_input", None),
+            ("thinking", True),
+        ]
+        for name, expected in cases:
+            with self.subTest(capability=name):
+                self.assertEqual(
+                    provider.supports("fake-model", name, provider="fake"), expected
+                )
+                self.assertEqual(
+                    await provider.async_supports("fake-model", name, provider="fake"),
+                    expected,
+                )
+        provider_none = Provider(
+            adapters={"fake": FakeAdapter(capabilities=lambda m: None)}
+        )
+        self.assertIsNone(
+            provider_none.supports("fake-model", "tools", provider="fake")
+        )
+        self.assertIsNone(
+            await provider_none.async_supports("fake-model", "tools", provider="fake")
+        )
+
+    async def test_async_capabilities_does_not_block_event_loop(self):
+        """A slow capabilities does not stall the event loop."""
+
+        def slow_capabilities(m: str) -> Capabilities | None:
+            time.sleep(0.2)
+            return {"tools": True, "vision": True, "pdf_input": None, "thinking": False}
+
+        provider = Provider(
+            adapters={"slow": FakeAdapter(capabilities=slow_capabilities)}
+        )
+        with LoopTicker() as ticker:
+            await provider.async_capabilities("fake-model", provider="slow")
+        self.assertGreater(ticker.count, 5)
+
+    async def test_async_supports_does_not_block_event_loop(self):
+        """A slow supports does not stall the event loop."""
+
+        def slow_capabilities(m: str) -> Capabilities | None:
+            time.sleep(0.2)
+            return {"tools": True, "vision": True, "pdf_input": None, "thinking": False}
+
+        provider = Provider(
+            adapters={"slow": FakeAdapter(capabilities=slow_capabilities)}
+        )
+        with LoopTicker() as ticker:
+            await provider.async_supports("fake-model", "tools", provider="slow")
+        self.assertGreater(ticker.count, 5)
+
+    async def test_async_capabilities_propagates_error(self):
+        """AuthError/APIError and RuntimeError from capabilities propagate."""
+
+        for error in [
+            AuthError("bad key", status=401),
+            APIError("boom", status=500),
+            RuntimeError("boom"),
+        ]:
+            with self.subTest(error=type(error).__name__):
+                failing = FakeAdapter(capabilities=lambda m, e=error: raise_(e))  # type: ignore[arg-type]
+                provider = Provider(adapters={"failing": failing})
+                with self.assertRaises(type(error)):
+                    await provider.async_capabilities("fake-model", provider="failing")
+                with self.assertRaises(type(error)):
+                    await provider.async_supports(
+                        "fake-model", "tools", provider="failing"
+                    )
+
+    async def test_async_supports_invalid_capability_raises_before_io(self):
+        """Invalid capability name raises ValueError before any I/O."""
+
+        def must_not_call(m: str) -> Capabilities | None:
+            raise AssertionError("capabilities must not be called")
+
+        provider = Provider(adapters={"fake": FakeAdapter(capabilities=must_not_call)})
+        bad_capabilities: list[Any] = ["visoin", "embedding", ""]
+        for bad in bad_capabilities:
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    provider.supports("fake-model", bad, provider="fake")
+                with self.assertRaises(ValueError):
+                    await provider.async_supports("fake-model", bad, provider="fake")
+        with self.assertRaises(ValueError):
+            await provider.async_supports(
+                "fake-model", bad_capabilities[0], provider="fake"
+            )
+
+    async def test_async_capabilities_propagates_contextvars(self):
+        """Contextvars propagate into the capabilities worker."""
+        request_id = contextvars.ContextVar("request_id", default="unset")
+        seen: list[str] = []
+
+        def caps(m: str) -> Capabilities | None:
+            seen.append(request_id.get())
+            return {"tools": True, "vision": None, "pdf_input": None, "thinking": None}
+
+        provider = Provider(adapters={"fake": FakeAdapter(capabilities=caps)})
+        request_id.set("abc")
+        await provider.async_capabilities("fake-model", provider="fake")
+        self.assertEqual(seen, ["abc"])
+        seen.clear()
+        request_id.set("xyz")
+        await provider.async_supports("fake-model", "tools", provider="fake")
+        self.assertEqual(seen, ["xyz"])
+
+    async def test_concurrent_async_capabilities_no_corruption_and_warm_hit(self):
+        """Concurrent gather over cold caches completes without corruption and warms cache."""
+        expected: Capabilities = {
+            "tools": True,
+            "vision": False,
+            "pdf_input": None,
+            "thinking": True,
+            "raw": {"capabilities": ["tools", "thinking"]},
+        }
+
+        class CachingAdapter(Adapter):
+            """Caches capabilities per model, counting fetches."""
+
+            def __init__(self) -> None:
+                self._cache: dict[str, Capabilities] = {}
+                self.calls = 0
+
+            def is_available(self) -> bool:
+                return True
+
+            def models(self) -> set[str]:
+                return {"m1", "m2", "m3"}
+
+            def capabilities(self, model: str) -> Capabilities | None:
+                if model in self._cache:
+                    return cast(Capabilities, dict(self._cache[model]))
+                self.calls += 1
+                time.sleep(0.05)
+                caps = cast(Capabilities, dict(expected))
+                self._cache[model] = caps
+                return cast(Capabilities, dict(caps))
+
+            def chat(
+                self,
+                model: str,
+                messages: list[Message],
+                system: str | list[SystemBlock] | None = None,
+                tools: list[ToolDef] | None = None,
+                config: dict[str, Any] | None = None,
+            ) -> Response:
+                return FIXED_RESPONSE
+
+            def stream_chat(
+                self,
+                model: str,
+                messages: list[Message],
+                system: str | list[SystemBlock] | None = None,
+                tools: list[ToolDef] | None = None,
+                config: dict[str, Any] | None = None,
+            ) -> Iterator[StreamEvent]:
+                return iter(FIXED_STREAM)
+
+        adapter = CachingAdapter()
+        provider = Provider(adapters={"fake": adapter})
+        results = await asyncio.gather(
+            *(
+                provider.async_capabilities(m, provider="fake")
+                for m in ["m1", "m2", "m3", "m1", "m2"]
+            )
+        )
+        for cap in results:
+            self.assertEqual(cap, expected)
+        calls_after_gather = adapter.calls
+        subsequent = await provider.async_capabilities("m1", provider="fake")
+        self.assertEqual(subsequent, expected)
+        self.assertEqual(adapter.calls, calls_after_gather)
+        sync_after = provider.capabilities("m1", provider="fake")
+        self.assertEqual(sync_after, expected)
+        self.assertEqual(adapter.calls, calls_after_gather)
 
 
 class TestProviderAsyncEmbed(unittest.IsolatedAsyncioTestCase):

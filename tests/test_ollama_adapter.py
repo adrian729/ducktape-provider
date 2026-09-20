@@ -25,7 +25,9 @@ from ducktape_provider import (
     Message,
     OllamaLocalAdapter,
     Provider,
+    RequestTimeoutError,
     ServerError,
+    SystemBlock,
     ToolDef,
     UnsupportedBlockError,
 )
@@ -222,6 +224,29 @@ class OllamaSerializeTests(unittest.TestCase):
         ]
         serialized = self.adapter._serialize(messages, system=None)
         self.assertEqual(serialized[0]["content"], "")
+
+    def test_system_blocks_flatten_to_system_message(self):
+        system: list[SystemBlock] = [
+            {"type": "text", "text": "a"},
+            {"type": "text", "text": "b", "cache_control": {"type": "ephemeral"}},
+        ]
+        serialized = self.adapter._serialize(MESSAGES, system)
+        self.assertEqual(serialized[0], {"role": "system", "content": "a\nb"})
+
+    def test_cache_control_is_not_serialized(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "hi",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+        self.assertNotIn("cache_control", self.adapter._serialize(messages, None)[0])
 
 
 class OllamaDeserializeTests(unittest.TestCase):
@@ -1322,6 +1347,346 @@ class TestOllamaEmbedModels(unittest.TestCase):
         ):
             self.assertEqual(adapter2.models(), set())
         self.assertEqual(len(logs2.records), 1)
+
+
+class TestOllamaCapabilities(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OllamaLocalAdapter()
+        self.enterContext(clean_env(OLLAMA_HOST="http://127.0.0.1:9"))
+
+    @patch("urllib.request.urlopen")
+    def test_maps_completion_tools_vision_embedding(self, mock_urlopen):
+        """capabilities with tools vision maps correctly and raw preserves list."""
+        payload = {
+            "model_info": {"llama.context_length": 8192},
+            "capabilities": ["completion", "tools", "vision", "embedding"],
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        caps = self.adapter.capabilities("llama3")
+        assert caps is not None
+        self.assertEqual(
+            caps,
+            {
+                "tools": True,
+                "vision": True,
+                "pdf_input": None,
+                "thinking": False,
+                "raw": {"capabilities": ["completion", "tools", "vision", "embedding"]},
+            },
+        )
+        assert "raw" in caps
+        self.assertEqual(
+            caps["raw"],
+            {"capabilities": ["completion", "tools", "vision", "embedding"]},
+        )
+        self.assertEqual(set(caps["raw"].keys()), {"capabilities"})
+
+    @patch("urllib.request.urlopen")
+    def test_diffusion_image_not_mapped_to_vision(self, mock_urlopen):
+        """diffusion image capability never maps to vision."""
+        payload = {"capabilities": ["completion", "image"]}
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        caps = self.adapter.capabilities("flux")
+        assert caps is not None
+        self.assertEqual(caps["tools"], False)
+        self.assertEqual(caps["vision"], False)
+        self.assertEqual(caps["thinking"], False)
+        self.assertIsNone(caps["pdf_input"])
+        assert "raw" in caps
+        self.assertEqual(caps["raw"]["capabilities"], ["completion", "image"])
+        self.assertIn("image", caps["raw"]["capabilities"])
+
+    @patch("urllib.request.urlopen")
+    def test_empty_capabilities_list(self, mock_urlopen):
+        """empty list maps all present flags to False."""
+        payload = {"capabilities": []}
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        caps = self.adapter.capabilities("m")
+        assert caps is not None
+        self.assertEqual(caps["tools"], False)
+        self.assertEqual(caps["vision"], False)
+        self.assertEqual(caps["thinking"], False)
+        self.assertIsNone(caps["pdf_input"])
+        assert "raw" in caps
+        self.assertEqual(caps["raw"], {"capabilities": []})
+
+    @patch("urllib.request.urlopen")
+    def test_missing_and_null_and_non_list_capabilities(self, mock_urlopen):
+        """missing null non-list capabilities all yield None and no raw."""
+        cases: list[tuple[str, Any]] = [
+            ("absent", {}),
+            ("null", {"capabilities": None}),
+            ("string", {"capabilities": "tools"}),
+            ("dict", {"capabilities": {}}),
+        ]
+        for label, payload in cases:
+            with self.subTest(label):
+                self.adapter._show_cache.clear()
+                mock_urlopen.return_value = buffered_response(
+                    json.dumps(payload).encode()
+                )
+                caps = self.adapter.capabilities("m")
+                assert caps is not None
+                self.assertIsNone(caps["tools"], label)
+                self.assertIsNone(caps["vision"], label)
+                self.assertIsNone(caps["pdf_input"], label)
+                self.assertIsNone(caps["thinking"], label)
+                self.assertNotIn("raw", caps, label)
+                self.assertEqual(
+                    set(caps.keys()),
+                    {"tools", "vision", "pdf_input", "thinking"},
+                    label,
+                )
+
+    @patch("urllib.request.urlopen")
+    def test_request_body_and_headers_and_path(self, mock_urlopen):
+        """POST /api/show with model json and json content type."""
+        payload = {"capabilities": ["tools"]}
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        self.adapter.capabilities("llama3")
+        req = mock_urlopen.call_args.args[0]
+        self.assertTrue(req.full_url.endswith("/api/show"))
+        self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(json.loads(req.data), {"model": "llama3"})
+        self.assertEqual(req.get_header("Content-type"), "application/json")
+
+    @patch("urllib.request.urlopen")
+    def test_404_is_cached_negative_and_ttl_refetch(self, mock_urlopen):
+        """404 yields None cached and refetched after TTL."""
+        mock_urlopen.side_effect = http_error(
+            "http://127.0.0.1:9/api/show", 404, b"not found"
+        )
+        with patch("time.monotonic", return_value=1000.0):
+            self.assertIsNone(self.adapter.capabilities("missing"))
+            self.assertEqual(mock_urlopen.call_count, 1)
+            self.assertIsNone(self.adapter.capabilities("missing"))
+            self.assertEqual(mock_urlopen.call_count, 1)
+            self.assertIn("missing", self.adapter._show_cache)
+            self.assertIsNone(self.adapter._show_cache["missing"][0])
+        payload = {"capabilities": ["tools"]}
+        mock_urlopen.side_effect = None
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        with patch("time.monotonic", return_value=1000.0 + 61):
+            caps = self.adapter.capabilities("missing")
+            assert caps is not None
+            self.assertEqual(caps["tools"], True)
+            self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("urllib.request.urlopen")
+    def test_probe_failures_raise_through_capabilities_and_none_through_model_info(
+        self, mock_urlopen
+    ):
+        """connection timeout 500 raise through capabilities and None through model_info."""
+        for label, expected in [
+            ("connection", APIError),
+            ("timeout", RequestTimeoutError),
+            ("500", ServerError),
+        ]:
+            with self.subTest(label):
+                self.adapter._show_cache.clear()
+                if label == "connection":
+                    mock_urlopen.side_effect = ConnectionRefusedError()
+                elif label == "timeout":
+                    mock_urlopen.side_effect = TimeoutError()
+                else:
+                    mock_urlopen.side_effect = http_error(
+                        "http://127.0.0.1:9/api/show", 500, b"boom"
+                    )
+                with self.assertRaises(expected):
+                    self.adapter.capabilities("llama3")
+                self.adapter._show_cache.clear()
+                if label == "connection":
+                    mock_urlopen.side_effect = ConnectionRefusedError()
+                elif label == "timeout":
+                    mock_urlopen.side_effect = TimeoutError()
+                else:
+                    mock_urlopen.side_effect = http_error(
+                        "http://127.0.0.1:9/api/show", 500, b"boom"
+                    )
+                self.assertIsNone(self.adapter.model_info("llama3"))
+                self.assertEqual(self.adapter._show_cache, {})
+
+    def test_gate_refusal_raises_value_error_without_request(self):
+        """gate refusal through capabilities raises ValueError with zero requests."""
+        provider = Provider(
+            adapters={"ollama-local": OllamaLocalAdapter()},
+            config=secret_headers("ollama-local", "t"),
+        )
+        adapter = provider._adapters["ollama-local"]
+        with (
+            pointed_at(provider, "ollama-local", "http://gateway.example"),
+            patch(
+                "urllib.request.urlopen", side_effect=AssertionError("no request")
+            ) as mock_urlopen,
+        ):
+            with self.assertRaises(ValueError):
+                adapter.capabilities("llama3")
+            mock_urlopen.assert_not_called()
+        with (
+            pointed_at(provider, "ollama-local", "http://gateway.example"),
+            patch(
+                "urllib.request.urlopen", side_effect=AssertionError("no request")
+            ) as mock_urlopen,
+            patch.object(ollama_module.logger, "warning") as mock_warn,
+        ):
+            with self.assertRaises(ValueError):
+                adapter.capabilities("llama3")
+            mock_warn.assert_not_called()
+            mock_urlopen.assert_not_called()
+
+    @patch("urllib.request.urlopen")
+    def test_shared_cache_between_model_info_and_capabilities(self, mock_urlopen):
+        """model_info then capabilities then model_info share one show fetch."""
+        payload = {
+            "model_info": {"llama.context_length": 8192},
+            "capabilities": ["tools", "vision"],
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        with patch("time.monotonic", return_value=2000.0):
+            info1 = self.adapter.model_info("llama3")
+            caps = self.adapter.capabilities("llama3")
+            info2 = self.adapter.model_info("llama3")
+        self.assertEqual(info1, {"context_window": 8192, "max_output_tokens": None})
+        assert caps is not None
+        self.assertEqual(caps["tools"], True)
+        self.assertEqual(caps["vision"], True)
+        self.assertEqual(info2, {"context_window": 8192, "max_output_tokens": None})
+        self.assertEqual(mock_urlopen.call_count, 1)
+        req = mock_urlopen.call_args.args[0]
+        self.assertTrue(req.full_url.endswith("/api/show"))
+
+    @patch("urllib.request.urlopen")
+    def test_show_cache_purges_expired_entries_on_write(self, mock_urlopen):
+        """expired entries are purged on write."""
+        self.adapter._show_cache = {
+            "old-one": (
+                {"context_window": 100, "capabilities": ["tools"], "vision": False},
+                0.0,
+            ),
+            "old-two": (None, 0.0),
+        }
+        payload = {"capabilities": ["vision"]}
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        with patch("time.monotonic", return_value=61.0):
+            caps = self.adapter.capabilities("new-model")
+        assert caps is not None
+        self.assertEqual(caps["vision"], True)
+        self.assertNotIn("old-one", self.adapter._show_cache)
+        self.assertNotIn("old-two", self.adapter._show_cache)
+        self.assertIn("new-model", self.adapter._show_cache)
+
+    @patch("urllib.request.urlopen")
+    def test_raw_carries_only_vendor_capabilities(self, mock_urlopen):
+        """raw carries only vendor capabilities list."""
+        cases = [
+            ["completion", "tools", "vision", "embedding"],
+            ["completion", "image"],
+            [],
+        ]
+        for caps_list in cases:
+            with self.subTest(caps_list=caps_list):
+                self.adapter._show_cache.clear()
+                payload = {"capabilities": caps_list}
+                mock_urlopen.return_value = buffered_response(
+                    json.dumps(payload).encode()
+                )
+                caps = self.adapter.capabilities("m")
+                assert caps is not None
+                assert "raw" in caps
+                raw = caps["raw"]
+                self.assertEqual(raw, {"capabilities": caps_list})
+                self.assertEqual(set(raw.keys()), {"capabilities"})
+
+    @patch("urllib.request.urlopen")
+    def test_malformed_body_raises_then_model_info_swallows(self, mock_urlopen):
+        """Malformed /api/show raises through capabilities, None through model_info."""
+        mock_urlopen.return_value = buffered_response(b"not json")
+        with self.assertRaises(MalformedResponseError):
+            self.adapter.capabilities("llama3")
+        mock_urlopen.return_value = buffered_response(b"not json")
+        self.assertIsNone(self.adapter.model_info("llama3"))
+
+    @patch("urllib.request.urlopen")
+    def test_normal_ttl_expiry_refetches(self, mock_urlopen):
+        """A cached capabilities result refetches past the 60s boundary."""
+        payload = {"model_info": {"llama.context_length": 8192}, "capabilities": []}
+        base = 1000.0
+        with patch("ducktape_provider.adapters.ollama.time.monotonic") as mock_time:
+            mock_time.return_value = base
+            mock_urlopen.side_effect = lambda *a, **k: buffered_response(
+                json.dumps(payload).encode()
+            )
+            self.adapter.capabilities("llama3")
+            self.assertEqual(mock_urlopen.call_count, 1)
+            mock_time.return_value = base + 59
+            self.adapter.capabilities("llama3")
+            self.assertEqual(mock_urlopen.call_count, 1)
+            mock_time.return_value = base + 61
+            self.adapter.capabilities("llama3")
+            self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("urllib.request.urlopen")
+    def test_mutating_raw_does_not_poison_cache(self, mock_urlopen):
+        """Mutating a returned raw list leaves the cached entry intact."""
+        payload = {"capabilities": ["tools", "vision"]}
+        mock_urlopen.side_effect = lambda *a, **k: buffered_response(
+            json.dumps(payload).encode()
+        )
+        caps = self.adapter.capabilities("llama3")
+        assert caps is not None
+        assert "raw" in caps
+        caps["raw"]["capabilities"].append("mutated")
+        caps2 = self.adapter.capabilities("llama3")
+        assert caps2 is not None
+        assert "raw" in caps2
+        self.assertEqual(caps2["raw"]["capabilities"], ["tools", "vision"])
+
+    @patch("urllib.request.urlopen")
+    def test_zero_context_window_preserved(self, mock_urlopen):
+        """A zero context_length is preserved, not coerced to None."""
+        mock_urlopen.return_value = buffered_response(
+            json.dumps({"model_info": {"llama.context_length": 0}}).encode()
+        )
+        self.assertEqual(
+            self.adapter.model_info("llama3"),
+            {"context_window": 0, "max_output_tokens": None},
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_legacy_server_projector_key_implies_vision(self, mock_urlopen):
+        """Without a capabilities list, a vision projector key implies vision."""
+        payload = {
+            "model_info": {"llama.context_length": 4096, "clip.vision.block_count": 1}
+        }
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        caps = self.adapter.capabilities("llava")
+        assert caps is not None
+        self.assertEqual(
+            caps,
+            {"tools": None, "vision": True, "pdf_input": None, "thinking": None},
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_legacy_server_without_projector_stays_unknown(self, mock_urlopen):
+        """Without a capabilities list or projector keys, vision stays unknown."""
+        payload = {"model_info": {"llama.context_length": 4096}}
+        mock_urlopen.return_value = buffered_response(json.dumps(payload).encode())
+        caps = self.adapter.capabilities("llama3")
+        assert caps is not None
+        self.assertIsNone(caps["vision"])
+
+    def test_invalidate_model_capabilities_drops_only_that_model(self):
+        """The per-model hook drops one entry and keeps the rest."""
+        self.adapter._show_cache = {
+            "a": (
+                {"context_window": 1, "capabilities": ["tools"], "vision": False},
+                1.0,
+            ),
+            "b": ({"context_window": 2, "capabilities": None, "vision": None}, 1.0),
+        }
+        self.adapter._invalidate_model_capabilities("a")
+        self.assertNotIn("a", self.adapter._show_cache)
+        self.assertIn("b", self.adapter._show_cache)
 
 
 if __name__ == "__main__":

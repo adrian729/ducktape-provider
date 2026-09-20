@@ -62,6 +62,7 @@ from ducktape_provider.types import (
     Message,
     Response,
     StreamEvent,
+    SystemBlock,
     ToolDef,
 )
 
@@ -117,7 +118,7 @@ class RecordingAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
@@ -128,7 +129,7 @@ class RecordingAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
@@ -740,12 +741,36 @@ class ProviderConfigValidationTests(unittest.TestCase):
         for target in TARGETS:
             with self.subTest(target.name):
                 original = target.cls()
-                stale: Any = (
-                    {"stale": {"context_window": None, "max_output_tokens": None}}
-                    if isinstance(original, ClaudeAdapter)
-                    else {"stale"}
-                )
-                original._models_cache = stale
+                if isinstance(original, ClaudeAdapter):
+                    original._models_cache = {
+                        "stale": {"context_window": None, "max_output_tokens": None}
+                    }  # type: ignore[assignment]
+                    original._models_raw = {
+                        "stale": {
+                            "id": "stale",
+                            "capabilities": {"image_input": {"supported": True}},
+                        }
+                    }  # type: ignore[assignment]
+                    original._cache_time = 123.0
+                elif isinstance(original, OllamaLocalAdapter):
+                    original._models_cache = {"stale"}  # type: ignore[assignment]
+                    original._show_cache = {
+                        "stale": (
+                            {
+                                "context_window": 4096,
+                                "capabilities": ["tools"],
+                                "vision": False,
+                            },
+                            123.0,
+                        )
+                    }  # type: ignore[assignment]
+                    original._cache_time = 123.0
+                elif isinstance(original, OpenAIAdapter):
+                    original._models_cache = {"stale"}  # type: ignore[assignment]
+                    original._embed_models_cache = {"stale-embed"}  # type: ignore[assignment]
+                    original._cache_time = 123.0
+                else:
+                    original._models_cache = {"stale"}  # type: ignore[assignment]
                 original._warned_transport = True
                 provider = Provider(
                     adapters={target.name: original},
@@ -755,8 +780,53 @@ class ProviderConfigValidationTests(unittest.TestCase):
                 self.assertIsNot(copied, original)
                 self.assertEqual(original._provider_headers, ())
                 self.assertIsNone(original._provider_name)
-                self.assertEqual(original._models_cache, stale)
-                self.assertIsNone(copied._models_cache)
+                if isinstance(original, ClaudeAdapter):
+                    self.assertEqual(
+                        original._models_cache,
+                        {"stale": {"context_window": None, "max_output_tokens": None}},
+                    )
+                    self.assertEqual(
+                        original._models_raw,
+                        {
+                            "stale": {
+                                "id": "stale",
+                                "capabilities": {"image_input": {"supported": True}},
+                            }
+                        },
+                    )
+                    self.assertEqual(original._cache_time, 123.0)
+                    self.assertIsNone(copied._models_cache)
+                    self.assertIsNone(copied._models_raw)
+                    self.assertEqual(copied._cache_time, 0.0)
+                elif isinstance(original, OllamaLocalAdapter):
+                    self.assertEqual(original._models_cache, {"stale"})
+                    self.assertEqual(
+                        original._show_cache,
+                        {
+                            "stale": (
+                                {
+                                    "context_window": 4096,
+                                    "capabilities": ["tools"],
+                                    "vision": False,
+                                },
+                                123.0,
+                            )
+                        },
+                    )
+                    self.assertEqual(original._cache_time, 123.0)
+                    self.assertIsNone(copied._models_cache)
+                    self.assertEqual(copied._show_cache, {})
+                    self.assertEqual(copied._cache_time, 0.0)
+                elif isinstance(original, OpenAIAdapter):
+                    self.assertEqual(original._models_cache, {"stale"})
+                    self.assertEqual(original._embed_models_cache, {"stale-embed"})
+                    self.assertEqual(original._cache_time, 123.0)
+                    self.assertIsNone(copied._models_cache)
+                    self.assertIsNone(copied._embed_models_cache)
+                    self.assertEqual(copied._cache_time, 0.0)
+                else:
+                    self.assertEqual(original._models_cache, {"stale"})
+                    self.assertIsNone(copied._models_cache)
                 self.assertFalse(copied._warned_transport)
                 self.assertEqual(copied._provider_name, target.name)
                 self.assertEqual(len(copied._provider_headers), 1)

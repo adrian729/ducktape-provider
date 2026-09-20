@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 from ducktape_provider import Adapter, Provider
 from ducktape_provider.provider import _clear_discovery_cache
-from ducktape_provider.types import Message, Response, StreamEvent, ToolDef
+from ducktape_provider.types import (
+    Message,
+    Response,
+    StreamEvent,
+    SystemBlock,
+    ToolDef,
+)
 
 ENTRY_POINTS = "ducktape_provider.provider.importlib.metadata.entry_points"
 LOGGER = "ducktape_provider.provider"
@@ -29,7 +35,7 @@ class StubAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
@@ -39,7 +45,7 @@ class StubAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:

@@ -9,7 +9,7 @@ from collections.abc import Callable, Generator, Iterator
 from typing import Any, Self, cast
 from unittest.mock import patch
 
-from ducktape_provider import ClaudeAdapter
+from ducktape_provider import ClaudeAdapter, OpenAIAdapter
 from ducktape_provider import errors as errors_module
 from ducktape_provider.adapter import Adapter
 from ducktape_provider.errors import (
@@ -24,11 +24,13 @@ from ducktape_provider.errors import (
 )
 from ducktape_provider.provider import Provider, _EvictingStream
 from ducktape_provider.types import (
+    Capabilities,
     EmbedResponse,
     Message,
     ModelInfo,
     Response,
     StreamEvent,
+    SystemBlock,
     ToolDef,
 )
 
@@ -108,6 +110,9 @@ class CountingFakeAdapter(Adapter):
         is_available: Callable[[], bool] = lambda: True,
         models: Callable[[], set[str]] = lambda: {"fake-model"},
         model_info: Callable[[], ModelInfo | None] = lambda: None,
+        capabilities: Callable[[str], Capabilities | None]
+        | Callable[[], Capabilities | None]
+        | None = None,
         embed: Callable[[str, list[str], dict[str, Any] | None], EmbedResponse]
         | None = None,
         embed_models: Callable[[], set[str]] = lambda: set(),
@@ -117,17 +122,20 @@ class CountingFakeAdapter(Adapter):
         self._is_available = is_available
         self._models = models
         self._model_info = model_info
+        self._capabilities = capabilities
         self._embed = embed
         self._embed_models = embed_models
         self.is_available_calls = 0
         self.models_calls = 0
         self.model_info_calls = 0
+        self.capabilities_calls = 0
         self.embed_calls = 0
         self.embed_models_calls = 0
         self.chat_threads: list[threading.Thread] = []
         self.models_threads: list[threading.Thread] = []
         self.embed_models_threads: list[threading.Thread] = []
         self.embed_configs: list[dict[str, Any] | None] = []
+        self._capabilities_cache: dict[str, Capabilities | None] = {}
 
     def is_available(self) -> bool:
         self.is_available_calls += 1
@@ -141,6 +149,20 @@ class CountingFakeAdapter(Adapter):
     def model_info(self, model: str) -> ModelInfo | None:
         self.model_info_calls += 1
         return self._model_info()
+
+    def capabilities(self, model: str) -> Capabilities | None:
+        if model in self._capabilities_cache:
+            return self._capabilities_cache[model]
+        self.capabilities_calls += 1
+        if self._capabilities is None:
+            result = super().capabilities(model)
+        else:
+            try:
+                result = self._capabilities(model)  # ty: ignore
+            except TypeError:
+                result = self._capabilities()  # ty: ignore
+        self._capabilities_cache[model] = result
+        return result
 
     def embed_models(self) -> set[str]:
         self.embed_models_calls += 1
@@ -163,7 +185,7 @@ class CountingFakeAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
@@ -174,7 +196,7 @@ class CountingFakeAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:
@@ -753,7 +775,7 @@ class TestEmbedUnsupportedAdapter(unittest.TestCase):
                 self,
                 model: str,
                 messages: list[Message],
-                system: str | None = None,
+                system: str | list[SystemBlock] | None = None,
                 tools: list[ToolDef] | None = None,
                 config: dict[str, Any] | None = None,
             ) -> Response:
@@ -763,7 +785,7 @@ class TestEmbedUnsupportedAdapter(unittest.TestCase):
                 self,
                 model: str,
                 messages: list[Message],
-                system: str | None = None,
+                system: str | list[SystemBlock] | None = None,
                 tools: list[ToolDef] | None = None,
                 config: dict[str, Any] | None = None,
             ) -> Iterator[StreamEvent]:
@@ -1509,5 +1531,531 @@ class TestModelsEmbeddingsMode(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(ticker.count, 5)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestCapabilitiesSurface(unittest.TestCase):
+    """Provider capabilities surface via explicit provider."""
+
+    def test_capabilities_returns_fake_dict_and_supports_tri_state(self):
+        """capabilities via explicit provider returns dict and supports projects."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": False,
+            "pdf_input": None,
+            "thinking": True,
+            "raw": {"capabilities": ["tools", "thinking"]},
+        }
+        adapter = CountingFakeAdapter(
+            capabilities=lambda _m: caps, models=lambda: {"m"}
+        )
+        provider = Provider(adapters={"fake": adapter})
+        result = provider.capabilities("m", provider="fake")
+        self.assertEqual(result, caps)
+        self.assertTrue(provider.supports("m", "tools", provider="fake"))
+        self.assertFalse(provider.supports("m", "vision", provider="fake"))
+        self.assertIsNone(provider.supports("m", "pdf_input", provider="fake"))
+        self.assertTrue(provider.supports("m", "thinking", provider="fake"))
+
+    def test_capabilities_default_returns_none(self):
+        """adapter with no override returns None."""
+        adapter = CountingFakeAdapter(models=lambda: {"m"})
+        provider = Provider(adapters={"fake": adapter})
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            self.assertIsNone(provider.capabilities("m", provider="fake"))
+            self.assertIsNone(provider.supports("m", "tools", provider="fake"))
+            mock.assert_not_called()
+        self.assertEqual(adapter.capabilities_calls, 1)
+
+    def test_supports_validation_before_io(self):
+        """supports with bad name raises before any I/O."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": True,
+            "pdf_input": None,
+            "thinking": None,
+        }
+        for bad in ("visoin", "embedding"):
+            with self.subTest(bad=bad):
+                adapter = CountingFakeAdapter(
+                    capabilities=lambda _m: caps, models=lambda: {"m"}
+                )
+                provider = Provider(adapters={"fake": adapter})
+                with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+                    with self.assertRaises(ValueError) as ctx:
+                        provider.supports("m", bad, provider="fake")  # ty: ignore[invalid-argument-type]
+                    msg = str(ctx.exception)
+                    self.assertIn(repr(bad), msg)
+                    self.assertIn("pdf_input", msg)
+                    self.assertIn("thinking", msg)
+                    self.assertIn("tools", msg)
+                    self.assertIn("vision", msg)
+                    mock.assert_not_called()
+                self.assertEqual(adapter.capabilities_calls, 0)
+                self.assertEqual(adapter.models_calls, 0)
+
+    def test_unknown_explicit_provider_raises_key_error(self):
+        """unknown explicit provider raises KeyError."""
+        provider = Provider(adapters={"fake": CountingFakeAdapter()})
+        with self.assertRaises(KeyError) as ctx:
+            provider.capabilities("m", provider="nope")
+        self.assertIn("nope", str(ctx.exception))
+        with self.assertRaises(KeyError):
+            provider.supports("m", "tools", provider="nope")
+
+
+class TestCapabilitiesAutoMatch(unittest.TestCase):
+    """Auto-match resolution and caching for capabilities."""
+
+    def test_first_available_provider_matched(self):
+        """first available provider whose chat models lists model is used."""
+        caps_first: Capabilities = {
+            "tools": True,
+            "vision": True,
+            "pdf_input": None,
+            "thinking": None,
+        }
+        caps_second: Capabilities = {
+            "tools": False,
+            "vision": False,
+            "pdf_input": None,
+            "thinking": None,
+        }
+        first = CountingFakeAdapter(
+            capabilities=lambda _m: caps_first, models=lambda: {"shared-model"}
+        )
+        second = CountingFakeAdapter(
+            capabilities=lambda _m: caps_second, models=lambda: {"shared-model"}
+        )
+        provider = Provider(adapters={"first": first, "second": second})
+        with self.assertLogs(LOGGER, "WARNING"):
+            result = provider.capabilities("shared-model")
+        self.assertEqual(result, caps_first)
+        self.assertEqual(first.capabilities_calls, 1)
+        self.assertEqual(second.capabilities_calls, 0)
+        self.assertEqual(second.models_calls, 0)
+
+    def test_second_call_skips_probing(self):
+        """second capabilities reuses auto-match cache."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": None,
+            "pdf_input": None,
+            "thinking": None,
+        }
+        adapter = CountingFakeAdapter(
+            capabilities=lambda _m: caps, models=lambda: {"fake-model"}
+        )
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"):
+            provider.capabilities("fake-model")
+        self.assertEqual(adapter.models_calls, 1)
+        self.assertEqual(adapter.capabilities_calls, 1)
+        provider.capabilities("fake-model")
+        self.assertEqual(adapter.models_calls, 1)
+        self.assertEqual(adapter.capabilities_calls, 1)
+
+    def test_warm_cache_hit_probe_failure_still_raises(self):
+        """warm auto-match hit then probe failure still raises."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": None,
+            "pdf_input": None,
+            "thinking": None,
+        }
+
+        def cap(model: str) -> Capabilities | None:
+            if cap.calls == 0:  # ty: ignore[unresolved-attribute]
+                cap.calls += 1  # ty: ignore[unresolved-attribute]
+                return caps
+            raise ServerError("down", status=500)
+
+        cap.calls = 0  # ty: ignore[unresolved-attribute]
+        adapter = CountingFakeAdapter(capabilities=cap, models=lambda: {"fake-model"})
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"):
+            provider.capabilities("fake-model")
+        self.assertEqual(adapter.models_calls, 1)
+        adapter._capabilities_cache.clear()
+        with self.assertRaises(ServerError):
+            provider.capabilities("fake-model")
+        self.assertEqual(adapter.models_calls, 1)
+        self.assertEqual(adapter.capabilities_calls, 2)
+
+
+class TestCapabilitiesErrors(unittest.TestCase):
+    """Error matrix for capabilities and supports."""
+
+    def test_auto_match_unknown_raises_key_error(self):
+        """auto-match id no provider lists raises KeyError."""
+        adapter = CountingFakeAdapter(models=lambda: {"other"})
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertRaises(KeyError) as ctx:
+            provider.capabilities("missing-model")
+        self.assertIn("missing-model", str(ctx.exception))
+        with self.assertRaises(KeyError):
+            provider.supports("missing-model", "tools")
+
+    def test_resolved_but_unknown_returns_none_explicit(self):
+        """explicit provider unknown model returns None not KeyError."""
+        adapter = CountingFakeAdapter(
+            capabilities=lambda _m: None, models=lambda: {"known"}
+        )
+        provider = Provider(adapters={"fake": adapter})
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            self.assertIsNone(provider.capabilities("unknown", provider="fake"))
+            self.assertIsNone(provider.supports("unknown", "tools", provider="fake"))
+            mock.assert_not_called()
+
+    def test_resolved_but_unknown_returns_none_auto_match(self):
+        """auto-match resolved but vendor unknown returns None."""
+        adapter = CountingFakeAdapter(
+            capabilities=lambda _m: None, models=lambda: {"known"}
+        )
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"):
+            self.assertIsNone(provider.capabilities("known"))
+        adapter._capabilities_cache.clear()
+        self.assertIsNone(provider.supports("known", "vision"))
+
+    def test_explicit_unknown_returns_none_via_none(self):
+        """explicit unknown via None return stays None."""
+        adapter = CountingFakeAdapter(models=lambda: {"a"})
+        provider = Provider(adapters={"fake": adapter})
+        self.assertIsNone(provider.capabilities("missing", provider="fake"))
+
+    def test_error_matrix_raises(self):
+        """401 500 connection timeout raise mapped errors not None."""
+        errors = [
+            (AuthError("no key", status=401), AuthError),
+            (ServerError("down", status=500), ServerError),
+            (
+                _connection_error(urllib.error.URLError(ConnectionRefusedError())),
+                APIError,
+            ),
+            (RequestTimeoutError("slow"), RequestTimeoutError),
+        ]
+        for exc, typ in errors:
+            with self.subTest(type=type(exc).__name__):
+                adapter = CountingFakeAdapter(
+                    capabilities=lambda _m, exc=exc: raise_(exc),
+                    models=lambda: {"m"},
+                )
+                provider = Provider(adapters={"fake": adapter})
+                with patch("urllib.request.urlopen", side_effect=_fail_urlopen):
+                    with self.assertRaises(typ):
+                        provider.capabilities("m", provider="fake")
+                    adapter._capabilities_cache.clear()
+                    with self.assertRaises(typ):
+                        provider.supports("m", "tools", provider="fake")
+                adapter2 = CountingFakeAdapter(
+                    capabilities=lambda _m, exc=exc: raise_(exc),
+                    models=lambda: {"m"},
+                )
+                provider2 = Provider(adapters={"fake": adapter2})
+                with self.assertLogs(LOGGER, "WARNING"), self.assertRaises(typ):
+                    provider2.capabilities("m")
+
+    def test_no_failure_returns_none(self):
+        """no failure path returns None for explicit unknown."""
+        adapter = CountingFakeAdapter(models=lambda: {"known"})
+        provider = Provider(adapters={"fake": adapter})
+        self.assertIsNone(provider.capabilities("unknown", provider="fake"))
+
+
+class TestCapabilitiesKindMismatch(unittest.TestCase):
+    """Kind mismatch between chat and embed via capabilities."""
+
+    def test_auto_match_embed_only_raises_key_error(self):
+        """capabilities supports model_info on embed-only raise KeyError auto-match."""
+        for model in ("embed-only", "text-embedding-3-small"):
+            with self.subTest(model=model):
+                adapter = CountingFakeAdapter(
+                    models=lambda: {"chat-model"},
+                    embed_models=lambda m=model: {m},
+                    embed=lambda _m, _i, _c: FIXED_EMBED,
+                )
+                provider = Provider(adapters={"fake": adapter})
+                with self.assertRaises(KeyError):
+                    provider.capabilities(model)
+                with self.assertRaises(KeyError):
+                    provider.supports(model, "tools")
+                with self.assertRaises(KeyError):
+                    provider.model_info(model)
+                with self.assertLogs(LOGGER, "WARNING"):
+                    result = provider.embed(model, "hi")
+                self.assertEqual(result, FILLED_EMBED)
+                self.assertEqual(provider._auto_match_cache, {})
+                self.assertIn(model, provider._auto_match_embed_cache)
+
+    def test_explicit_provider_returns_adapter_answer(self):
+        """explicit provider hands to adapter which returns None for fake."""
+        for model in ("embed-only", "text-embedding-3-small"):
+            with self.subTest(model=model):
+                adapter = CountingFakeAdapter(
+                    models=lambda: set(),
+                    embed_models=lambda m=model: {m},
+                    embed=lambda _m, _i, _c: FIXED_EMBED,
+                )
+                provider = Provider(adapters={"fake": adapter})
+                self.assertIsNone(provider.capabilities(model, provider="fake"))
+                self.assertIsNone(provider.supports(model, "tools", provider="fake"))
+
+    def test_embed_only_ids_through_chat_all_raise_key_error(self):
+        """parametrized embed-only ids through capabilities all raise KeyError."""
+        cases = ["embed-only", "text-embedding-3-small", "nomic-embed-text:latest"]
+        for model in cases:
+            with self.subTest(model=model):
+                adapter = CountingFakeAdapter(
+                    models=lambda: {"chat-model"},
+                    embed_models=lambda m=model: {m},
+                )
+                provider = Provider(adapters={"fake": adapter})
+                with self.assertRaises(KeyError):
+                    provider.capabilities(model)
+                with self.assertRaises(KeyError):
+                    provider.supports(model, "vision")
+                with self.assertRaises(KeyError):
+                    provider.model_info(model)
+                self.assertEqual(provider._auto_match_cache, {})
+                self.assertEqual(provider._auto_match_embed_cache, {})
+
+
+class TestCapabilitiesPropagation(unittest.TestCase):
+    """Non-probe exceptions propagate unwrapped."""
+
+    def test_capabilities_raising_propagates_unwrapped(self):
+        """capabilities RuntimeError propagates unwrapped."""
+        adapter = CountingFakeAdapter(
+            capabilities=lambda _m: raise_(RuntimeError("boom")),
+            models=lambda: {"fake-model"},
+        )
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"), self.assertRaises(RuntimeError) as ctx:
+            provider.capabilities("fake-model")
+        self.assertEqual(str(ctx.exception), "boom")
+        adapter._capabilities_cache.clear()
+        with self.assertRaises(RuntimeError):
+            provider.supports("fake-model", "tools")
+        with self.assertRaises(RuntimeError):
+            provider.capabilities("fake-model", provider="fake")
+
+    def test_model_info_raising_still_propagates(self):
+        """sanity that model_info raising still unwrapped."""
+        adapter = CountingFakeAdapter(
+            models=lambda: {"fake-model"},
+            model_info=lambda: raise_(RuntimeError("boom")),
+        )
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"), self.assertRaises(RuntimeError):
+            provider.model_info("fake-model")
+
+
+class TestCapabilitiesOpenAI(unittest.TestCase):
+    """OpenAI default is ABC None with zero network."""
+
+    def test_openai_capabilities_returns_none_with_zero_urlopen(self):
+        """OpenAI capabilities returns None with zero urlopen."""
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            provider = Provider(adapters={"openai": OpenAIAdapter()})
+            self.assertIsNone(provider.capabilities("gpt-4o", provider="openai"))
+            self.assertIsNone(provider.supports("gpt-4o", "tools", provider="openai"))
+            mock.assert_not_called()
+
+    def test_openai_async_capabilities_returns_none_with_zero_urlopen(self):
+        """async variant also zero urlopen."""
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            provider = Provider(adapters={"openai": OpenAIAdapter()})
+
+            async def run() -> None:
+                self.assertIsNone(
+                    await provider.async_capabilities("gpt-4o", provider="openai")
+                )
+                self.assertIsNone(
+                    await provider.async_supports("gpt-4o", "tools", provider="openai")
+                )
+
+            asyncio.run(run())
+            mock.assert_not_called()
+
+
+class TestCapabilitiesCaching(unittest.TestCase):
+    """Two calls share one adapter fetch."""
+
+    def test_two_capabilities_one_adapter_call(self):
+        """two capabilities for same model hits one adapter call."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": False,
+            "pdf_input": None,
+            "thinking": None,
+        }
+        adapter = CountingFakeAdapter(
+            capabilities=lambda _m: caps, models=lambda: {"m"}
+        )
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"):
+            provider.capabilities("m")
+        provider.capabilities("m")
+        self.assertEqual(adapter.capabilities_calls, 1)
+        self.assertEqual(adapter.models_calls, 1)
+
+    def test_capabilities_then_supports_one_adapter_call(self):
+        """capabilities then supports for other keys still one adapter call."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": True,
+            "pdf_input": False,
+            "thinking": None,
+        }
+        adapter = CountingFakeAdapter(
+            capabilities=lambda _m: caps, models=lambda: {"m"}
+        )
+        provider = Provider(adapters={"fake": adapter})
+        with self.assertLogs(LOGGER, "WARNING"):
+            provider.capabilities("m")
+        self.assertEqual(provider.supports("m", "vision"), True)
+        self.assertEqual(provider.supports("m", "pdf_input"), False)
+        self.assertEqual(adapter.capabilities_calls, 1)
+
+
+class TestCapabilitiesIntegration(unittest.TestCase):
+    """Per-model metadata fake via explicit provider."""
+
+    def test_per_model_metadata(self):
+        """one id returns caps, another returns None."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": True,
+            "pdf_input": None,
+            "thinking": False,
+            "raw": {"capabilities": ["tools", "vision"]},
+        }
+
+        def per_model(model: str) -> Capabilities | None:
+            if model == "has-caps":
+                return caps
+            return None
+
+        adapter = CountingFakeAdapter(
+            capabilities=per_model, models=lambda: {"has-caps", "no-caps"}
+        )
+        provider = Provider(adapters={"fake": adapter})
+        self.assertEqual(provider.capabilities("has-caps", provider="fake"), caps)
+        self.assertTrue(provider.supports("has-caps", "tools", provider="fake"))
+        self.assertIsNone(provider.capabilities("no-caps", provider="fake"))
+        self.assertIsNone(provider.supports("no-caps", "tools", provider="fake"))
+
+
+class TestCapabilityEviction(unittest.TestCase):
+    """A chat failure that evicts auto-match also drops that model's caps entry."""
+
+    def _provider(self, invalidated: list[str], **kwargs: Any) -> Provider:
+        class Recording(CountingFakeAdapter):
+            def _invalidate_model_capabilities(self, model: str) -> None:
+                invalidated.append(model)
+
+        adapter = Recording(**kwargs)
+        return Provider(adapters={"fake": adapter})
+
+    def test_evicting_failures_drop_the_model_entry(self):
+        for exc, should in [
+            (APIError("gone", status=404), True),
+            (AuthError("no key", status=401), True),
+            (_connection_error(urllib.error.URLError(ConnectionRefusedError())), True),
+            (RateLimitError("slow", status=429), False),
+            (ServerError("down", status=500), False),
+        ]:
+            with self.subTest(type=type(exc).__name__):
+                invalidated: list[str] = []
+                provider = self._provider(
+                    invalidated,
+                    chat=lambda exc=exc: raise_(exc),
+                    models=lambda: {"m"},
+                )
+                with self.assertLogs(LOGGER, "WARNING"), self.assertRaises(type(exc)):
+                    provider.chat("m", MESSAGES)
+                self.assertEqual(invalidated, ["m"] if should else [])
+
+    def test_explicit_provider_never_drops_caps(self):
+        invalidated: list[str] = []
+        provider = self._provider(
+            invalidated,
+            chat=lambda: raise_(APIError("gone", status=404)),
+            models=lambda: {"m"},
+        )
+        with self.assertRaises(APIError):
+            provider.chat("m", MESSAGES, provider="fake")
+        self.assertEqual(invalidated, [])
+
+    def test_probe_failure_does_not_drop_caps(self):
+        invalidated: list[str] = []
+        provider = self._provider(
+            invalidated,
+            capabilities=lambda _m: raise_(AuthError("no key", status=401)),
+            models=lambda: {"m"},
+        )
+        with self.assertRaises(AuthError):
+            provider.capabilities("m", provider="fake")
+        self.assertEqual(invalidated, [])
+
+    def test_embed_failure_does_not_drop_caps(self):
+        invalidated: list[str] = []
+        provider = self._provider(
+            invalidated,
+            embed=lambda _m, _i, _c: raise_(APIError("gone", status=404)),
+            embed_models=lambda: {"em"},
+            models=lambda: {"m"},
+        )
+        with self.assertLogs(LOGGER, "WARNING"), self.assertRaises(APIError):
+            provider.embed("em", "hi")
+        self.assertEqual(invalidated, [])
+
+
+class TestCapabilitiesAsync(unittest.IsolatedAsyncioTestCase):
+    """Async variants mirror sync."""
+
+    async def test_async_capabilities_matches_sync(self):
+        """async_capabilities returns same as sync."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": None,
+            "pdf_input": None,
+            "thinking": None,
+        }
+        adapter = CountingFakeAdapter(
+            capabilities=lambda _m: caps, models=lambda: {"m"}
+        )
+        provider = Provider(adapters={"fake": adapter})
+        self.assertEqual(await provider.async_capabilities("m", provider="fake"), caps)
+        self.assertTrue(await provider.async_supports("m", "tools", provider="fake"))
+
+    async def test_async_supports_validation_before_io(self):
+        """async supports validation before I/O."""
+        adapter = CountingFakeAdapter(models=lambda: {"m"})
+        provider = Provider(adapters={"fake": adapter})
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises(ValueError):
+                await provider.async_supports("m", "visoin", provider="fake")  # ty: ignore[invalid-argument-type]
+            mock.assert_not_called()
+        self.assertEqual(adapter.capabilities_calls, 0)
+
+    async def test_async_warm_cache_hit_still_raises(self):
+        """async warm cache hit still raises probe failure."""
+        caps: Capabilities = {
+            "tools": True,
+            "vision": None,
+            "pdf_input": None,
+            "thinking": None,
+        }
+
+        def cap(model: str) -> Capabilities | None:
+            if cap.calls == 0:  # ty: ignore[unresolved-attribute]
+                cap.calls += 1  # ty: ignore[unresolved-attribute]
+                return caps
+            raise ServerError("down", status=500)
+
+        cap.calls = 0  # ty: ignore[unresolved-attribute]
+        adapter = CountingFakeAdapter(capabilities=cap, models=lambda: {"m"})
+        provider = Provider(adapters={"fake": adapter})
+        await provider.async_capabilities("m")
+        adapter._capabilities_cache.clear()
+        with self.assertRaises(ServerError):
+            await provider.async_capabilities("m")

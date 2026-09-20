@@ -1,9 +1,9 @@
 """Adapter for Anthropic's Claude Messages API."""
 
+import copy
 import json
 import logging
 import os
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -27,11 +27,9 @@ from ..adapter import (
 from ..streaming import (
     _PROBE_ERRORS,
     _CancellableStream,
-    _clear_tracebacks,
     _ErrorHookedStream,
     _iter_sse,
     _loads_tool_input,
-    _read_json,
     _request_json,
     _shape_checked,
     _stream_request,
@@ -39,6 +37,7 @@ from ..streaming import (
 )
 from ..types import (
     Block,
+    Capabilities,
     DocumentBlock,
     ImageBlock,
     Message,
@@ -46,6 +45,7 @@ from ..types import (
     Response,
     StopReason,
     StreamEvent,
+    SystemBlock,
     TextBlock,
     ToolDef,
     Usage,
@@ -95,6 +95,8 @@ class ClaudeAdapter(Adapter):
         source = None if api_key is None else _Secret(api_key)
         api_key = None
         self._models_cache: dict[str, ModelInfo] | None = None
+        self._models_raw: dict[str, dict[str, Any]] | None = None
+        self._model_raw_cache: dict[str, tuple[dict[str, Any] | None, float]] = {}
         self._cache_time = 0.0
         if source is not None:
             source.validate("claude")
@@ -125,46 +127,155 @@ class ClaudeAdapter(Adapter):
                 _warn_headers_refused(self, logger, "claude")
             return set()
         key, headers = resolved
-        model_infos: dict[str, ModelInfo] = {}
-        after_id = None
-        stop = sys.exception()
+        auth = None if key is None else ("x-api-key", "", lambda: key)
         try:
-            while True:
-                url = base
-                if after_id:
-                    url = f"{url}?{urllib.parse.urlencode({'after_id': after_id})}"
-                with urllib.request.urlopen(
+            rows = self._load_models(base, auth, headers, "models")
+        except errors.APIError:
+            return set()
+        except _PROBE_ERRORS:
+            return set()
+        self._store_models(rows, now)
+        return set(rows)
+
+    def _load_models(
+        self,
+        base: str,
+        auth: tuple[str, str, Callable[[], _Secret]] | None,
+        headers: list[_Secret],
+        operation: str,
+    ) -> dict[str, dict[str, Any]]:
+        """Paginated `GET /v1/models` rows by id; raises on any failure."""
+        rows: dict[str, dict[str, Any]] = {}
+        after_id = None
+        while True:
+            url = base
+            if after_id:
+                url = f"{url}?{urllib.parse.urlencode({'after_id': after_id})}"
+            with _shape_checked("claude", operation=operation):
+                data, _ = _request_json(
+                    "claude",
                     _new_request(
                         url,
                         defaults={"anthropic-version": "2023-06-01"},
                         resolved=headers,
-                        auth=None if key is None else ("x-api-key", "", lambda: key),
+                        auth=auth,
                     ),
-                    timeout=3,
-                ) as resp:
-                    data = _read_json(resp, "claude", operation="models")
-                for m in data.get("data", []):
-                    model_infos[m["id"]] = {
-                        "context_window": m.get("max_input_tokens"),
-                        "max_output_tokens": m.get("max_tokens"),
-                    }
+                    3,
+                    operation=operation,
+                )
+                for m in data["data"]:
+                    rows[m["id"]] = m
                 next_after_id = data.get("last_id")
                 if not data.get("has_more") or not next_after_id:
                     break
                 if next_after_id == after_id:
                     break
                 after_id = next_after_id
-        except urllib.error.HTTPError as e:
-            e.close()
-            return set()
-        except _PROBE_ERRORS:
-            return set()
-        except BaseException as e:
-            _clear_tracebacks(e, stop)
-            raise
-        self._models_cache = model_infos
+        return rows
+
+    def _store_models(self, rows: dict[str, dict[str, Any]], now: float) -> None:
+        self._models_cache = {
+            model_id: {
+                "context_window": entry.get("max_input_tokens"),
+                "max_output_tokens": entry.get("max_tokens"),
+            }
+            for model_id, entry in rows.items()
+        }
+        self._models_raw = rows
         self._cache_time = now
-        return set(model_infos)
+
+    def _chat_auth(self, url: str) -> tuple[str, str, Callable[[], _Secret]]:
+        return (
+            "x-api-key",
+            "",
+            lambda: _request_key("claude", url, self._key_source, "ANTHROPIC_API_KEY"),
+        )
+
+    def _ensure_models(self, now: float) -> None:
+        if self._models_raw is not None and now - self._cache_time < self._MODELS_TTL:
+            return
+        base = self._MODELS_URL
+        headers = _resolve_headers("claude", base, self._provider_headers, ())
+        rows = self._load_models(base, self._chat_auth(base), headers, "capabilities")
+        self._store_models(rows, now)
+
+    def _fetch_model(self, url: str, headers: list[_Secret]) -> dict[str, Any]:
+        with _shape_checked("claude", operation="capabilities"):
+            data, _ = _request_json(
+                "claude",
+                _new_request(
+                    url,
+                    defaults={"anthropic-version": "2023-06-01"},
+                    resolved=headers,
+                    auth=self._chat_auth(url),
+                ),
+                3,
+                operation="capabilities",
+            )
+            if not isinstance(data, dict):
+                raise TypeError("model response is not an object")
+        return data
+
+    def _single_model(self, model: str, now: float) -> dict[str, Any] | None:
+        cached = self._model_raw_cache.get(model)
+        if cached is not None and now - cached[1] < self._MODELS_TTL:
+            return cached[0]
+        url = f"{self._MODELS_URL}/{urllib.parse.quote(model, safe='')}"
+        headers = _resolve_headers("claude", url, self._provider_headers, ())
+        try:
+            entry: dict[str, Any] | None = self._fetch_model(url, headers)
+        except errors.APIError as e:
+            if e.status != 404:
+                raise
+            entry = None
+        for stale in [
+            key
+            for key, (_, stamp) in self._model_raw_cache.items()
+            if now - stamp >= self._MODELS_TTL
+        ]:
+            del self._model_raw_cache[stale]
+        self._model_raw_cache[model] = (entry, now)
+        return entry
+
+    def _project_capabilities(self, entry: dict[str, Any]) -> Capabilities:
+        caps = entry.get("capabilities")
+        if not isinstance(caps, dict):
+            return {"tools": None, "vision": None, "pdf_input": None, "thinking": None}
+
+        def supported(name: str) -> bool | None:
+            value = caps.get(name)
+            if value is None:
+                return None
+            flag = value.get("supported") if isinstance(value, dict) else None
+            if not isinstance(flag, bool):
+                errors.raise_for_malformed_response(
+                    "claude",
+                    ValueError(f"capabilities.{name} is malformed"),
+                    operation="capabilities",
+                )
+            return flag
+
+        return {
+            "tools": None,
+            "vision": supported("image_input"),
+            "pdf_input": supported("pdf_input"),
+            "thinking": supported("thinking"),
+            "raw": copy.deepcopy(caps),
+        }
+
+    def capabilities(self, model: str) -> Capabilities | None:
+        now = time.monotonic()
+        cached = self._model_raw_cache.get(model)
+        if cached is not None and now - cached[1] < self._MODELS_TTL:
+            entry = cached[0]
+        else:
+            self._ensure_models(now)
+            entry = (self._models_raw or {}).get(model)
+            if entry is None:
+                entry = self._single_model(model, now)
+        if entry is None:
+            return None
+        return self._project_capabilities(entry)
 
     def model_info(self, model: str) -> ModelInfo | None:
         """Context window and max output for `model`, read from the same
@@ -179,7 +290,14 @@ class ClaudeAdapter(Adapter):
 
     def _reset_caches(self) -> None:
         self._models_cache = None
+        self._models_raw = None
+        self._model_raw_cache = {}
         self._cache_time = 0.0
+
+    def _invalidate_model_capabilities(self, model: str) -> None:
+        if self._models_raw is not None:
+            self._models_raw.pop(model, None)
+        self._model_raw_cache.pop(model, None)
 
     def _invalidate_models_cache_on_404(self, e: errors.APIError) -> None:
         if e.status == 404:
@@ -206,6 +324,20 @@ class ClaudeAdapter(Adapter):
             for b in content
         ]
 
+    @staticmethod
+    def _add_cache_control(entry: dict[str, Any], block: Any) -> None:
+        """Copies a block's `cache_control` onto its serialized entry."""
+        cache_control = block.get("cache_control")
+        if cache_control is not None:
+            entry["cache_control"] = dict(cache_control)
+
+    @classmethod
+    def _copy_block(cls, block: Any) -> dict[str, Any]:
+        """A shallow block copy with its `cache_control` copied too."""
+        entry = dict(block)
+        cls._add_cache_control(entry, block)
+        return entry
+
     def _serialize(self, messages: list[Message]) -> list[dict[str, Any]]:
         serialized: list[dict[str, Any]] = []
         dropped_thinking = 0
@@ -214,26 +346,33 @@ class ClaudeAdapter(Adapter):
             dropped_before = dropped_thinking
             for block in message["content"]:
                 if block["type"] == "image":
-                    content.append(
-                        {"type": "image", "source": self._content_source(block)}
-                    )
-                elif block["type"] == "document":
-                    content.append(
-                        {"type": "document", "source": self._content_source(block)}
-                    )
-                elif block["type"] == "tool_result":
                     entry: dict[str, Any] = {
+                        "type": "image",
+                        "source": self._content_source(block),
+                    }
+                    self._add_cache_control(entry, block)
+                    content.append(entry)
+                elif block["type"] == "document":
+                    entry = {
+                        "type": "document",
+                        "source": self._content_source(block),
+                    }
+                    self._add_cache_control(entry, block)
+                    content.append(entry)
+                elif block["type"] == "tool_result":
+                    entry = {
                         "type": "tool_result",
                         "tool_use_id": block["tool_use_id"],
                         "content": self._tool_result_content(block["content"]),
                     }
                     if block.get("is_error"):
                         entry["is_error"] = True
+                    self._add_cache_control(entry, block)
                     content.append(entry)
                 elif block["type"] == "thinking" and not block.get("signature"):
                     dropped_thinking += 1
                 else:
-                    content.append(dict(block))
+                    content.append(self._copy_block(block))
             if not content and dropped_thinking > dropped_before:
                 continue
             serialized.append({"role": message["role"], "content": content})
@@ -246,14 +385,16 @@ class ClaudeAdapter(Adapter):
         return serialized
 
     def _serialize_tools(self, tools: list[ToolDef]) -> list[dict[str, Any]]:
-        return [
-            {
-                "name": t["name"],
-                "description": t["description"],
-                "input_schema": t["parameters"],
+        serialized = []
+        for tool in tools:
+            entry = {
+                "name": tool["name"],
+                "description": tool["description"],
+                "input_schema": tool["parameters"],
             }
-            for t in tools
-        ]
+            self._add_cache_control(entry, tool)
+            serialized.append(entry)
+        return serialized
 
     def _deserialize(
         self, data: dict[str, Any], latency_ms: float, ttft_ms: float | None = None
@@ -305,7 +446,7 @@ class ClaudeAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None,
+        system: str | list[SystemBlock] | None,
         tools: list[ToolDef] | None,
         config: dict[str, Any] | None,
         stream: bool,
@@ -317,7 +458,11 @@ class ClaudeAdapter(Adapter):
             "stream": stream,
         }
         if system:
-            payload["system"] = system
+            payload["system"] = (
+                system
+                if isinstance(system, str)
+                else [self._copy_block(block) for block in system]
+            )
         if tools:
             payload["tools"] = self._serialize_tools(tools)
         timeout, extra_headers = _merge_config(
@@ -348,7 +493,7 @@ class ClaudeAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Response:
@@ -369,7 +514,7 @@ class ClaudeAdapter(Adapter):
         self,
         model: str,
         messages: list[Message],
-        system: str | None = None,
+        system: str | list[SystemBlock] | None = None,
         tools: list[ToolDef] | None = None,
         config: dict[str, Any] | None = None,
     ) -> Iterator[StreamEvent]:

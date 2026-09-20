@@ -96,10 +96,14 @@ response = provider.chat(
 | `providers()` | Configured providers and whether each is available (configured; for Ollama, running) | `dict[str, bool]` |
 | `models(*, embeddings=False)` | Model ids of each available provider; embedding models when `embeddings=True` | `dict[str, list[str]]` |
 | `model_info(model, *, provider=None)` | Context window / max output for a model, when known | `ModelInfo \| None` |
+| `capabilities(model, *, provider=None)` | What the provider's metadata says a model can do | `Capabilities \| None` |
+| `supports(model, capability, *, provider=None)` | One capability as `True`/`False`/`None` | `bool \| None` |
 | `embed(model, input, config, provider)` | Embed one text or a batch of texts | `EmbedResponse` |
 | `async_providers()` | `await`able `providers` | `dict[str, bool]` |
 | `async_models(*, embeddings=False)` | `await`able `models` | `dict[str, list[str]]` |
 | `async_model_info(model, *, provider=None)` | `await`able `model_info` | `ModelInfo \| None` |
+| `async_capabilities(model, *, provider=None)` | `await`able `capabilities` | `Capabilities \| None` |
+| `async_supports(model, capability, *, provider=None)` | `await`able `supports` | `bool \| None` |
 | `async_embed(model, input, config, provider)` | `await`able `embed` | `EmbedResponse` |
 
 `model_info` is best-effort: `None` means the provider doesn't expose it for that model, not that the model doesn't exist. Claude and self-hosted Ollama read it live from the vendor; OpenAI's API doesn't expose it, so it's always `None` there. It answers for chat models only. `ModelInfo`'s fields are in [`types.py`](src/ducktape_provider/types.py).
@@ -128,6 +132,24 @@ provider.chat(
 - Headers go per provider (`providers.<name>.headers`); values can be functions called per request.
 - They are also sent when checking availability and listing models.
 - They are only sent over https, or http to a loopback IP with no proxy; otherwise the provider reports unavailable and calls raise `ValueError`.
+
+## Prompt caching
+
+Set a vendor cache breakpoint with `cache_control` on a `text`/`image`/`document`/`tool_result` block or on a tool definition, and pass the system prompt as a list of text blocks:
+
+```python
+provider.chat(
+    "claude-opus-5",
+    messages,
+    system=[{"type": "text", "text": long_system, "cache_control": {"type": "ephemeral"}}],
+    tools=[{**tool, "cache_control": {"type": "ephemeral"}}],
+    provider="claude",
+)
+```
+
+- `CacheControl` is `{"type": "ephemeral"}`, with an optional `ttl` of `"5m"` (default) or `"1h"`. It's in [`types.py`](src/ducktape_provider/types.py).
+- Claude honors breakpoints on text/image/document/tool_result blocks, tool definitions, and system blocks. OpenAI caches automatically (the flag is ignored) and Ollama has no prompt caching; a system block list is flattened to text there.
+- Cache hit and write tokens are reported in `Response.usage` as `cache_read_tokens` and `cache_write_tokens`.
 
 ## Embedding
 
@@ -166,6 +188,39 @@ provider.models()                 # chat ids per provider
 The two listings never mix, and `embeddings` is keyword-only (`models(embeddings=True)`, not `models(True)`). A provider whose listing API doesn't separate model kinds (self-hosted Ollama's does not) can also show embedding models in the chat listing, so an id from `models()` is not a guarantee the chat methods accept it.
 
 An embedding id passed to `chat`/`stream_chat`/`model_info` raises `KeyError`, and a chat id passed to `embed` raises `KeyError`. With an explicit `provider=` you get that provider's own error instead (usually `APIError` with status 404), because the library doesn't look the id up first. `model_info()` answers for chat models only.
+
+## Model capabilities
+
+`capabilities(model, *, provider=None)` reports what the provider's own model metadata says a model can do; `supports(model, capability, *, provider=None)` is sugar for one key.
+
+| Key | Meaning |
+|---|---|
+| `tools` | The model can call tools |
+| `vision` | The model accepts image input blocks |
+| `pdf_input` | The model accepts document blocks |
+| `thinking` | The model emits reasoning traces |
+
+Each key is `True`, `False`, or `None`. `None` means the provider's metadata doesn't say — unknown, never "no". `raw` carries the vendor's own capability payload untouched.
+
+| Provider | Can report |
+|---|---|
+| `claude` | `vision`, `pdf_input`, `thinking` |
+| `openai` | none |
+| `ollama-local` | `tools`, `vision`, `thinking` |
+
+```python
+caps = provider.capabilities("claude-opus-5", provider="claude")
+if provider.supports("claude-opus-5", "vision") is False:
+    ...
+```
+
+- Values come from each vendor's own metadata, so a provider that exposes none of it always answers `None` (OpenAI today). The hook stays open: a vendor that starts emitting machine-readable capabilities is picked up with no interface change.
+- Claude resolves an id the listing doesn't carry (an alias, say) through its single-model endpoint, so it works with an explicit `provider=`. On older Ollama servers that send no capability list, `vision` is `True` when the model's own metadata carries a vision projector, otherwise unknown.
+- A chat failure that drops a cached provider also drops that model's cached capabilities, so a stale answer isn't served after the vendor stops knowing the model.
+- `supports()` raises `ValueError` before any request for a name that isn't one of the four keys.
+- An unknown model id with an explicit `provider=` answers `None`. Under auto-match, a model no provider lists raises `KeyError`; `None` is reserved for "the resolved provider doesn't know it", never for "we couldn't ask" — a failure raises.
+- `capabilities()`, `supports()` and `model_info()` answer for chat models, so an id a provider serves only for embeddings raises `KeyError` under auto-match. Use `models(embeddings=True)` to list those ids and `embed()` to use them. A provider whose listing doesn't separate model kinds (self-hosted Ollama's does not) answers for such an id anyway.
+- Expose-only: `chat()`/`stream_chat()` never check capabilities. Guard per call where you need to, e.g. `if provider.supports(m, "tools") is False: ...`.
 
 ## Streaming
 
@@ -260,7 +315,7 @@ Users load plugins with `Provider(autodiscover=True)`, or only some with `Provid
 
 ## Async
 
-`async_chat`, `async_stream_chat`, `async_embed`, `async_providers`, `async_models` and `async_model_info` work like their sync versions without blocking the event loop.
+`async_chat`, `async_stream_chat`, `async_embed`, `async_providers`, `async_models`, `async_model_info`, `async_capabilities` and `async_supports` work like their sync versions without blocking the event loop.
 
 ```python
 response = await provider.async_chat("claude-opus-5", messages)
@@ -274,7 +329,7 @@ async with contextlib.aclosing(
 
 - Use `contextlib.aclosing` to close a stream right away if you stop reading early.
 - Cancelling an `async_stream_chat` call stops its HTTP request immediately, for the built-in adapters. A `chat`/`async_chat` call, or a stream from a third-party adapter that doesn't support this, still runs until done or `timeout`.
-- `Provider(executor=...)` sets the thread pool for `async_chat`, `async_embed`, `async_providers`, `async_models` and `async_model_info`; it must be thread-based.
+- `Provider(executor=...)` sets the thread pool for `async_chat`, `async_embed`, `async_providers`, `async_models`, `async_model_info`, `async_capabilities` and `async_supports`; it must be thread-based.
 
 ## Development
 

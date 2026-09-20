@@ -28,6 +28,7 @@ from ducktape_provider import (
     OpenAIAdapter,
     RateLimitError,
     ServerError,
+    SystemBlock,
     ToolDef,
 )
 from ducktape_provider.adapters import openai as openai_module
@@ -158,6 +159,30 @@ class OpenAISerializeTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_system_blocks_flatten_to_instructions(self):
+        system: list[SystemBlock] = [
+            {"type": "text", "text": "a"},
+            {"type": "text", "text": "b", "cache_control": {"type": "ephemeral"}},
+        ]
+        req, _ = self.adapter._build_request("m", MESSAGES, system, None, None, False)
+        self.assertEqual(request_body(req)["instructions"], "a\nb")
+
+    def test_cache_control_is_not_serialized(self):
+        messages: list[Message] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "hi",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+        block = self.adapter._serialize(messages)[0]["content"][0]
+        self.assertNotIn("cache_control", block)
 
 
 class OpenAIDeserializeTests(unittest.TestCase):

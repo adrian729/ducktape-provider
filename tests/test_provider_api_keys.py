@@ -667,19 +667,55 @@ class ProviderApiKeysTests(unittest.TestCase):
         self.assertEqual(self._sent_key(provider, "openai", openai), "k2")
 
     def test_passed_adapter_is_left_unchanged(self):
-        stale: dict[str, ModelInfo] = {
-            "stale": {"context_window": None, "max_output_tokens": None}
-        }
-        original = ClaudeAdapter()
-        original._models_cache = dict(stale)
-        provider = Provider(adapters={"claude": original}, api_keys={"claude": "k"})
-        copied = provider._adapters["claude"]
-        self.assertIsNot(copied, original)
-        self.assertIsNone(original._key_source)
-        self.assertEqual(original._models_cache, stale)
-        assert isinstance(copied, ClaudeAdapter)
-        self.assertIsNone(copied._models_cache)
-        self.assertIsNotNone(copied._key_source)
+        for case in KEYED:
+            with self.subTest(case.name):
+                if case.cls is ClaudeAdapter:
+                    stale: dict[str, ModelInfo] = {
+                        "stale": {"context_window": None, "max_output_tokens": None}
+                    }
+                    stale_raw: dict[str, dict[str, Any]] = {
+                        "stale": {
+                            "id": "stale",
+                            "capabilities": {"image_input": {"supported": True}},
+                        }
+                    }
+                    original = ClaudeAdapter()
+                    original._models_cache = dict(stale)
+                    original._models_raw = dict(stale_raw)
+                    original._cache_time = 123.0
+                    provider = Provider(
+                        adapters={"claude": original}, api_keys={"claude": "k"}
+                    )
+                    copied = provider._adapters["claude"]
+                    self.assertIsNot(copied, original)
+                    self.assertIsNone(original._key_source)
+                    self.assertEqual(original._models_cache, stale)
+                    self.assertEqual(original._models_raw, stale_raw)
+                    self.assertEqual(original._cache_time, 123.0)
+                    assert isinstance(copied, ClaudeAdapter)
+                    self.assertIsNone(copied._models_cache)
+                    self.assertIsNone(copied._models_raw)
+                    self.assertEqual(copied._cache_time, 0.0)
+                    self.assertIsNotNone(copied._key_source)
+                else:
+                    original_oai = OpenAIAdapter()
+                    original_oai._models_cache = {"stale"}  # type: ignore[assignment]
+                    original_oai._embed_models_cache = {"stale-embed"}  # type: ignore[assignment]
+                    original_oai._cache_time = 123.0
+                    provider = Provider(
+                        adapters={"openai": original_oai}, api_keys={"openai": "k"}
+                    )
+                    copied = provider._adapters["openai"]
+                    self.assertIsNot(copied, original_oai)
+                    self.assertIsNone(original_oai._key_source)
+                    self.assertEqual(original_oai._models_cache, {"stale"})
+                    self.assertEqual(original_oai._embed_models_cache, {"stale-embed"})
+                    self.assertEqual(original_oai._cache_time, 123.0)
+                    assert isinstance(copied, OpenAIAdapter)
+                    self.assertIsNone(copied._models_cache)
+                    self.assertIsNone(copied._embed_models_cache)
+                    self.assertEqual(copied._cache_time, 0.0)
+                    self.assertIsNotNone(copied._key_source)
 
     def test_invalid_api_keys_raise_without_keys_in_the_message(self):
         failures: dict[str, tuple[type[Exception], Callable[[], object]]] = {
