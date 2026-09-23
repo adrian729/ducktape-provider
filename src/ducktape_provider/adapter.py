@@ -16,6 +16,8 @@ from .types import Adapter, AuthError, SystemBlock
 
 __all__ = ["Adapter"]
 
+_COMPACTION_KEY = "_compaction"
+
 _API_KEY = re.compile(r"[\x21-\x7e]+")
 
 _REDACTED = "<redacted>"
@@ -415,9 +417,11 @@ def _merge_config(
     instead of being sent to the vendor. Reserved keys are the ones the adapter's
     own parsing depends on (e.g. `stream`), where an override would break the call.
     An explicit `timeout: None` means no timeout, so only an absent key falls back
-    to `default_timeout`.
+    to `default_timeout`. The normalized compaction `Provider` passes through the
+    config dict is dropped here, so no adapter can leak it into a vendor body.
     """
     config = dict(config or {})
+    config.pop(_COMPACTION_KEY, None)
     for key in config:
         if isinstance(key, str) and _is_key_like(key):
             raise ValueError(

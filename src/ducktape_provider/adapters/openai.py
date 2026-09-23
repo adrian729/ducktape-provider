@@ -8,11 +8,12 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any, NoReturn
 
 from .. import errors
 from ..adapter import (
+    _COMPACTION_KEY,
     Adapter,
     _key_url_allowed,
     _merge_config,
@@ -40,6 +41,8 @@ from ..streaming import (
 )
 from ..types import (
     Block,
+    CompactionBlock,
+    CompactionResult,
     EmbedResponse,
     EmbedUsage,
     ImageBlock,
@@ -76,6 +79,7 @@ _ERROR_CODE_STATUS = {
 class OpenAIAdapter(Adapter):
     _MODELS_URL = "https://api.openai.com/v1/models"
     _RESPONSES_URL = "https://api.openai.com/v1/responses"
+    _COMPACT_URL = "https://api.openai.com/v1/responses/compact"
     _EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
     _CHAT_MODEL_RE = re.compile(r"^(gpt-|chatgpt-|o\d)")
     _NON_CHAT_RE = re.compile(r"-(audio|realtime|transcribe|tts|search)|^gpt-image")
@@ -250,6 +254,13 @@ class OpenAIAdapter(Adapter):
                             "output": output,
                         }
                     )
+                elif block["type"] == "compaction":
+                    flush()
+                    item: dict[str, Any] = {"type": "compaction"}
+                    encrypted = block.get("encrypted_content")
+                    if encrypted is not None:
+                        item["encrypted_content"] = encrypted
+                    serialized.append(item)
             flush()
         if dropped_thinking:
             logger.warning(
@@ -289,6 +300,29 @@ class OpenAIAdapter(Adapter):
             for t in tools
         ]
 
+    @staticmethod
+    def _compaction_block(item: dict[str, Any]) -> CompactionBlock:
+        """The opaque block for a compaction output item."""
+        block: CompactionBlock = {"type": "compaction", "content": None}
+        if item.get("encrypted_content") is not None:
+            block["encrypted_content"] = item["encrypted_content"]
+        return block
+
+    @staticmethod
+    def _normalize_usage(usage: dict[str, Any] | None) -> Usage:
+        """The vendor's token counts in our shape, cache counts included."""
+        usage = usage or {}
+        normalized: Usage = {
+            "input_tokens": usage.get("input_tokens") or 0,
+            "output_tokens": usage.get("output_tokens") or 0,
+        }
+        details = usage.get("input_tokens_details") or {}
+        if (cached := details.get("cached_tokens")) is not None:
+            normalized["cache_read_tokens"] = cached
+        if (cache_write := details.get("cache_write_tokens")) is not None:
+            normalized["cache_write_tokens"] = cache_write
+        return normalized
+
     def _deserialize(
         self, data: dict[str, Any], latency_ms: float, ttft_ms: float | None = None
     ) -> Response:
@@ -313,6 +347,8 @@ class OpenAIAdapter(Adapter):
                 if truncated:
                     tool_use_block["truncated"] = True
                 blocks.append(tool_use_block)
+            elif item.get("type") == "compaction":
+                blocks.append(self._compaction_block(item))
             elif item.get("type") == "reasoning":
                 thinking = "\n".join(
                     part["text"]
@@ -338,16 +374,7 @@ class OpenAIAdapter(Adapter):
         else:
             stop_reason = "other"
 
-        usage = data.get("usage") or {}
-        normalized_usage: Usage = {
-            "input_tokens": usage.get("input_tokens") or 0,
-            "output_tokens": usage.get("output_tokens") or 0,
-        }
-        input_tokens_details = usage.get("input_tokens_details") or {}
-        if (cached := input_tokens_details.get("cached_tokens")) is not None:
-            normalized_usage["cache_read_tokens"] = cached
-        if (cache_write := input_tokens_details.get("cache_write_tokens")) is not None:
-            normalized_usage["cache_write_tokens"] = cache_write
+        normalized_usage = self._normalize_usage(data.get("usage"))
         response: Response = {
             "content": blocks,
             "stop_reason": stop_reason,
@@ -372,6 +399,32 @@ class OpenAIAdapter(Adapter):
             body=json.dumps(error),
         )
 
+    @staticmethod
+    def _merge_context_management(entry: dict[str, Any], raw: object) -> list[Any]:
+        """The normalized compaction entry alongside the caller's raw entries."""
+        entries: list[Any] = [entry]
+        if raw is None:
+            return entries
+        if not isinstance(raw, list):
+            logger.warning(
+                "openai normalized compaction drops raw context_management, "
+                "which is not a list of entries"
+            )
+            return entries
+        if any(
+            isinstance(item, Mapping) and item.get("type") == "compaction"
+            for item in raw
+        ):
+            logger.warning(
+                "openai normalized compaction overrides a raw compaction entry"
+            )
+        entries += [
+            item
+            for item in raw
+            if not (isinstance(item, Mapping) and item.get("type") == "compaction")
+        ]
+        return entries
+
     def _build_request(
         self,
         model: str,
@@ -381,6 +434,8 @@ class OpenAIAdapter(Adapter):
         config: dict[str, Any] | None,
         stream: bool,
     ) -> tuple[urllib.request.Request, float | None]:
+        config = dict(config or {})
+        compaction = config.pop(_COMPACTION_KEY, None)
         payload: dict[str, Any] = {
             "model": model,
             "input": self._serialize(messages),
@@ -391,6 +446,21 @@ class OpenAIAdapter(Adapter):
             payload["instructions"] = _system_text(system)
         if tools:
             payload["tools"] = self._serialize_tools(tools)
+        if compaction is not None:
+            if compaction.get("pause"):
+                raise ValueError(
+                    "openai compaction has no pause_after_compaction equivalent"
+                )
+            if compaction.get("instructions") is not None:
+                raise ValueError(
+                    "openai auto compaction does not accept instructions; use compact()"
+                )
+            entry: dict[str, Any] = {"type": "compaction"}
+            if compaction.get("threshold") is not None:
+                entry["compact_threshold"] = compaction["threshold"]
+            payload["context_management"] = self._merge_context_management(
+                entry, config.pop("context_management", None)
+            )
         timeout, extra_headers = _merge_config(
             "openai", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
         )
@@ -496,6 +566,71 @@ class OpenAIAdapter(Adapter):
             self._invalidate_models_cache_on_404(e)
             raise
 
+    def supports_compaction(self) -> bool:
+        return True
+
+    def compact(
+        self,
+        model: str,
+        messages: list[Message],
+        system: str | list[SystemBlock] | None = None,
+        instructions: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> CompactionResult:
+        config = dict(config or {})
+        if config.pop("context_management", None) is not None:
+            logger.warning("openai compact() overrides raw context_management")
+        payload: dict[str, Any] = {"model": model, "input": self._serialize(messages)}
+        parts = []
+        if system:
+            parts.append(_system_text(system))
+        if instructions is not None:
+            parts.append(instructions)
+        if parts:
+            payload["instructions"] = "\n\n".join(parts)
+        timeout, extra_headers = _merge_config(
+            "openai", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
+        )
+        _validate_headers("openai", extra_headers)
+        url = self._COMPACT_URL
+        resolved = _resolve_headers(
+            "openai", url, self._provider_headers, extra_headers
+        )
+        req = _new_request(
+            url,
+            json.dumps(payload).encode(),
+            {"Content-Type": "application/json"},
+            extra_headers,
+            resolved,
+            auth=(
+                "Authorization",
+                "Bearer ",
+                lambda: _request_key("openai", url, self._key_source, "OPENAI_API_KEY"),
+            ),
+        )
+        data, _ = _request_json("openai", req, timeout, operation="compact")
+        with _shape_checked("openai", operation="compact"):
+            item = next(
+                (
+                    entry
+                    for entry in data["output"]
+                    if entry.get("type") == "compaction"
+                ),
+                None,
+            )
+            if item is None:
+                errors.raise_for_malformed_response(
+                    "openai",
+                    ValueError("no compaction item in response"),
+                    operation="compact",
+                )
+            block = self._compaction_block(item)
+            usage_obj = data.get("usage")
+            usage: Usage | None = (
+                None if usage_obj is None else self._normalize_usage(usage_obj)
+            )
+        return {"block": block, "usage": usage, "raw": data}
+
     def chat(
         self,
         model: str,
@@ -570,6 +705,14 @@ class OpenAIAdapter(Adapter):
                         "index": index,
                         "id": item.get("call_id", ""),
                         "name": item.get("name", ""),
+                    }
+                elif item.get("type") == "compaction":
+                    index = block_index(item["id"])
+                    surfaced.add(index)
+                    yield {
+                        "type": "compaction_delta",
+                        "index": index,
+                        "delta": item.get("encrypted_content", ""),
                     }
             elif etype == "response.content_part.added":
                 if event["part"].get("type") in ("output_text", "refusal"):

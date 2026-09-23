@@ -32,6 +32,16 @@ class CacheControl(TypedDict):
     ttl: NotRequired[Literal["5m", "1h"]]
 
 
+class CompactionBlock(TypedDict):
+    """Opaque summary block; round-trip it verbatim."""
+
+    type: Literal["compaction"]
+    content: str | None
+    encrypted_content: NotRequired[str]
+    signature: NotRequired[str]
+    cache_control: NotRequired[CacheControl]
+
+
 type Block = (
     TextBlock
     | ImageBlock
@@ -39,6 +49,7 @@ type Block = (
     | ToolUseBlock
     | ToolResultBlock
     | ThinkingBlock
+    | CompactionBlock
 )
 
 
@@ -188,6 +199,7 @@ type StopReason = Literal[
     "content_filter",
     "refusal",
     "pause_turn",
+    "compaction",
     "other",
 ]
 
@@ -217,11 +229,28 @@ class EmbedResponse(TypedDict):
     latency_ms: NotRequired[float]
 
 
+class CompactionConfig(TypedDict, total=False):
+    """Normalized auto-compaction for one chat call."""
+
+    threshold: int
+    instructions: str | None
+    pause: bool
+
+
+class CompactionResult(TypedDict):
+    """Normalized result of compact()."""
+
+    block: CompactionBlock
+    usage: Usage | None
+    raw: NotRequired[dict[str, Any]]
+
+
 type StreamEvent = (
     TextDeltaEvent
     | ThinkingDeltaEvent
     | ToolUseStartEvent
     | ToolUseDeltaEvent
+    | CompactionDeltaEvent
     | BlockStopEvent
     | MessageStopEvent
 )
@@ -254,6 +283,12 @@ class ToolUseDeltaEvent(TypedDict):
     type: Literal["tool_use_delta"]
     index: int
     partial_json: str
+
+
+class CompactionDeltaEvent(TypedDict):
+    type: Literal["compaction_delta"]
+    index: int
+    delta: str
 
 
 class BlockStopEvent(TypedDict):
@@ -426,6 +461,23 @@ class Adapter(ABC):
 
     def _invalidate_model_capabilities(self, model: str) -> None:
         """Drop cached capability metadata for `model`."""
+
+    def supports_compaction(self) -> bool:
+        """Whether this adapter can compact a conversation server-side."""
+        return False
+
+    def compact(
+        self,
+        model: str,
+        messages: list[Message],
+        system: str | list[SystemBlock] | None = None,
+        instructions: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> CompactionResult:
+        """Summarize a conversation; raises UnsupportedOperationError unless overridden."""
+        raise UnsupportedOperationError(
+            f"provider {type(self).__name__!r} does not support compact()"
+        )
 
     @abstractmethod
     def chat(

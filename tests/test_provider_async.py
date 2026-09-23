@@ -1015,6 +1015,26 @@ class TestProviderAsyncCapabilities(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(adapter.calls, calls_after_gather)
 
 
+class TestProviderAsyncCompaction(unittest.IsolatedAsyncioTestCase):
+    async def test_async_compact_unsupported_named(self):
+        provider = Provider(adapters={"fake": FakeAdapter()})
+        with self.assertRaises(UnsupportedOperationError) as ctx:
+            await provider.async_compact("m", MESSAGES, provider="fake")
+        self.assertEqual(
+            str(ctx.exception), "provider 'fake' does not support compact()"
+        )
+
+    async def test_async_chat_compaction_unsupported(self):
+        provider = Provider(adapters={"fake": FakeAdapter()})
+        with self.assertRaises(UnsupportedOperationError):
+            await provider.async_chat("m", MESSAGES, provider="fake", compaction=True)
+
+    async def test_async_stream_chat_compaction_unsupported(self):
+        provider = Provider(adapters={"fake": FakeAdapter()})
+        with self.assertRaises(UnsupportedOperationError):
+            provider.async_stream_chat("m", MESSAGES, provider="fake", compaction=True)
+
+
 class TestProviderAsyncEmbed(unittest.IsolatedAsyncioTestCase):
     """Async embed mirrors sync embed but off the event loop."""
 

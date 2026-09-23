@@ -20,7 +20,13 @@ from collections.abc import (
 )
 from typing import Any, Literal, TypeVar, cast
 
-from .adapter import Adapter, _is_key_like, _Secret, _validate_timeout
+from .adapter import (
+    _COMPACTION_KEY,
+    Adapter,
+    _is_key_like,
+    _Secret,
+    _validate_timeout,
+)
 from .adapters.claude import ClaudeAdapter
 from .adapters.ollama import OllamaLocalAdapter
 from .adapters.openai import OpenAIAdapter
@@ -34,6 +40,8 @@ from .streaming import _clear_tracebacks
 from .types import (
     Capabilities,
     CapabilityName,
+    CompactionConfig,
+    CompactionResult,
     Config,
     EmbedResponse,
     Message,
@@ -295,6 +303,30 @@ def _check_non_header_keys(
             )
 
 
+def _validate_compaction_shape(value: object, owner: str) -> None:
+    """Raises for a bad normalized `compaction` value (bool or mapping)."""
+    if value is None or isinstance(value, bool):
+        return
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{owner} compaction must be a bool or a mapping")
+    unknown = set(value) - {"threshold", "instructions", "pause"}
+    if unknown:
+        raise ValueError(
+            f"{owner} compaction has unknown keys: {', '.join(sorted(unknown))}"
+        )
+    threshold = value.get("threshold")
+    if threshold is not None and (
+        isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0
+    ):
+        raise ValueError(f"{owner} compaction threshold must be a positive int")
+    instructions = value.get("instructions")
+    if instructions is not None and not isinstance(instructions, str):
+        raise TypeError(f"{owner} compaction instructions must be a str or None")
+    pause = value.get("pause")
+    if pause is not None and not isinstance(pause, bool):
+        raise TypeError(f"{owner} compaction pause must be a bool")
+
+
 def _validate_provider_config(
     adapters: Mapping[str, Adapter], snapshot: Mapping[str, Any]
 ) -> None:
@@ -311,6 +343,12 @@ def _validate_provider_config(
             for a in adapters.values()
         )
     )
+    if "context_management" in snapshot:
+        raise ValueError(
+            "Provider config cannot set context_management at the top level; "
+            "set it per provider as config['providers'][name]['context_management']"
+        )
+    _validate_compaction_shape(snapshot.get("compaction"), "Provider config")
     _check_non_header_keys("Provider config", snapshot, reserved_union)
     providers = snapshot.get("providers") or {}
     if unknown := sorted(set(providers) - set(adapters)):
@@ -330,6 +368,7 @@ def _validate_provider_config(
                 "OllamaLocalAdapter, or a subclass) support them; pass them "
                 "per call instead"
             )
+        _validate_compaction_shape(entry.get("compaction"), f"provider {name!r} config")
         _check_non_header_keys(
             f"provider {name!r} config",
             entry,
@@ -921,19 +960,31 @@ class Provider:
         a chat default like `temperature` never reaches an embeddings body.
         """
         config = config or {}
-        provider_top = {k: v for k, v in self._config.items() if k != "providers"}
+        provider_top = {
+            k: v
+            for k, v in self._config.items()
+            if k not in ("providers", "compaction", "context_management")
+        }
         provider_per = {
             k: v
             for k, v in (
                 (self._config.get("providers") or {}).get(provider) or {}
             ).items()
-            if k != "headers"
+            if k not in ("headers", "compaction")
         }
         if embed:
             provider_top = {k: v for k, v in provider_top.items() if k == "timeout"}
             provider_per = {k: v for k, v in provider_per.items() if k == "timeout"}
-        call_top = {k: v for k, v in config.items() if k != "providers"}
-        call_per = (config.get("providers") or {}).get(provider) or {}
+        call_top = {
+            k: v
+            for k, v in config.items()
+            if k not in ("providers", "compaction", _COMPACTION_KEY)
+        }
+        call_per = {
+            k: v
+            for k, v in ((config.get("providers") or {}).get(provider) or {}).items()
+            if k not in ("compaction", _COMPACTION_KEY)
+        }
         merged: dict[str, Any] = {}
         for layer in (provider_top, provider_per, call_top, call_per):
             for key, value in layer.items():
@@ -945,6 +996,51 @@ class Provider:
                     merged[key] = value
         return merged
 
+    @staticmethod
+    def _validate_compaction_arg(compaction: object) -> None:
+        """Raises for a bad `compaction` argument before any resolution I/O."""
+        _validate_compaction_shape(compaction, "compaction")
+
+    def _resolve_compaction(
+        self, provider: str, compaction: bool | CompactionConfig | None
+    ) -> dict[str, Any] | None:
+        """The effective normalized compaction config for one call, or None."""
+        effective: object = None
+        for layer in (
+            self._config.get("compaction"),
+            (self._config.get("providers") or {}).get(provider, {}).get("compaction"),
+            compaction,
+        ):
+            if layer is not None:
+                effective = layer
+        if effective is None or effective is False:
+            return None
+        if effective is True:
+            return {}
+        if not isinstance(effective, Mapping):
+            raise TypeError("compaction must be a bool or a mapping")
+        normalized = dict(effective)
+        _validate_compaction_shape(normalized, "compaction")
+        return normalized
+
+    def _prepare_config(
+        self,
+        name: str,
+        adapter: Adapter,
+        config: Config | Mapping[str, Any] | None,
+        compaction: bool | CompactionConfig | None,
+    ) -> dict[str, Any]:
+        """The resolved config for one call, with normalized compaction injected."""
+        normalized = self._resolve_compaction(name, compaction)
+        resolved = self._resolve_config(name, config)
+        if normalized is not None:
+            if not adapter.supports_compaction():
+                raise UnsupportedOperationError(
+                    f"provider {name!r} does not support compaction"
+                )
+            resolved[_COMPACTION_KEY] = normalized
+        return resolved
+
     def chat(
         self,
         model: str,
@@ -954,7 +1050,9 @@ class Provider:
         config: Config | Mapping[str, Any] | None = None,
         *,
         provider: str | None = None,
+        compaction: bool | CompactionConfig | None = None,
     ) -> Response:
+        self._validate_compaction_arg(compaction)
         resolved_name, adapter = self._resolve_provider(provider, model)
         try:
             return adapter.chat(
@@ -962,7 +1060,7 @@ class Provider:
                 messages,
                 system,
                 tools,
-                self._resolve_config(resolved_name, config),
+                self._prepare_config(resolved_name, adapter, config, compaction),
             )
         except APIError as exc:
             if provider is None:
@@ -1086,10 +1184,16 @@ class Provider:
         config: Config | Mapping[str, Any] | None = None,
         *,
         provider: str | None = None,
+        compaction: bool | CompactionConfig | None = None,
     ) -> Iterator[StreamEvent]:
+        self._validate_compaction_arg(compaction)
         resolved_name, adapter = self._resolve_provider(provider, model)
         stream = adapter.stream_chat(
-            model, messages, system, tools, self._resolve_config(resolved_name, config)
+            model,
+            messages,
+            system,
+            tools,
+            self._prepare_config(resolved_name, adapter, config, compaction),
         )
         if provider is not None:
             return stream
@@ -1104,7 +1208,10 @@ class Provider:
         config: Config | Mapping[str, Any] | None = None,
         *,
         provider: str | None = None,
+        compaction: bool | CompactionConfig | None = None,
     ) -> Response:
+        self._validate_compaction_arg(compaction)
+
         def call() -> Response:
             resolved_name, adapter = self._resolve_provider(provider, model)
             try:
@@ -1113,7 +1220,7 @@ class Provider:
                     messages,
                     system,
                     tools,
-                    self._resolve_config(resolved_name, config),
+                    self._prepare_config(resolved_name, adapter, config, compaction),
                 )
             except APIError as exc:
                 if provider is None:
@@ -1137,6 +1244,63 @@ class Provider:
             lambda: self.embed(model, input, config, provider=provider)
         )
 
+    def compact(
+        self,
+        model: str,
+        messages: list[Message],
+        system: str | list[SystemBlock] | None = None,
+        instructions: str | None = None,
+        config: Config | Mapping[str, Any] | None = None,
+        *,
+        provider: str | None = None,
+    ) -> CompactionResult:
+        """Summarize a conversation into one opaque block, when the provider can."""
+        if instructions is not None and not isinstance(instructions, str):
+            raise TypeError("compact() instructions must be a str or None")
+        resolved_name, adapter = self._resolve_provider(provider, model)
+        if not adapter.supports_compaction():
+            raise UnsupportedOperationError(
+                f"provider {resolved_name!r} does not support compact()"
+            )
+        try:
+            return adapter.compact(
+                model,
+                messages,
+                system,
+                instructions,
+                self._resolve_config(resolved_name, config),
+            )
+        except UnsupportedOperationError as exc:
+            raise UnsupportedOperationError(
+                f"provider {resolved_name!r} does not support compact()"
+            ) from exc
+        except APIError as exc:
+            if provider is None:
+                self._maybe_evict_auto_match(exc, model, resolved_name)
+            raise
+
+    async def async_compact(
+        self,
+        model: str,
+        messages: list[Message],
+        system: str | list[SystemBlock] | None = None,
+        instructions: str | None = None,
+        config: Config | Mapping[str, Any] | None = None,
+        *,
+        provider: str | None = None,
+    ) -> CompactionResult:
+        """`compact`, off the event loop."""
+        return await self._run_off_loop(
+            lambda: self.compact(
+                model,
+                messages,
+                system,
+                instructions,
+                config,
+                provider=provider,
+            )
+        )
+
     def async_stream_chat(
         self,
         model: str,
@@ -1146,7 +1310,9 @@ class Provider:
         config: Config | Mapping[str, Any] | None = None,
         *,
         provider: str | None = None,
+        compaction: bool | CompactionConfig | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
+        self._validate_compaction_arg(compaction)
         if provider is not None:
             adapter = self._adapter(provider)
             open_stream = functools.partial(
@@ -1155,7 +1321,7 @@ class Provider:
                 messages,
                 system,
                 tools,
-                self._resolve_config(provider, config),
+                self._prepare_config(provider, adapter, config, compaction),
             )
         else:
 
@@ -1166,7 +1332,7 @@ class Provider:
                     messages,
                     system,
                     tools,
-                    self._resolve_config(resolved_name, config),
+                    self._prepare_config(resolved_name, adapter, config, compaction),
                 )
                 return _EvictingStream(inner, self, model, resolved_name)
 

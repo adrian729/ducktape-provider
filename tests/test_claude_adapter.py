@@ -2130,6 +2130,240 @@ class TestClaudeCapabilities(unittest.TestCase):
         self.assertEqual(len(single), 1)
         self.assertIn("foo%2Fbar%20baz", single[0])
 
+    def test_auto_compaction_payload_and_beta(self):
+        adapter = ClaudeAdapter(api_key="test")
+        config = {
+            "_compaction": {"threshold": 60000, "pause": True, "instructions": "s"}
+        }
+        req, _ = adapter._build_request("m", MESSAGES, None, None, config, False)
+        self.assertEqual(
+            request_body(req)["context_management"]["edits"],
+            [
+                {
+                    "type": "compact_20260112",
+                    "trigger": {"type": "input_tokens", "value": 60000},
+                    "pause_after_compaction": True,
+                    "instructions": "s",
+                }
+            ],
+        )
+        self.assertEqual(req.get_header("Anthropic-beta"), "compact-2026-01-12")
+        self.assertNotIn("_compaction", request_body(req))
+
+    def test_pause_omitted_when_unset(self):
+        adapter = ClaudeAdapter(api_key="test")
+        req, _ = adapter._build_request(
+            "m", MESSAGES, None, None, {"_compaction": {"threshold": 60000}}, False
+        )
+        edit = request_body(req)["context_management"]["edits"][0]
+        self.assertNotIn("pause_after_compaction", edit)
+
+    def test_beta_merged_with_user_beta(self):
+        adapter = ClaudeAdapter(api_key="test")
+        config = {
+            "_compaction": {},
+            "headers": {"anthropic-beta": "context-management-2025-06-27"},
+        }
+        req, _ = adapter._build_request("m", MESSAGES, None, None, config, False)
+        self.assertEqual(
+            req.get_header("Anthropic-beta"),
+            "context-management-2025-06-27, compact-2026-01-12",
+        )
+
+    def test_compaction_adds_system_cache_tail(self):
+        adapter = ClaudeAdapter(api_key="test")
+        req, _ = adapter._build_request(
+            "m", MESSAGES, "sys", None, {"_compaction": {}}, False
+        )
+        self.assertEqual(
+            request_body(req)["system"],
+            [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}],
+        )
+
+    def test_compaction_keeps_manual_cache_control(self):
+        adapter = ClaudeAdapter(api_key="test")
+        system: list[SystemBlock] = [
+            {
+                "type": "text",
+                "text": "sys",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ]
+        req, _ = adapter._build_request(
+            "m", MESSAGES, system, None, {"_compaction": {}}, False
+        )
+        self.assertEqual(
+            request_body(req)["system"][0]["cache_control"],
+            {"type": "ephemeral", "ttl": "1h"},
+        )
+
+    def test_compaction_threshold_below_minimum_raises(self):
+        adapter = ClaudeAdapter(api_key="test")
+        with self.assertRaises(ValueError):
+            adapter._build_request(
+                "m", MESSAGES, None, None, {"_compaction": {"threshold": 1000}}, False
+            )
+
+    def test_raw_context_management_edits_merged(self):
+        adapter = ClaudeAdapter(api_key="test")
+        config = {
+            "_compaction": {"threshold": 60000},
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+        }
+        req, _ = adapter._build_request("m", MESSAGES, None, None, config, False)
+        edits = request_body(req)["context_management"]["edits"]
+        self.assertEqual(edits[0]["type"], "compact_20260112")
+        self.assertEqual(edits[1]["type"], "clear_tool_uses_20250919")
+
+    def test_list_shaped_context_management_warns_before_dropping(self):
+        adapter = ClaudeAdapter(api_key="test")
+        config = {
+            "_compaction": {"threshold": 60000},
+            "context_management": [{"type": "clear_tool_uses_20250919"}],
+        }
+        with self.assertLogs(claude_module.logger, "WARNING") as logs:
+            req, _ = adapter._build_request("m", MESSAGES, None, None, config, False)
+        edits = request_body(req)["context_management"]["edits"]
+        self.assertEqual([edit["type"] for edit in edits], ["compact_20260112"])
+        self.assertTrue(
+            any("not a mapping with an 'edits' list" in line for line in logs.output)
+        )
+
+    def test_beta_merged_with_bytes_header_value(self):
+        adapter = ClaudeAdapter(api_key="test")
+        config = {
+            "_compaction": {},
+            "headers": {"anthropic-beta": b"context-management-2025-06-27"},
+        }
+        req, _ = adapter._build_request("m", MESSAGES, None, None, config, False)
+        self.assertEqual(
+            req.get_header("Anthropic-beta"),
+            "context-management-2025-06-27, compact-2026-01-12",
+        )
+
+    def test_pause_stop_reason_round_trips(self):
+        adapter = ClaudeAdapter(api_key="test")
+        data = {
+            "content": [{"type": "compaction", "content": "sum", "signature": "s"}],
+            "stop_reason": "compaction",
+            "usage": {},
+        }
+        response = adapter._deserialize(data, 0.0)
+        self.assertEqual(response["stop_reason"], "compaction")
+        self.assertEqual(
+            response["content"],
+            [{"type": "compaction", "content": "sum", "signature": "s"}],
+        )
+
+    def test_compaction_block_serialized_verbatim(self):
+        adapter = ClaudeAdapter(api_key="test")
+        messages: list[Message] = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "compaction",
+                        "content": "sum",
+                        "encrypted_content": "e",
+                        "signature": "s",
+                    }
+                ],
+            }
+        ]
+        self.assertEqual(
+            adapter._serialize(messages)[0]["content"][0],
+            {
+                "type": "compaction",
+                "content": "sum",
+                "encrypted_content": "e",
+                "signature": "s",
+            },
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_compact_posts_summarize_with_beta(self, mock_urlopen):
+        adapter = ClaudeAdapter(api_key="test")
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(
+                {
+                    "content": [
+                        {"type": "compaction", "content": "sum", "signature": "s"}
+                    ],
+                    "usage": {"input_tokens": 5},
+                }
+            ).encode()
+        )
+        result = adapter.compact("m", MESSAGES, instructions="sum")
+        req = mock_urlopen.call_args.args[0]
+        self.assertEqual(
+            request_body(req)["compaction"],
+            {"type": "summarize", "instructions": "sum"},
+        )
+        self.assertEqual(req.get_header("Anthropic-beta"), "compact-2026-09-04")
+        self.assertEqual(result["block"]["content"], "sum")
+        self.assertEqual(result["usage"], {"input_tokens": 5, "output_tokens": 0})
+
+    @patch("urllib.request.urlopen")
+    def test_compact_warns_when_dropping_raw_keys(self, mock_urlopen):
+        adapter = ClaudeAdapter(api_key="test")
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(
+                {"content": [{"type": "compaction", "content": "sum"}], "usage": {}}
+            ).encode()
+        )
+        with self.assertLogs(claude_module.logger, "WARNING") as logs:
+            adapter.compact(
+                "m",
+                MESSAGES,
+                config={
+                    "compaction": {"type": "summarize"},
+                    "context_management": {"edits": []},
+                },
+            )
+        body = request_body(mock_urlopen.call_args.args[0])
+        self.assertEqual(body["compaction"], {"type": "summarize"})
+        self.assertNotIn("context_management", body)
+        self.assertTrue(
+            any("compact() overrides raw compaction" in line for line in logs.output)
+        )
+        self.assertTrue(
+            any(
+                "compact() overrides raw context_management" in line
+                for line in logs.output
+            )
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_stream_compaction_events(self, mock_urlopen):
+        adapter = ClaudeAdapter(api_key="test")
+        events = [
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "compaction"},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "compaction_delta", "delta": "sum"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "compaction"}},
+            {"type": "message_stop"},
+        ]
+        mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events))
+        out = list(adapter.stream_chat("m", MESSAGES))
+        self.assertEqual(
+            [e["type"] for e in out],
+            ["compaction_delta", "block_stop", "message_stop"],
+        )
+        final = final_response(out)
+        self.assertEqual(final["stop_reason"], "compaction")
+        self.assertEqual(cast(dict[str, Any], final["content"][0])["content"], "sum")
+
+    def test_supports_compaction(self):
+        self.assertTrue(ClaudeAdapter(api_key="test").supports_compaction())
+
     def test_invalidate_model_capabilities_drops_only_that_model(self):
         """The per-model hook drops the model from every projection."""
         self.adapter._models_cache = {

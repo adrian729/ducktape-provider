@@ -8,11 +8,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Iterator
-from typing import Any
+from collections.abc import Callable, Iterator, Mapping
+from typing import Any, cast
 
 from .. import errors
 from ..adapter import (
+    _COMPACTION_KEY,
     Adapter,
     _key_url_allowed,
     _merge_config,
@@ -38,6 +39,8 @@ from ..streaming import (
 from ..types import (
     Block,
     Capabilities,
+    CompactionBlock,
+    CompactionResult,
     DocumentBlock,
     ImageBlock,
     Message,
@@ -396,6 +399,94 @@ class ClaudeAdapter(Adapter):
             serialized.append(entry)
         return serialized
 
+    @staticmethod
+    def _normalize_usage(usage: dict[str, Any] | None) -> Usage:
+        usage = usage or {}
+        cache_read = usage.get("cache_read_input_tokens")
+        cache_write = usage.get("cache_creation_input_tokens")
+        normalized: Usage = {
+            "input_tokens": (usage.get("input_tokens") or 0)
+            + (cache_read or 0)
+            + (cache_write or 0),
+            "output_tokens": usage.get("output_tokens") or 0,
+        }
+        if cache_read is not None:
+            normalized["cache_read_tokens"] = cache_read
+        if cache_write is not None:
+            normalized["cache_write_tokens"] = cache_write
+        return normalized
+
+    @staticmethod
+    def _merge_beta(headers: dict[str, Any], beta: str) -> dict[str, Any]:
+        """Adds a beta to `anthropic-beta`, comma-merged with any existing value."""
+        merged = dict(headers)
+        for key in list(merged):
+            if isinstance(key, str) and key.lower() == "anthropic-beta":
+                value = merged.pop(key)
+                if isinstance(value, bytes):
+                    value = value.decode("latin-1")
+                merged["anthropic-beta"] = f"{value}, {beta}" if value else beta
+                return merged
+        merged["anthropic-beta"] = beta
+        return merged
+
+    def _apply_compaction(
+        self, payload: dict[str, Any], compaction: dict[str, Any], raw: object
+    ) -> None:
+        """Translates normalized compaction into Claude's context_management edits."""
+        threshold = compaction.get("threshold")
+        if threshold is not None and threshold < 50000:
+            raise ValueError(
+                "claude compaction threshold must be at least 50000 input tokens"
+            )
+        edit: dict[str, Any] = {
+            "type": "compact_20260112",
+            "trigger": {"type": "input_tokens"},
+        }
+        if "pause" in compaction:
+            edit["pause_after_compaction"] = bool(compaction["pause"])
+        if threshold is not None:
+            edit["trigger"]["value"] = threshold
+        if compaction.get("instructions") is not None:
+            edit["instructions"] = compaction["instructions"]
+        edits = [edit]
+        raw_edits = raw.get("edits") if isinstance(raw, Mapping) else None
+        if raw is not None and not isinstance(raw_edits, list):
+            logger.warning(
+                "claude normalized compaction drops raw context_management, "
+                "which is not a mapping with an 'edits' list"
+            )
+        if isinstance(raw_edits, list):
+            if any(
+                isinstance(entry, Mapping) and entry.get("type") == "compact_20260112"
+                for entry in raw_edits
+            ):
+                logger.warning(
+                    "claude normalized compaction overrides a raw compact edit"
+                )
+            edits += [
+                entry
+                for entry in raw_edits
+                if isinstance(entry, Mapping)
+                and entry.get("type") != "compact_20260112"
+            ]
+        payload["context_management"] = {"edits": edits}
+
+    def _cache_tail(
+        self, system: str | list[SystemBlock] | None
+    ) -> str | list[SystemBlock] | None:
+        """Adds a system cache breakpoint when compaction is on and none is set."""
+        if system is None:
+            return None
+        blocks: list[SystemBlock] = (
+            [{"type": "text", "text": system}]
+            if isinstance(system, str)
+            else [cast(SystemBlock, self._copy_block(block)) for block in system]
+        )
+        if blocks and not any(block.get("cache_control") for block in blocks):
+            blocks[-1]["cache_control"] = {"type": "ephemeral"}
+        return blocks
+
     def _deserialize(
         self, data: dict[str, Any], latency_ms: float, ttft_ms: float | None = None
     ) -> Response:
@@ -414,22 +505,12 @@ class ClaudeAdapter(Adapter):
             stop_reason = "end_turn"
         elif raw_reason == "pause_turn":
             stop_reason = "pause_turn"
+        elif raw_reason == "compaction":
+            stop_reason = "compaction"
         else:
             stop_reason = "other"
 
-        usage = data.get("usage") or {}
-        cache_read = usage.get("cache_read_input_tokens")
-        cache_write = usage.get("cache_creation_input_tokens")
-        normalized_usage: Usage = {
-            "input_tokens": (usage.get("input_tokens") or 0)
-            + (cache_read or 0)
-            + (cache_write or 0),
-            "output_tokens": usage.get("output_tokens") or 0,
-        }
-        if cache_read is not None:
-            normalized_usage["cache_read_tokens"] = cache_read
-        if cache_write is not None:
-            normalized_usage["cache_write_tokens"] = cache_write
+        normalized_usage = self._normalize_usage(data.get("usage"))
         response: Response = {
             "content": blocks,
             "stop_reason": stop_reason,
@@ -451,12 +532,19 @@ class ClaudeAdapter(Adapter):
         config: dict[str, Any] | None,
         stream: bool,
     ) -> tuple[urllib.request.Request, float | None]:
+        config = dict(config or {})
+        compaction = config.pop(_COMPACTION_KEY, None)
         payload: dict[str, Any] = {
             "model": model,
             "messages": self._serialize(messages),
             "max_tokens": self._MAX_TOKENS,
             "stream": stream,
         }
+        if compaction is not None:
+            self._apply_compaction(
+                payload, compaction, config.pop("context_management", None)
+            )
+            system = self._cache_tail(system)
         if system:
             payload["system"] = (
                 system
@@ -468,6 +556,8 @@ class ClaudeAdapter(Adapter):
         timeout, extra_headers = _merge_config(
             "claude", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
         )
+        if compaction is not None:
+            extra_headers = self._merge_beta(extra_headers, "compact-2026-01-12")
         _validate_headers("claude", extra_headers)
         url = self._MESSAGES_URL
         resolved = _resolve_headers(
@@ -531,6 +621,86 @@ class ClaudeAdapter(Adapter):
 
         return _ErrorHookedStream("claude", start, self._invalidate_models_cache_on_404)
 
+    def supports_compaction(self) -> bool:
+        return True
+
+    def compact(
+        self,
+        model: str,
+        messages: list[Message],
+        system: str | list[SystemBlock] | None = None,
+        instructions: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> CompactionResult:
+        if instructions is not None and len(instructions) > 16384:
+            raise ValueError(
+                "claude compact() instructions must be at most 16384 characters"
+            )
+        config = dict(config or {})
+        if config.pop("compaction", None) is not None:
+            logger.warning("claude compact() overrides raw compaction")
+        if config.pop("context_management", None) is not None:
+            logger.warning("claude compact() overrides raw context_management")
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": self._serialize(messages),
+            "max_tokens": self._MAX_TOKENS,
+            "compaction": {"type": "summarize"},
+        }
+        if system:
+            payload["system"] = (
+                system
+                if isinstance(system, str)
+                else [self._copy_block(block) for block in system]
+            )
+        if instructions is not None:
+            payload["compaction"]["instructions"] = instructions
+        timeout, extra_headers = _merge_config(
+            "claude", payload, config, self._RESERVED_CONFIG, self._CHAT_TIMEOUT
+        )
+        extra_headers = self._merge_beta(extra_headers, "compact-2026-09-04")
+        _validate_headers("claude", extra_headers)
+        url = self._MESSAGES_URL
+        resolved = _resolve_headers(
+            "claude", url, self._provider_headers, extra_headers
+        )
+        req = _new_request(
+            url,
+            json.dumps(payload).encode(),
+            {"anthropic-version": "2023-06-01", "content-type": "application/json"},
+            extra_headers,
+            resolved,
+            auth=(
+                "x-api-key",
+                "",
+                lambda: _request_key(
+                    "claude", url, self._key_source, "ANTHROPIC_API_KEY"
+                ),
+            ),
+        )
+        data, _ = _request_json("claude", req, timeout, operation="compact")
+        with _shape_checked("claude", operation="compact"):
+            block = next(
+                (
+                    entry
+                    for entry in data["content"]
+                    if entry.get("type") == "compaction"
+                ),
+                None,
+            )
+            if block is None:
+                errors.raise_for_malformed_response(
+                    "claude",
+                    ValueError("no compaction block in response"),
+                    operation="compact",
+                )
+            usage = data.get("usage")
+        return {
+            "block": cast(CompactionBlock, block),
+            "usage": self._normalize_usage(usage) if usage is not None else None,
+            "raw": data,
+        }
+
     def _stream_handler(
         self, timer: _StreamTimer
     ) -> Callable[[dict[str, Any]], Iterator[StreamEvent]]:
@@ -538,6 +708,7 @@ class ClaudeAdapter(Adapter):
         text_parts: dict[int, list[str]] = {}
         thinking_parts: dict[int, list[str]] = {}
         signature_parts: dict[int, list[str]] = {}
+        compaction_parts: dict[int, list[str]] = {}
         json_buffers: dict[int, list[str]] = {}
         surfaced: set[int] = set()
         stream_usage: dict[str, Any] = {}
@@ -551,6 +722,8 @@ class ClaudeAdapter(Adapter):
                 block["thinking"] = "".join(thinking_parts.pop(index))
             if index in signature_parts:
                 block["signature"] = "".join(signature_parts.pop(index))
+            if index in compaction_parts:
+                block["content"] = "".join(compaction_parts.pop(index))
             if json_buffers.get(index):
                 args, truncated = _loads_tool_input("".join(json_buffers.pop(index)))
                 block["input"] = args
@@ -575,6 +748,8 @@ class ClaudeAdapter(Adapter):
                         "id": block["id"],
                         "name": block["name"],
                     }
+                elif block["type"] == "compaction":
+                    surfaced.add(index)
             elif etype == "content_block_delta":
                 index = event["index"]
                 block = blocks[index]
@@ -594,6 +769,11 @@ class ClaudeAdapter(Adapter):
                     }
                 elif dtype == "signature_delta":
                     signature_parts.setdefault(index, []).append(delta["signature"])
+                elif dtype == "compaction_delta":
+                    piece = delta.get("delta") or delta.get("text") or ""
+                    compaction_parts.setdefault(index, []).append(piece)
+                    surfaced.add(index)
+                    yield {"type": "compaction_delta", "index": index, "delta": piece}
                 elif dtype == "input_json_delta":
                     json_buffers.setdefault(index, []).append(delta["partial_json"])
                     if block.get("type") == "tool_use":

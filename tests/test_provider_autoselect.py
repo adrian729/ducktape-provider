@@ -9,7 +9,7 @@ from collections.abc import Callable, Generator, Iterator
 from typing import Any, Self, cast
 from unittest.mock import patch
 
-from ducktape_provider import ClaudeAdapter, OpenAIAdapter
+from ducktape_provider import ClaudeAdapter, OllamaLocalAdapter, OpenAIAdapter
 from ducktape_provider import errors as errors_module
 from ducktape_provider.adapter import Adapter
 from ducktape_provider.errors import (
@@ -20,11 +20,13 @@ from ducktape_provider.errors import (
     RateLimitError,
     RequestTimeoutError,
     ServerError,
+    UnsupportedBlockError,
     UnsupportedOperationError,
 )
 from ducktape_provider.provider import Provider, _EvictingStream
 from ducktape_provider.types import (
     Capabilities,
+    CompactionResult,
     EmbedResponse,
     Message,
     ModelInfo,
@@ -1942,6 +1944,189 @@ class TestCapabilitiesIntegration(unittest.TestCase):
         self.assertTrue(provider.supports("has-caps", "tools", provider="fake"))
         self.assertIsNone(provider.capabilities("no-caps", provider="fake"))
         self.assertIsNone(provider.supports("no-caps", "tools", provider="fake"))
+
+
+class TestCompaction(unittest.TestCase):
+    """Normalized compaction: refusals, layering, injection, validation."""
+
+    def _supporting(self, seen: list[Any]) -> CountingFakeAdapter:
+        class Supporting(CountingFakeAdapter):
+            def supports_compaction(self) -> bool:
+                return True
+
+            def chat(
+                self,
+                model: str,
+                messages: list[Message],
+                system: str | list[SystemBlock] | None = None,
+                tools: list[ToolDef] | None = None,
+                config: dict[str, Any] | None = None,
+            ) -> Response:
+                seen.append(config)
+                return FIXED_RESPONSE
+
+        return Supporting()
+
+    def test_unsupported_chat_raises_named_without_request(self):
+        adapter = CountingFakeAdapter(chat=lambda: raise_(AssertionError("called")))
+        provider = Provider(adapters={"fake": adapter})
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises(UnsupportedOperationError) as ctx:
+                provider.chat("m", MESSAGES, provider="fake", compaction=True)
+            self.assertEqual(
+                str(ctx.exception), "provider 'fake' does not support compaction"
+            )
+            mock.assert_not_called()
+
+    def test_unsupported_compact_raises_named_without_request(self):
+        provider = Provider(adapters={"fake": CountingFakeAdapter()})
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises(UnsupportedOperationError) as ctx:
+                provider.compact("m", MESSAGES, provider="fake")
+            self.assertEqual(
+                str(ctx.exception), "provider 'fake' does not support compact()"
+            )
+            mock.assert_not_called()
+
+    def test_compact_gated_on_supports_compaction(self):
+        class Halfway(CountingFakeAdapter):
+            def compact(
+                self,
+                model: str,
+                messages: list[Message],
+                system: str | list[SystemBlock] | None = None,
+                instructions: str | None = None,
+                config: dict[str, Any] | None = None,
+            ) -> CompactionResult:
+                raise AssertionError("compact() called")
+
+        provider = Provider(adapters={"fake": Halfway()})
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises(UnsupportedOperationError) as ctx:
+                provider.compact("m", MESSAGES, provider="fake")
+            self.assertEqual(
+                str(ctx.exception), "provider 'fake' does not support compact()"
+            )
+            mock.assert_not_called()
+
+    def test_layering_and_injection(self):
+        seen: list[Any] = []
+        adapter = self._supporting(seen)
+        provider = Provider(
+            adapters={"fake": adapter}, config={"compaction": {"threshold": 100}}
+        )
+        provider.chat("m", MESSAGES, provider="fake")
+        self.assertEqual(seen[-1]["_compaction"], {"threshold": 100})
+        provider.chat("m", MESSAGES, provider="fake", compaction={"threshold": 200})
+        self.assertEqual(seen[-1]["_compaction"], {"threshold": 200})
+        provider.chat("m", MESSAGES, provider="fake", compaction=False)
+        self.assertNotIn("_compaction", seen[-1])
+        provider.chat("m", MESSAGES, provider="fake", compaction=True)
+        self.assertEqual(seen[-1]["_compaction"], {})
+        provider.chat("m", MESSAGES, provider="fake", compaction={})
+        self.assertEqual(seen[-1]["_compaction"], {})
+        provider.chat("m", MESSAGES, provider="fake", compaction=None)
+        self.assertEqual(seen[-1]["_compaction"], {"threshold": 100})
+        per = Provider(
+            adapters={"fake": adapter},
+            config={"providers": {"fake": {"compaction": {"threshold": 150}}}},
+        )
+        per.chat("m", MESSAGES, provider="fake")
+        self.assertEqual(seen[-1]["_compaction"], {"threshold": 150})
+        per.chat("m", MESSAGES, provider="fake", compaction={"threshold": 250})
+        self.assertEqual(seen[-1]["_compaction"], {"threshold": 250})
+
+    def test_bad_provider_level_compaction_rejected_at_construction(self):
+        with self.assertRaises((TypeError, ValueError)):
+            Provider(config={"compaction": {"threshold": -1}})
+        with self.assertRaises((TypeError, ValueError)):
+            Provider(config={"providers": {"claude": {"compaction": {"pause": "y"}}}})
+
+    def test_top_level_context_management_rejected(self):
+        with self.assertRaises(ValueError):
+            Provider(config={"context_management": {"edits": []}})
+
+    def test_bad_compaction_validated_before_resolution_io(self):
+        seen: list[Any] = []
+        provider = Provider(adapters={"fake": self._supporting(seen)})
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises((TypeError, ValueError)):
+                provider.chat("unknown-model", MESSAGES, compaction={"threshold": -1})
+            mock.assert_not_called()
+        self.assertEqual(seen, [])
+
+    def test_bad_compaction_shape_raises_before_io(self):
+        seen: list[Any] = []
+        provider = Provider(adapters={"fake": self._supporting(seen)})
+        bad_cases: list[Any] = [
+            {"threshold": -1},
+            {"threshold": "x"},
+            {"threshold": True},
+            {"pause": "y"},
+            {"instructions": 5},
+            {"nope": 1},
+            5,
+        ]
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen):
+            for bad in bad_cases:
+                with self.subTest(bad=bad), self.assertRaises((TypeError, ValueError)):
+                    provider.chat("m", MESSAGES, provider="fake", compaction=bad)
+        self.assertEqual(seen, [])
+
+
+class TestCompactionOllamaRefusals(unittest.TestCase):
+    """Ollama has no compaction; every entry raises before any request."""
+
+    def setUp(self):
+        self.provider = Provider(adapters={"ollama-local": OllamaLocalAdapter()})
+
+    def test_chat_refused(self):
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises(UnsupportedOperationError) as ctx:
+                self.provider.chat(
+                    "m", MESSAGES, provider="ollama-local", compaction=True
+                )
+            self.assertEqual(
+                str(ctx.exception),
+                "provider 'ollama-local' does not support compaction",
+            )
+            mock.assert_not_called()
+
+    def test_stream_chat_refused(self):
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises(UnsupportedOperationError):
+                self.provider.stream_chat(
+                    "m", MESSAGES, provider="ollama-local", compaction=True
+                )
+            mock.assert_not_called()
+
+    def test_compact_refused(self):
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises(UnsupportedOperationError) as ctx:
+                self.provider.compact("m", MESSAGES, provider="ollama-local")
+            self.assertEqual(
+                str(ctx.exception),
+                "provider 'ollama-local' does not support compact()",
+            )
+            mock.assert_not_called()
+
+    def test_compaction_block_in_history_refused(self):
+        messages: list[Message] = [
+            {"role": "user", "content": [{"type": "compaction", "content": "sum"}]}
+        ]
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises(UnsupportedBlockError):
+                self.provider.chat("m", messages, provider="ollama-local")
+            mock.assert_not_called()
+
+    def test_compaction_block_in_stream_history_refused(self):
+        messages: list[Message] = [
+            {"role": "user", "content": [{"type": "compaction", "content": "sum"}]}
+        ]
+        with patch("urllib.request.urlopen", side_effect=_fail_urlopen) as mock:
+            with self.assertRaises(UnsupportedBlockError):
+                list(self.provider.stream_chat("m", messages, provider="ollama-local"))
+            mock.assert_not_called()
 
 
 class TestCapabilityEviction(unittest.TestCase):

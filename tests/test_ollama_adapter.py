@@ -1689,5 +1689,17 @@ class TestOllamaCapabilities(unittest.TestCase):
         self.assertIn("b", self.adapter._show_cache)
 
 
+class TestOllamaCompaction(unittest.TestCase):
+    def test_supports_compaction_is_false(self):
+        self.assertFalse(OllamaLocalAdapter().supports_compaction())
+
+    def test_compaction_block_raises_unsupported(self):
+        messages: list[Message] = [
+            {"role": "user", "content": [{"type": "compaction", "content": "sum"}]}
+        ]
+        with self.assertRaises(UnsupportedBlockError):
+            OllamaLocalAdapter()._serialize(messages, None)
+
+
 if __name__ == "__main__":
     unittest.main()

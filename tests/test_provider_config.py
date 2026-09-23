@@ -26,6 +26,7 @@ from http_test_utils import (
     Reply,
     buffered_response,
     ollama_embed_response,
+    request_body,
 )
 from test_provider_api_keys import (
     KEYED,
@@ -55,6 +56,7 @@ from ducktape_provider import (
     OpenAIAdapter,
     Provider,
 )
+from ducktape_provider.adapter import _COMPACTION_KEY, _merge_config
 from ducktape_provider.adapters.ollama import OllamaLocalAdapter
 from ducktape_provider.streaming import _clear_tracebacks
 from ducktape_provider.types import (
@@ -314,6 +316,34 @@ def any_urlopen(req: Any, timeout: float | None = None) -> Any:
     """A urlopen stand-in answering whichever target `req` is for."""
     [target] = [t for t in TARGETS if t.host in req.full_url]
     return target.urlopen(req, timeout)
+
+
+class TestCompactionKeyStripping(unittest.TestCase):
+    def test_call_compaction_never_reaches_the_request_body(self):
+        self.assertEqual(resolve({"compaction": {"threshold": 60000}}), {})
+        self.assertEqual(resolve({"providers": {"rec": {"compaction": True}}}), {})
+        self.assertEqual(
+            resolve({"temperature": 0.2, "compaction": True}), {"temperature": 0.2}
+        )
+
+    def test_merge_config_drops_the_compaction_sentinel(self):
+        payload: dict[str, Any] = {"model": "m"}
+        timeout, headers = _merge_config(
+            "vendor",
+            payload,
+            {_COMPACTION_KEY: {"threshold": 60000}, "temperature": 0.2},
+            frozenset({"model"}),
+            10,
+        )
+        self.assertEqual(payload, {"model": "m", "temperature": 0.2})
+        self.assertEqual((timeout, headers), (10, {}))
+
+    def test_adapter_body_never_carries_the_sentinel(self):
+        adapter = OllamaLocalAdapter()
+        req, _ = adapter._build_request(
+            "m", MESSAGES, None, None, {_COMPACTION_KEY: {"threshold": 60000}}, False
+        )
+        self.assertNotIn(_COMPACTION_KEY, request_body(req))
 
 
 class TestProviderConfigResolution(unittest.TestCase):

@@ -87,6 +87,7 @@ response = provider.chat(
 - `system`: optional system prompt.
 - `tools`: optional `list[ToolDef]` the model may call.
 - `config`: optional per-call settings and vendor request fields, see [Configuration](#configuration).
+- `compaction`: optional server-side compaction of a long conversation, see [Compaction](#compaction).
 - `provider`: optional, keyword-only adapter name, e.g. `"claude"`, `"openai"`, `"ollama-local"`. If omitted, the first available provider that serves `model` is used and a warning is logged; the match is cached per `Provider` and dropped if a call through it fails with a 404, `AuthError`, or if the provider can't be reached.
 
 ### Other methods
@@ -98,12 +99,14 @@ response = provider.chat(
 | `model_info(model, *, provider=None)` | Context window / max output for a model, when known | `ModelInfo \| None` |
 | `capabilities(model, *, provider=None)` | What the provider's metadata says a model can do | `Capabilities \| None` |
 | `supports(model, capability, *, provider=None)` | One capability as `True`/`False`/`None` | `bool \| None` |
+| `compact(model, messages, system, instructions, config, provider)` | Summarize a conversation into one block | `CompactionResult` |
 | `embed(model, input, config, provider)` | Embed one text or a batch of texts | `EmbedResponse` |
 | `async_providers()` | `await`able `providers` | `dict[str, bool]` |
 | `async_models(*, embeddings=False)` | `await`able `models` | `dict[str, list[str]]` |
 | `async_model_info(model, *, provider=None)` | `await`able `model_info` | `ModelInfo \| None` |
 | `async_capabilities(model, *, provider=None)` | `await`able `capabilities` | `Capabilities \| None` |
 | `async_supports(model, capability, *, provider=None)` | `await`able `supports` | `bool \| None` |
+| `async_compact(model, messages, system, instructions, config, provider)` | `await`able `compact` | `CompactionResult` |
 | `async_embed(model, input, config, provider)` | `await`able `embed` | `EmbedResponse` |
 
 `model_info` is best-effort: `None` means the provider doesn't expose it for that model, not that the model doesn't exist. Claude and self-hosted Ollama read it live from the vendor; OpenAI's API doesn't expose it, so it's always `None` there. It answers for chat models only. `ModelInfo`'s fields are in [`types.py`](src/ducktape_provider/types.py).
@@ -141,7 +144,9 @@ Set a vendor cache breakpoint with `cache_control` on a `text`/`image`/`document
 provider.chat(
     "claude-opus-5",
     messages,
-    system=[{"type": "text", "text": long_system, "cache_control": {"type": "ephemeral"}}],
+    system=[
+        {"type": "text", "text": long_system, "cache_control": {"type": "ephemeral"}}
+    ],
     tools=[{**tool, "cache_control": {"type": "ephemeral"}}],
     provider="claude",
 )
@@ -150,6 +155,42 @@ provider.chat(
 - `CacheControl` is `{"type": "ephemeral"}`, with an optional `ttl` of `"5m"` (default) or `"1h"`. It's in [`types.py`](src/ducktape_provider/types.py).
 - Claude honors breakpoints on text/image/document/tool_result blocks, tool definitions, and system blocks. OpenAI caches automatically (the flag is ignored) and Ollama has no prompt caching; a system block list is flattened to text there.
 - Cache hit and write tokens are reported in `Response.usage` as `cache_read_tokens` and `cache_write_tokens`.
+
+## Compaction
+
+Let the vendor summarize a long conversation server-side so it keeps fitting.
+
+Auto, during a chat call, with the keyword-only `compaction` argument:
+
+```python
+provider.chat("claude-opus-5", messages, compaction=True)  # vendor defaults
+provider.chat("claude-opus-5", messages, compaction={"threshold": 60000, "pause": True})
+```
+
+- `compaction=None` uses the `Provider(config=...)` default; `False` disables it; `True` uses vendor defaults; a dict sets `threshold` (input tokens), `instructions` (custom summary prompt) and `pause` (Claude only).
+- `Provider(config={"compaction": ...})` sets the default for every call, `config["providers"][name]["compaction"]` overrides it per provider, and the call argument wins.
+- On-demand, one conversation into one opaque block:
+
+```python
+result = provider.compact(
+    "claude-opus-5", messages, instructions="Summarize the thread"
+)
+block = result["block"]
+next_turn = provider.chat(
+    "claude-opus-5", [*messages, {"role": "assistant", "content": [block]}]
+)
+```
+
+- `CompactionResult` has `block` (a `CompactionBlock` to round-trip verbatim), `usage` and `raw`. `compact()` is single-shot; there is no stream variant.
+- A `CompactionBlock` in `messages` is sent verbatim. After a compacted turn, append the whole `response["content"]`, or replay `messages + [block]`.
+- Claude and OpenAI support it; a provider without it raises `UnsupportedOperationError`. `pause` and auto-mode `instructions` are Claude-only and raise `ValueError` on OpenAI.
+- Raw vendor knobs (`context_management`, `clear_tool_uses`, `clear_thinking`, …) stay reachable through per-call `config`/`providers.*`; Claude and OpenAI both merge non-compact raw entries alongside normalized compaction, with a warning if the raw list already has one.
+
+| Provider | Auto | On-demand | Pause | Readable summary |
+|---|---|---|---|---|
+| `claude` | yes | yes | yes | yes |
+| `openai` | yes | yes | no | no |
+| `ollama-local` | no | no | — | — |
 
 ## Embedding
 
@@ -182,7 +223,7 @@ Discover embedding models:
 
 ```python
 provider.models(embeddings=True)  # embedding ids per provider
-provider.models()                 # chat ids per provider
+provider.models()  # chat ids per provider
 ```
 
 The two listings never mix, and `embeddings` is keyword-only (`models(embeddings=True)`, not `models(True)`). A provider whose listing API doesn't separate model kinds (self-hosted Ollama's does not) can also show embedding models in the chat listing, so an id from `models()` is not a guarantee the chat methods accept it.
@@ -270,7 +311,7 @@ Import them from `ducktape_provider`. Streams raise the same errors as `chat`.
 | `MalformedResponseError` | Vendor reply couldn't be parsed | No |
 | `APIError` | Any other request failure, e.g. dropped connection | Depends on `status` |
 | `UnsupportedBlockError` | Content the vendor doesn't support, e.g. URL image for Ollama | No |
-| `UnsupportedOperationError` | The resolved provider doesn't support the operation, e.g. `embed()` on a provider with no embeddings endpoint | No |
+| `UnsupportedOperationError` | The resolved provider doesn't support the operation, e.g. `embed()` or `compaction` on a provider without it | No |
 
 - `APIError` is the base of the six above it; it has `status` (HTTP status or `None`) and `body`.
 - `RateLimitError` and `ServerError` have `retry_after` (seconds or `None`).
@@ -289,6 +330,8 @@ Subclass `Adapter` and implement its four required methods:
 | `stream_chat(model, messages, system, tools, config)` | `Iterator[StreamEvent]`, ending with `message_stop` |
 | `embed(model, input, config)` (optional) | `EmbedResponse`: dense vectors; the default raises `UnsupportedOperationError` |
 | `embed_models()` (optional) | `set[str]`: model ids it can embed with; empty by default |
+| `compact(model, messages, system, instructions, config)` (optional) | `CompactionResult`; the default raises `UnsupportedOperationError` |
+| `supports_compaction()` (optional) | `bool`: whether `compact()`/`compaction` work; `False` by default |
 
 `config` arrives already merged (per-provider overrides applied); apply its `timeout` and `headers` to your HTTP request and send the rest to your vendor. Raise the errors from [Errors](#errors) so callers can handle every provider the same way.
 
@@ -315,7 +358,7 @@ Users load plugins with `Provider(autodiscover=True)`, or only some with `Provid
 
 ## Async
 
-`async_chat`, `async_stream_chat`, `async_embed`, `async_providers`, `async_models`, `async_model_info`, `async_capabilities` and `async_supports` work like their sync versions without blocking the event loop.
+`async_chat`, `async_stream_chat`, `async_compact`, `async_embed`, `async_providers`, `async_models`, `async_model_info`, `async_capabilities` and `async_supports` work like their sync versions without blocking the event loop.
 
 ```python
 response = await provider.async_chat("claude-opus-5", messages)
@@ -329,7 +372,7 @@ async with contextlib.aclosing(
 
 - Use `contextlib.aclosing` to close a stream right away if you stop reading early.
 - Cancelling an `async_stream_chat` call stops its HTTP request immediately, for the built-in adapters. A `chat`/`async_chat` call, or a stream from a third-party adapter that doesn't support this, still runs until done or `timeout`.
-- `Provider(executor=...)` sets the thread pool for `async_chat`, `async_embed`, `async_providers`, `async_models`, `async_model_info`, `async_capabilities` and `async_supports`; it must be thread-based.
+- `Provider(executor=...)` sets the thread pool for `async_chat`, `async_compact`, `async_embed`, `async_providers`, `async_models`, `async_model_info`, `async_capabilities` and `async_supports`; it must be thread-based.
 
 ## Development
 

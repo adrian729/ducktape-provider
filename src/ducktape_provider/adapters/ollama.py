@@ -321,6 +321,11 @@ class OllamaLocalAdapter(Adapter):
                         "ollama-local adapter does not support document blocks — "
                         "dropping one from the request"
                     )
+                elif b["type"] == "compaction":
+                    raise errors.UnsupportedBlockError(
+                        "ollama-local does not support compaction blocks — "
+                        "use the block's content as text instead"
+                    )
             content_blocks = [b for b in message["content"] if b["type"] != "document"]
             results = [b for b in content_blocks if b["type"] == "tool_result"]
             for block in results:
@@ -428,6 +433,7 @@ class OllamaLocalAdapter(Adapter):
         config: dict[str, Any] | None,
         stream: bool,
     ) -> tuple[urllib.request.Request, float | None]:
+        config = dict(config or {})
         payload: dict[str, Any] = {
             "model": model,
             "messages": self._serialize(messages, system),

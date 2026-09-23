@@ -1866,5 +1866,237 @@ class TestOpenAIEmbedModels(unittest.TestCase):
         self.assertEqual(copied2._cache_time, 0.0)
 
 
+class TestOpenAICompaction(unittest.TestCase):
+    def setUp(self):
+        self.adapter = OpenAIAdapter(api_key="test")
+
+    def test_auto_compaction_payload(self):
+        req, _ = self.adapter._build_request(
+            "m", MESSAGES, None, None, {"_compaction": {"threshold": 50000}}, False
+        )
+        self.assertEqual(
+            request_body(req)["context_management"],
+            [{"type": "compaction", "compact_threshold": 50000}],
+        )
+
+    def test_auto_compaction_omits_unset_threshold(self):
+        req, _ = self.adapter._build_request(
+            "m", MESSAGES, None, None, {"_compaction": {}}, False
+        )
+        self.assertEqual(
+            request_body(req)["context_management"], [{"type": "compaction"}]
+        )
+
+    def test_pause_raises_before_request(self):
+        with patch(
+            "urllib.request.urlopen", side_effect=AssertionError("request sent")
+        ) as mock:
+            with self.assertRaises(ValueError):
+                self.adapter._build_request(
+                    "m", MESSAGES, None, None, {"_compaction": {"pause": True}}, False
+                )
+            mock.assert_not_called()
+
+    def test_instructions_in_auto_raises(self):
+        with (
+            patch(
+                "urllib.request.urlopen", side_effect=AssertionError("request sent")
+            ) as mock,
+            self.assertRaises(ValueError),
+        ):
+            self.adapter._build_request(
+                "m",
+                MESSAGES,
+                None,
+                None,
+                {"_compaction": {"instructions": "s"}},
+                False,
+            )
+        mock.assert_not_called()
+
+    def test_compaction_block_serialized(self):
+        messages: list[Message] = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "compaction", "content": None, "encrypted_content": "e"}
+                ],
+            }
+        ]
+        self.assertEqual(
+            self.adapter._serialize(messages),
+            [{"type": "compaction", "encrypted_content": "e"}],
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_compact_wraps_opaque_item(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(
+                {
+                    "object": "response.compaction",
+                    "output": [{"type": "compaction", "encrypted_content": "e"}],
+                    "usage": {"input_tokens": 3, "output_tokens": 1},
+                }
+            ).encode()
+        )
+        result = self.adapter.compact("m", MESSAGES)
+        body = request_body(mock_urlopen.call_args.args[0])
+        self.assertIn("input", body)
+        self.assertEqual(
+            result["block"],
+            {"type": "compaction", "content": None, "encrypted_content": "e"},
+        )
+        self.assertEqual(result["usage"], {"input_tokens": 3, "output_tokens": 1})
+
+    @patch("urllib.request.urlopen")
+    def test_stream_compaction_item(self, mock_urlopen):
+        events = [
+            {
+                "type": "response.output_item.added",
+                "item": {"id": "c1", "type": "compaction", "encrypted_content": "e"},
+            },
+            {
+                "type": "response.output_item.done",
+                "item": {"id": "c1", "type": "compaction"},
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "status": "completed",
+                    "output": [{"type": "compaction", "encrypted_content": "e"}],
+                    "usage": {},
+                },
+            },
+        ]
+        mock_urlopen.return_value = FakeStreamResponse(sse_lines(*events))
+        out = list(self.adapter.stream_chat("m", MESSAGES))
+        self.assertIn("compaction_delta", [e["type"] for e in out])
+        final = final_response(out)
+        self.assertNotEqual(final["stop_reason"], "compaction")
+        self.assertEqual(
+            final["content"],
+            [{"type": "compaction", "content": None, "encrypted_content": "e"}],
+        )
+
+    def test_compaction_item_kept_in_response_content(self):
+        data: dict[str, Any] = {
+            "status": "completed",
+            "output": [
+                {"type": "compaction", "encrypted_content": "e"},
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "hi"}],
+                },
+            ],
+            "usage": {},
+        }
+        response = self.adapter._deserialize(data, 1.0)
+        self.assertEqual(
+            response["content"],
+            [
+                {"type": "compaction", "content": None, "encrypted_content": "e"},
+                {"type": "text", "text": "hi"},
+            ],
+        )
+
+    def test_compaction_item_without_encrypted_content(self):
+        response = self.adapter._deserialize(
+            {"status": "completed", "output": [{"type": "compaction"}], "usage": {}},
+            1.0,
+        )
+        self.assertEqual(response["content"], [{"type": "compaction", "content": None}])
+
+    def test_raw_context_management_entries_merged(self):
+        config = {
+            "_compaction": {"threshold": 50000},
+            "context_management": [{"type": "clear_tool_uses"}],
+        }
+        req, _ = self.adapter._build_request("m", MESSAGES, None, None, config, False)
+        self.assertEqual(
+            request_body(req)["context_management"],
+            [
+                {"type": "compaction", "compact_threshold": 50000},
+                {"type": "clear_tool_uses"},
+            ],
+        )
+
+    def test_raw_compaction_entry_overridden_with_warning(self):
+        config = {
+            "_compaction": {},
+            "context_management": [
+                {"type": "compaction", "compact_threshold": 90000},
+                {"type": "clear_tool_uses"},
+            ],
+        }
+        with self.assertLogs(openai_module.logger, "WARNING") as logs:
+            req, _ = self.adapter._build_request(
+                "m", MESSAGES, None, None, config, False
+            )
+        self.assertEqual(
+            request_body(req)["context_management"],
+            [{"type": "compaction"}, {"type": "clear_tool_uses"}],
+        )
+        self.assertTrue(
+            any("overrides a raw compaction entry" in line for line in logs.output)
+        )
+
+    def test_raw_context_management_of_wrong_shape_warns(self):
+        config = {"_compaction": {}, "context_management": {"edits": []}}
+        with self.assertLogs(openai_module.logger, "WARNING") as logs:
+            req, _ = self.adapter._build_request(
+                "m", MESSAGES, None, None, config, False
+            )
+        self.assertEqual(
+            request_body(req)["context_management"], [{"type": "compaction"}]
+        )
+        self.assertTrue(
+            any("not a list of entries" in line for line in logs.output),
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_compact_warns_when_dropping_raw_context_management(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(
+                {"output": [{"type": "compaction", "encrypted_content": "e"}]}
+            ).encode()
+        )
+        with self.assertLogs(openai_module.logger, "WARNING") as logs:
+            self.adapter.compact(
+                "m", MESSAGES, config={"context_management": [{"type": "compaction"}]}
+            )
+        self.assertNotIn(
+            "context_management", request_body(mock_urlopen.call_args.args[0])
+        )
+        self.assertTrue(
+            any(
+                "compact() overrides raw context_management" in line
+                for line in logs.output
+            )
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_compact_usage_includes_cache_tokens(self, mock_urlopen):
+        mock_urlopen.return_value = buffered_response(
+            json.dumps(
+                {
+                    "output": [{"type": "compaction", "encrypted_content": "e"}],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "input_tokens_details": {"cached_tokens": 7},
+                    },
+                }
+            ).encode()
+        )
+        result = self.adapter.compact("m", MESSAGES)
+        self.assertEqual(
+            result["usage"],
+            {"input_tokens": 10, "output_tokens": 2, "cache_read_tokens": 7},
+        )
+
+    def test_supports_compaction(self):
+        self.assertTrue(self.adapter.supports_compaction())
+
+
 if __name__ == "__main__":
     unittest.main()
