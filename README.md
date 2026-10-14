@@ -1,6 +1,9 @@
-# ducktape-provider
-
-<img src="assets/ducktape-logo.png" alt="Ducktape logo" width="240">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/ducktape-lockup-dark.svg">
+    <img src="assets/ducktape-lockup-light.svg" alt="ducktape provider" width="440">
+  </picture>
+</p>
 
 Simple AI chat and embeddings provider to normalize usage of different APIs.
 
