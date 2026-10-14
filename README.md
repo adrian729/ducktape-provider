@@ -1,5 +1,7 @@
 # ducktape-provider
 
+<img src="assets/ducktape-logo.png" alt="Ducktape logo" width="240">
+
 Simple AI chat and embeddings provider to normalize usage of different APIs.
 
 Claude, OpenAI and self-hosted Ollama adapters included. Extensible by subclassing `Adapter`.
