@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
 pub mod anthropic;
+pub mod ollama;
 pub mod openai;
 
 /// Everything a codec needs to know about the call besides the request.
@@ -97,6 +98,14 @@ pub trait Wire {
     fn shipped_capabilities(&self, model: &str) -> Option<Capabilities>;
     /// Classifies a non-2xx reply.
     fn classify(&self, status: u16, headers: &Headers, body: &[u8]) -> ProviderError;
+    /// Whether a call may go out without any credential.
+    fn auth_optional(&self) -> bool {
+        false
+    }
+    /// Whether image URLs must be fetched and inlined before the request.
+    fn inline_images(&self) -> bool {
+        false
+    }
 }
 
 /// Codec for a namespace.
@@ -104,6 +113,7 @@ pub fn for_ns(ns: &Ns) -> Option<Box<dyn Wire>> {
     match ns {
         Ns::Anthropic => Some(Box::new(anthropic::AnthropicMessages)),
         Ns::Openai => Some(Box::new(openai::OpenaiResponses)),
+        Ns::Ollama => Some(Box::new(ollama::OllamaNative)),
         _ => None,
     }
 }

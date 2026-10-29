@@ -1,0 +1,284 @@
+{
+  "name": "chat_options_full",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "qwen3",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "cache": {},
+            "text": "sys"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "add",
+            "description": "adds two numbers",
+            "input_schema": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          }
+        ],
+        "options": {
+          "max_output_tokens": 800,
+          "reasoning": "xhigh",
+          "reasoning_summary": "none",
+          "tool_choice": {
+            "mode": "named",
+            "name": "add"
+          },
+          "parallel_tools": false,
+          "output": {
+            "json_schema": {
+              "properties": {
+                "x": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "stop_sequences": [
+            "END"
+          ],
+          "cache": "explicit",
+          "user_id": "u1"
+        },
+        "vendor": {
+          "ollama": {
+            "keep_alive": "10m",
+            "options": {
+              "temperature": 0.2
+            }
+          }
+        },
+        "headers": {
+          "x-app": "ducktape"
+        }
+      }
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "application/x-ndjson"
+      },
+      "body": "{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\",\"thinking\":\"Let me \"},\"done\":false}\n{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\",\"thinking\":\"think.\"},\"done\":false}\n{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"Hel\"},\"done\":false}\n{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"lo\"},\"done\":false}\n{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:01Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"total_duration\":500000000,\"load_duration\":100000000,\"prompt_eval_count\":12,\"prompt_eval_duration\":50000000,\"eval_count\":9,\"eval_duration\":300000000}\n"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 449,
+              "headers": {
+                "content-type": "application/json",
+                "x-app": "ducktape"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/chat"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/chat",
+            "headers": {
+              "content-type": "application/json",
+              "x-app": "ducktape"
+            },
+            "body": "{\"format\":{\"properties\":{\"x\":{\"type\":\"string\"}},\"type\":\"object\"},\"keep_alive\":\"10m\",\"messages\":[{\"content\":\"sys\",\"role\":\"system\"},{\"content\":\"hi\",\"role\":\"user\"}],\"model\":\"qwen3\",\"options\":{\"num_predict\":800,\"stop\":[\"END\"],\"temperature\":0.2},\"stream\":true,\"think\":\"high\",\"tools\":[{\"function\":{\"description\":\"adds two numbers\",\"name\":\"add\",\"parameters\":{\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"type\":\"object\"}},\"type\":\"function\"}]}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "application/x-ndjson"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJtb2RlbCI6InF3ZW4zIiwiY3JlYXRlZF9hdCI6IjIwMjYtMTAtMjlUMTA6MDA6MDBaIiwibWVzc2FnZSI6eyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IiIsInRoaW5raW5nIjoiTGV0IG1lICJ9LCJkb25lIjpmYWxzZX0KeyJtb2RlbCI6InF3ZW4zIiwiY3JlYXRlZF9hdCI6IjIwMjYtMTAtMjlUMTA6MDA6MDBaIiwibWVzc2FnZSI6eyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IiIsInRoaW5raW5nIjoidGhpbmsuIn0sImRvbmUiOmZhbHNlfQp7Im1vZGVsIjoicXdlbjMiLCJjcmVhdGVkX2F0IjoiMjAyNi0xMC0yOVQxMDowMDowMFoiLCJtZXNzYWdlIjp7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoiSGVsIn0sImRvbmUiOmZhbHNlfQp7Im1vZGVsIjoicXdlbjMiLCJjcmVhdGVkX2F0IjoiMjAyNi0xMC0yOVQxMDowMDowMFoiLCJtZXNzYWdlIjp7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoibG8ifSwiZG9uZSI6ZmFsc2V9CnsibW9kZWwiOiJxd2VuMyIsImNyZWF0ZWRfYXQiOiIyMDI2LTEwLTI5VDEwOjAwOjAxWiIsIm1lc3NhZ2UiOnsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiIifSwiZG9uZSI6dHJ1ZSwiZG9uZV9yZWFzb24iOiJzdG9wIiwidG90YWxfZHVyYXRpb24iOjUwMDAwMDAwMCwibG9hZF9kdXJhdGlvbiI6MTAwMDAwMDAwLCJwcm9tcHRfZXZhbF9jb3VudCI6MTIsInByb21wdF9ldmFsX2R1cmF0aW9uIjo1MDAwMDAwMCwiZXZhbF9jb3VudCI6OSwiZXZhbF9kdXJhdGlvbiI6MzAwMDAwMDAwfQo="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "response",
+            "response": {
+              "content": [
+                {
+                  "type": "reasoning",
+                  "text": "Let me think."
+                },
+                {
+                  "type": "text",
+                  "text": "Hello"
+                }
+              ],
+              "stop": {
+                "reason": "complete",
+                "raw": "stop"
+              },
+              "usage": {
+                "input": {
+                  "total": 12
+                },
+                "output": {
+                  "total": 9
+                },
+                "raw": {
+                  "eval_count": 9,
+                  "eval_duration": 300000000,
+                  "load_duration": 100000000,
+                  "prompt_eval_count": 12,
+                  "prompt_eval_duration": 50000000,
+                  "total_duration": 500000000
+                }
+              },
+              "warnings": [
+                {
+                  "kind": "compatibility",
+                  "feature": "reasoning",
+                  "detail": "xhigh rounded to high"
+                },
+                {
+                  "kind": "unsupported",
+                  "feature": "reasoning_summary",
+                  "detail": "Ollama always returns the raw thinking text"
+                },
+                {
+                  "kind": "unsupported",
+                  "feature": "tool_choice",
+                  "detail": "`named` is not supported on Ollama; the model decides"
+                },
+                {
+                  "kind": "unsupported",
+                  "feature": "parallel_tools",
+                  "detail": "Ollama has no parallel tool call toggle"
+                },
+                {
+                  "kind": "unsupported",
+                  "feature": "user_id",
+                  "detail": "Ollama has no user identifier field"
+                },
+                {
+                  "kind": "unsupported",
+                  "feature": "cache",
+                  "detail": "Ollama has no prompt cache control"
+                }
+              ],
+              "origin": {
+                "wire": "ollama.native",
+                "ns": "ollama",
+                "base_url": "http://127.0.0.1:11434",
+                "model": "qwen3"
+              },
+              "latency_ms": 400.0,
+              "first_token_ms": 300.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

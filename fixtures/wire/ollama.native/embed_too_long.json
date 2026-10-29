@@ -1,0 +1,151 @@
+{
+  "name": "embed_too_long",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "embed",
+      "request": {
+        "model": "embeddinggemma",
+        "input": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+      }
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 400,
+      "headers": {},
+      "body": "{\"error\": \"input length exceeds maximum context length\"}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 106,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/embed"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/embed",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{\"input\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"],\"model\":\"embeddinggemma\",\"truncate\":false}",
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "embed"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 400,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 400
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJlcnJvciI6ICJpbnB1dCBsZW5ndGggZXhjZWVkcyBtYXhpbXVtIGNvbnRleHQgbGVuZ3RoIn0="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "context_overflow",
+            "message": "HTTP 400: input length exceeds maximum context length",
+            "status": 400,
+            "code": "context_length",
+            "retryable": false,
+            "attempts": 1,
+            "body": {
+              "error": "input length exceeds maximum context length"
+            },
+            "origin": {
+              "wire": "ollama.native",
+              "ns": "ollama",
+              "base_url": "http://127.0.0.1:11434",
+              "model": "embeddinggemma"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,177 @@
+{
+  "name": "chat_model_without_tools",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gemma4",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "add",
+            "description": "adds two numbers",
+            "input_schema": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 400,
+      "headers": {},
+      "body": "{\"error\": \"registry.ollama.ai/library/gemma4:latest does not support tools\"}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 255,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/chat"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/chat",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{\"messages\":[{\"content\":\"hi\",\"role\":\"user\"}],\"model\":\"gemma4\",\"stream\":true,\"tools\":[{\"function\":{\"description\":\"adds two numbers\",\"name\":\"add\",\"parameters\":{\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"type\":\"object\"}},\"type\":\"function\"}]}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 400,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 400
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJlcnJvciI6ICJyZWdpc3RyeS5vbGxhbWEuYWkvbGlicmFyeS9nZW1tYTQ6bGF0ZXN0IGRvZXMgbm90IHN1cHBvcnQgdG9vbHMifQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "unsupported",
+            "message": "HTTP 400: registry.ollama.ai/library/gemma4:latest does not support tools",
+            "status": 400,
+            "code": "model_capability",
+            "retryable": false,
+            "attempts": 1,
+            "body": {
+              "error": "registry.ollama.ai/library/gemma4:latest does not support tools"
+            },
+            "origin": {
+              "wire": "ollama.native",
+              "ns": "ollama",
+              "base_url": "http://127.0.0.1:11434",
+              "model": "gemma4"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

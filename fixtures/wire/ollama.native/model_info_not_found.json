@@ -1,0 +1,146 @@
+{
+  "name": "model_info_not_found",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "model_info",
+      "model": "nope"
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 404,
+      "headers": {},
+      "body": "{\"error\": \"model 'nope' not found\"}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 16,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/show"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/show",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{\"model\":\"nope\"}",
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 404,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 404
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJlcnJvciI6ICJtb2RlbCAnbm9wZScgbm90IGZvdW5kIn0="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "not_found",
+            "message": "HTTP 404: model 'nope' not found",
+            "status": 404,
+            "code": "model_not_found",
+            "retryable": false,
+            "attempts": 1,
+            "body": {
+              "error": "model 'nope' not found"
+            },
+            "origin": {
+              "wire": "ollama.native",
+              "ns": "ollama",
+              "base_url": "http://127.0.0.1:11434",
+              "model": "nope"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

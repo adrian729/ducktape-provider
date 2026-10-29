@@ -1,0 +1,151 @@
+{
+  "name": "chat_image_url_fetch_fails",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gemma4",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "url": "https://example.com/missing.png"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 404,
+      "headers": {},
+      "body": "not here"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 0,
+              "headers": {},
+              "method": "GET",
+              "url": "https://example.com/missing.png"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "https://example.com/missing.png",
+            "headers": {},
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "fetch"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 404,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 404
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "bm90IGhlcmU="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "bad_request",
+            "message": "image url fetch failed with HTTP 404",
+            "status": 404,
+            "code": "image_fetch",
+            "retryable": false,
+            "attempts": 1,
+            "origin": {
+              "wire": "ollama.native",
+              "ns": "ollama",
+              "base_url": "http://127.0.0.1:11434",
+              "model": "gemma4"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

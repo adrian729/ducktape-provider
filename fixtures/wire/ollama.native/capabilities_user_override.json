@@ -1,0 +1,53 @@
+{
+  "name": "capabilities_user_override",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama",
+      "overrides": {
+        "capabilities": {
+          "tools": {
+            "functions": false,
+            "hosted": []
+          },
+          "source": "user"
+        }
+      }
+    },
+    "operation": {
+      "type": "capabilities",
+      "model": "qwen3"
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": "{\"license\": \"x\", \"modelfile\": \"\", \"parameters\": \"stop \\\"<|im_end|>\\\"\", \"template\": \"\", \"details\": {\"parent_model\": \"\", \"format\": \"gguf\", \"family\": \"qwen3\", \"families\": [\"qwen3\"], \"parameter_size\": \"8.2B\", \"quantization_level\": \"Q4_K_M\"}, \"model_info\": {\"general.architecture\": \"qwen3\", \"qwen3.context_length\": 40960, \"qwen3.embedding_length\": 4096}, \"capabilities\": [\"completion\", \"tools\", \"thinking\"], \"thinking\": {\"values\": [false, true], \"default\": true}, \"modified_at\": \"2026-10-01T00:00:00Z\"}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "capabilities",
+            "capabilities": {
+              "tools": {
+                "functions": false,
+                "hosted": []
+              },
+              "source": "user"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

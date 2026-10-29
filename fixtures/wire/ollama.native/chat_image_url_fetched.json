@@ -1,0 +1,276 @@
+{
+  "name": "chat_image_url_fetched",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gemma4",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "what"
+              },
+              {
+                "type": "image",
+                "url": "https://example.com/a.png"
+              },
+              {
+                "type": "image",
+                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "image/png"
+      },
+      "body": "PNG\r\n\u001a\n"
+    },
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "application/x-ndjson"
+      },
+      "body": "{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\",\"thinking\":\"Let me \"},\"done\":false}\n{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\",\"thinking\":\"think.\"},\"done\":false}\n{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"Hel\"},\"done\":false}\n{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"lo\"},\"done\":false}\n{\"model\":\"qwen3\",\"created_at\":\"2026-10-29T10:00:01Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"total_duration\":500000000,\"load_duration\":100000000,\"prompt_eval_count\":12,\"prompt_eval_duration\":50000000,\"eval_count\":9,\"eval_duration\":300000000}\n"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 0,
+              "headers": {},
+              "method": "GET",
+              "url": "https://example.com/a.png"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "https://example.com/a.png",
+            "headers": {},
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "fetch"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "image/png"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "wolQTkcNChoK"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 203,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/chat"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/chat",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{\"messages\":[{\"content\":\"what\",\"images\":[\"wolQTkcNChoK\",\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\"],\"role\":\"user\"}],\"model\":\"gemma4\",\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "application/x-ndjson"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 500.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJtb2RlbCI6InF3ZW4zIiwiY3JlYXRlZF9hdCI6IjIwMjYtMTAtMjlUMTA6MDA6MDBaIiwibWVzc2FnZSI6eyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IiIsInRoaW5raW5nIjoiTGV0IG1lICJ9LCJkb25lIjpmYWxzZX0KeyJtb2RlbCI6InF3ZW4zIiwiY3JlYXRlZF9hdCI6IjIwMjYtMTAtMjlUMTA6MDA6MDBaIiwibWVzc2FnZSI6eyJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6IiIsInRoaW5raW5nIjoidGhpbmsuIn0sImRvbmUiOmZhbHNlfQp7Im1vZGVsIjoicXdlbjMiLCJjcmVhdGVkX2F0IjoiMjAyNi0xMC0yOVQxMDowMDowMFoiLCJtZXNzYWdlIjp7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoiSGVsIn0sImRvbmUiOmZhbHNlfQp7Im1vZGVsIjoicXdlbjMiLCJjcmVhdGVkX2F0IjoiMjAyNi0xMC0yOVQxMDowMDowMFoiLCJtZXNzYWdlIjp7InJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjoibG8ifSwiZG9uZSI6ZmFsc2V9CnsibW9kZWwiOiJxd2VuMyIsImNyZWF0ZWRfYXQiOiIyMDI2LTEwLTI5VDEwOjAwOjAxWiIsIm1lc3NhZ2UiOnsicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOiIifSwiZG9uZSI6dHJ1ZSwiZG9uZV9yZWFzb24iOiJzdG9wIiwidG90YWxfZHVyYXRpb24iOjUwMDAwMDAwMCwibG9hZF9kdXJhdGlvbiI6MTAwMDAwMDAwLCJwcm9tcHRfZXZhbF9jb3VudCI6MTIsInByb21wdF9ldmFsX2R1cmF0aW9uIjo1MDAwMDAwMCwiZXZhbF9jb3VudCI6OSwiZXZhbF9kdXJhdGlvbiI6MzAwMDAwMDAwfQo="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "response",
+            "response": {
+              "content": [
+                {
+                  "type": "reasoning",
+                  "text": "Let me think."
+                },
+                {
+                  "type": "text",
+                  "text": "Hello"
+                }
+              ],
+              "stop": {
+                "reason": "complete",
+                "raw": "stop"
+              },
+              "usage": {
+                "input": {
+                  "total": 12
+                },
+                "output": {
+                  "total": 9
+                },
+                "raw": {
+                  "eval_count": 9,
+                  "eval_duration": 300000000,
+                  "load_duration": 100000000,
+                  "prompt_eval_count": 12,
+                  "prompt_eval_duration": 50000000,
+                  "total_duration": 500000000
+                }
+              },
+              "warnings": [],
+              "origin": {
+                "wire": "ollama.native",
+                "ns": "ollama",
+                "base_url": "http://127.0.0.1:11434",
+                "model": "gemma4"
+              },
+              "latency_ms": 700.0,
+              "first_token_ms": 600.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

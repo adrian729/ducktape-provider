@@ -1,0 +1,168 @@
+{
+  "name": "embed_two_inputs",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "embed",
+      "request": {
+        "model": "embeddinggemma",
+        "input": [
+          "a",
+          "b"
+        ],
+        "options": {
+          "dimensions": 3
+        }
+      }
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": "{\"model\": \"embeddinggemma\", \"embeddings\": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], \"total_duration\": 1000, \"load_duration\": 100, \"prompt_eval_count\": 2}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 76,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/embed"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/embed",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{\"dimensions\":3,\"input\":[\"a\",\"b\"],\"model\":\"embeddinggemma\",\"truncate\":false}",
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "embed"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJtb2RlbCI6ICJlbWJlZGRpbmdnZW1tYSIsICJlbWJlZGRpbmdzIjogW1swLjEsIDAuMiwgMC4zXSwgWzAuNCwgMC41LCAwLjZdXSwgInRvdGFsX2R1cmF0aW9uIjogMTAwMCwgImxvYWRfZHVyYXRpb24iOiAxMDAsICJwcm9tcHRfZXZhbF9jb3VudCI6IDJ9"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "embed",
+            "response": {
+              "embeddings": [
+                [
+                  0.1,
+                  0.2,
+                  0.3
+                ],
+                [
+                  0.4,
+                  0.5,
+                  0.6
+                ]
+              ],
+              "usage": {
+                "input": {
+                  "total": 2
+                }
+              },
+              "warnings": [],
+              "origin": {
+                "wire": "ollama.native",
+                "ns": "ollama",
+                "base_url": "http://127.0.0.1:11434",
+                "model": "embeddinggemma"
+              },
+              "latency_ms": 400.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

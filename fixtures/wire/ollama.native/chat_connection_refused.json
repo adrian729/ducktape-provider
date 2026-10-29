@@ -1,0 +1,128 @@
+{
+  "name": "chat_connection_refused",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "qwen3",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ],
+        "options": {
+          "retries": 0
+        }
+      }
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "headers": {},
+      "error": {
+        "kind": "connect",
+        "message": "connection refused"
+      }
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 75,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/chat"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/chat",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{\"messages\":[{\"content\":\"hi\",\"role\":\"user\"}],\"model\":\"qwen3\",\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_error",
+        "error": {
+          "kind": "connect",
+          "message": "connection refused"
+        }
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "connection",
+            "message": "connection refused",
+            "retryable": true,
+            "attempts": 1,
+            "origin": {
+              "wire": "ollama.native",
+              "ns": "ollama",
+              "base_url": "http://127.0.0.1:11434",
+              "model": "qwen3"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

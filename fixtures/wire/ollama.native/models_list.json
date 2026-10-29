@@ -1,0 +1,166 @@
+{
+  "name": "models_list",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "models",
+      "refresh": false
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": "{\"models\": [{\"name\": \"qwen3:latest\", \"model\": \"qwen3:latest\", \"size\": 1, \"digest\": \"d\", \"details\": {\"family\": \"qwen3\", \"families\": [\"qwen3\"], \"parameter_size\": \"8.2B\", \"quantization_level\": \"Q4_K_M\", \"format\": \"gguf\"}}, {\"name\": \"embeddinggemma:latest\", \"model\": \"embeddinggemma:latest\", \"size\": 1, \"digest\": \"e\", \"details\": {\"family\": \"gemma3\", \"format\": \"gguf\"}}]}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 0,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "GET",
+              "url": "http://127.0.0.1:11434/api/tags"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:11434/api/tags",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJtb2RlbHMiOiBbeyJuYW1lIjogInF3ZW4zOmxhdGVzdCIsICJtb2RlbCI6ICJxd2VuMzpsYXRlc3QiLCAic2l6ZSI6IDEsICJkaWdlc3QiOiAiZCIsICJkZXRhaWxzIjogeyJmYW1pbHkiOiAicXdlbjMiLCAiZmFtaWxpZXMiOiBbInF3ZW4zIl0sICJwYXJhbWV0ZXJfc2l6ZSI6ICI4LjJCIiwgInF1YW50aXphdGlvbl9sZXZlbCI6ICJRNF9LX00iLCAiZm9ybWF0IjogImdndWYifX0sIHsibmFtZSI6ICJlbWJlZGRpbmdnZW1tYTpsYXRlc3QiLCAibW9kZWwiOiAiZW1iZWRkaW5nZ2VtbWE6bGF0ZXN0IiwgInNpemUiOiAxLCAiZGlnZXN0IjogImUiLCAiZGV0YWlscyI6IHsiZmFtaWx5IjogImdlbW1hMyIsICJmb3JtYXQiOiAiZ2d1ZiJ9fV19"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "models",
+            "models": [
+              {
+                "id": "qwen3:latest",
+                "kind": "unknown",
+                "raw": {
+                  "details": {
+                    "families": [
+                      "qwen3"
+                    ],
+                    "family": "qwen3",
+                    "format": "gguf",
+                    "parameter_size": "8.2B",
+                    "quantization_level": "Q4_K_M"
+                  },
+                  "digest": "d",
+                  "model": "qwen3:latest",
+                  "name": "qwen3:latest",
+                  "size": 1
+                }
+              },
+              {
+                "id": "embeddinggemma:latest",
+                "kind": "embedding",
+                "raw": {
+                  "details": {
+                    "family": "gemma3",
+                    "format": "gguf"
+                  },
+                  "digest": "e",
+                  "model": "embeddinggemma:latest",
+                  "name": "embeddinggemma:latest",
+                  "size": 1
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

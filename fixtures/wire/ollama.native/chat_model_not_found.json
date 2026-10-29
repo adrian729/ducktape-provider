@@ -1,0 +1,159 @@
+{
+  "name": "chat_model_not_found",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "nope",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 404,
+      "headers": {},
+      "body": "{\"error\": \"model 'nope' not found, try pulling it first\"}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 74,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/chat"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/chat",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{\"messages\":[{\"content\":\"hi\",\"role\":\"user\"}],\"model\":\"nope\",\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 404,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 404
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJlcnJvciI6ICJtb2RlbCAnbm9wZScgbm90IGZvdW5kLCB0cnkgcHVsbGluZyBpdCBmaXJzdCJ9"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "not_found",
+            "message": "HTTP 404: model 'nope' not found, try pulling it first",
+            "status": 404,
+            "code": "model_not_found",
+            "retryable": false,
+            "attempts": 1,
+            "body": {
+              "error": "model 'nope' not found, try pulling it first"
+            },
+            "origin": {
+              "wire": "ollama.native",
+              "ns": "ollama",
+              "base_url": "http://127.0.0.1:11434",
+              "model": "nope"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

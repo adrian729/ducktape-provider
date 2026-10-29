@@ -1,0 +1,207 @@
+{
+  "name": "model_info_show",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "model_info",
+      "model": "qwen3"
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": "{\"license\": \"x\", \"modelfile\": \"\", \"parameters\": \"stop \\\"<|im_end|>\\\"\", \"template\": \"\", \"details\": {\"parent_model\": \"\", \"format\": \"gguf\", \"family\": \"qwen3\", \"families\": [\"qwen3\"], \"parameter_size\": \"8.2B\", \"quantization_level\": \"Q4_K_M\"}, \"model_info\": {\"general.architecture\": \"qwen3\", \"qwen3.context_length\": 40960, \"qwen3.embedding_length\": 4096}, \"capabilities\": [\"completion\", \"tools\", \"thinking\"], \"thinking\": {\"values\": [false, true], \"default\": true}, \"modified_at\": \"2026-10-01T00:00:00Z\"}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 17,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/show"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/show",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{\"model\":\"qwen3\"}",
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJsaWNlbnNlIjogIngiLCAibW9kZWxmaWxlIjogIiIsICJwYXJhbWV0ZXJzIjogInN0b3AgXCI8fGltX2VuZHw+XCIiLCAidGVtcGxhdGUiOiAiIiwgImRldGFpbHMiOiB7InBhcmVudF9tb2RlbCI6ICIiLCAiZm9ybWF0IjogImdndWYiLCAiZmFtaWx5IjogInF3ZW4zIiwgImZhbWlsaWVzIjogWyJxd2VuMyJdLCAicGFyYW1ldGVyX3NpemUiOiAiOC4yQiIsICJxdWFudGl6YXRpb25fbGV2ZWwiOiAiUTRfS19NIn0sICJtb2RlbF9pbmZvIjogeyJnZW5lcmFsLmFyY2hpdGVjdHVyZSI6ICJxd2VuMyIsICJxd2VuMy5jb250ZXh0X2xlbmd0aCI6IDQwOTYwLCAicXdlbjMuZW1iZWRkaW5nX2xlbmd0aCI6IDQwOTZ9LCAiY2FwYWJpbGl0aWVzIjogWyJjb21wbGV0aW9uIiwgInRvb2xzIiwgInRoaW5raW5nIl0sICJ0aGlua2luZyI6IHsidmFsdWVzIjogW2ZhbHNlLCB0cnVlXSwgImRlZmF1bHQiOiB0cnVlfSwgIm1vZGlmaWVkX2F0IjogIjIwMjYtMTAtMDFUMDA6MDA6MDBaIn0="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "model_info",
+            "info": {
+              "id": "qwen3",
+              "kind": "chat",
+              "context_window": 40960,
+              "capabilities": {
+                "reasoning": {
+                  "levels": [
+                    "auto",
+                    "none"
+                  ],
+                  "can_disable": true
+                },
+                "tool_choice": [
+                  "auto",
+                  "none"
+                ],
+                "parallel_tools": {
+                  "supported": true,
+                  "toggle": false
+                },
+                "output": {
+                  "json_schema": true
+                },
+                "cache": {
+                  "breakpoints": null,
+                  "ttls": null
+                },
+                "inputs": [
+                  "text"
+                ],
+                "tools": {
+                  "functions": true,
+                  "hosted": []
+                },
+                "limits": {
+                  "context_window": 40960
+                },
+                "embeddings": false,
+                "source": "vendor"
+              },
+              "raw": {
+                "capabilities": [
+                  "completion",
+                  "tools",
+                  "thinking"
+                ],
+                "details": {
+                  "families": [
+                    "qwen3"
+                  ],
+                  "family": "qwen3",
+                  "format": "gguf",
+                  "parameter_size": "8.2B",
+                  "parent_model": "",
+                  "quantization_level": "Q4_K_M"
+                },
+                "license": "x",
+                "model_info": {
+                  "general.architecture": "qwen3",
+                  "qwen3.context_length": 40960,
+                  "qwen3.embedding_length": 4096
+                },
+                "modelfile": "",
+                "modified_at": "2026-10-01T00:00:00Z",
+                "parameters": "stop \"<|im_end|>\"",
+                "template": "",
+                "thinking": {
+                  "default": true,
+                  "values": [
+                    false,
+                    true
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

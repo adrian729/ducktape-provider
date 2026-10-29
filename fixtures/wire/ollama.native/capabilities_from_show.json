@@ -1,0 +1,170 @@
+{
+  "name": "capabilities_from_show",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "ollama"
+    },
+    "operation": {
+      "type": "capabilities",
+      "model": "gpt-oss"
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": "{\"license\": \"x\", \"modelfile\": \"\", \"parameters\": \"stop \\\"<|im_end|>\\\"\", \"template\": \"\", \"details\": {\"parent_model\": \"\", \"format\": \"gguf\", \"family\": \"qwen3\", \"families\": [\"qwen3\"], \"parameter_size\": \"8.2B\", \"quantization_level\": \"Q4_K_M\"}, \"model_info\": {\"general.architecture\": \"gptoss\", \"gptoss.context_length\": 131072}, \"capabilities\": [\"completion\", \"tools\", \"thinking\"], \"thinking\": {\"values\": [\"low\", \"medium\", \"high\"], \"default\": \"medium\"}, \"modified_at\": \"2026-10-01T00:00:00Z\"}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OLLAMA_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 19,
+              "headers": {
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "http://127.0.0.1:11434/api/show"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:11434/api/show",
+            "headers": {
+              "content-type": "application/json"
+            },
+            "body": "{\"model\":\"gpt-oss\"}",
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJsaWNlbnNlIjogIngiLCAibW9kZWxmaWxlIjogIiIsICJwYXJhbWV0ZXJzIjogInN0b3AgXCI8fGltX2VuZHw+XCIiLCAidGVtcGxhdGUiOiAiIiwgImRldGFpbHMiOiB7InBhcmVudF9tb2RlbCI6ICIiLCAiZm9ybWF0IjogImdndWYiLCAiZmFtaWx5IjogInF3ZW4zIiwgImZhbWlsaWVzIjogWyJxd2VuMyJdLCAicGFyYW1ldGVyX3NpemUiOiAiOC4yQiIsICJxdWFudGl6YXRpb25fbGV2ZWwiOiAiUTRfS19NIn0sICJtb2RlbF9pbmZvIjogeyJnZW5lcmFsLmFyY2hpdGVjdHVyZSI6ICJncHRvc3MiLCAiZ3B0b3NzLmNvbnRleHRfbGVuZ3RoIjogMTMxMDcyfSwgImNhcGFiaWxpdGllcyI6IFsiY29tcGxldGlvbiIsICJ0b29scyIsICJ0aGlua2luZyJdLCAidGhpbmtpbmciOiB7InZhbHVlcyI6IFsibG93IiwgIm1lZGl1bSIsICJoaWdoIl0sICJkZWZhdWx0IjogIm1lZGl1bSJ9LCAibW9kaWZpZWRfYXQiOiAiMjAyNi0xMC0wMVQwMDowMDowMFoifQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "capabilities",
+            "capabilities": {
+              "reasoning": {
+                "levels": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "can_disable": false
+              },
+              "tool_choice": [
+                "auto",
+                "none"
+              ],
+              "parallel_tools": {
+                "supported": true,
+                "toggle": false
+              },
+              "output": {
+                "json_schema": true
+              },
+              "cache": {
+                "breakpoints": null,
+                "ttls": null
+              },
+              "inputs": [
+                "text"
+              ],
+              "tools": {
+                "functions": true,
+                "hosted": []
+              },
+              "limits": {
+                "context_window": 131072
+              },
+              "embeddings": false,
+              "source": "vendor"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 //! The effects state machine behind every call.
 use crate::auth;
 use crate::effects::{
-    Clock, Effect, HttpRequest, Input, Notification, ObserverHook, OperationKind, OperationResult,
-    Resume, Start, Step, TransportErrorKind,
+    Clock, Effect, HttpRequest, Input, Method, Notification, ObserverHook, OperationKind,
+    OperationResult, Purpose, Resume, Start, Step, TransportErrorKind,
 };
 use crate::retry;
 use crate::secret::SecretStore;
@@ -137,6 +137,10 @@ pub struct Operation {
     decoder: Option<Box<dyn ChatDecoder>>,
     body: Vec<u8>,
     received_bytes: bool,
+    response_headers: Headers,
+    fetch_planned: bool,
+    fetch_queue: Vec<(usize, usize)>,
+    fetching: Option<(usize, usize)>,
 }
 
 impl std::fmt::Debug for Operation {
@@ -244,6 +248,10 @@ impl Operation {
             decoder: None,
             body: Vec::new(),
             received_bytes: false,
+            response_headers: Headers::new(),
+            fetch_planned: false,
+            fetch_queue: Vec::new(),
+            fetching: None,
         }
     }
 
@@ -315,6 +323,15 @@ impl Operation {
                 },
                 Input::HttpEnd | Input::HttpError { .. },
             ) => {
+                if self.fetching.take().is_some() {
+                    let mut e = self.error(
+                        ErrorKind::BadRequest,
+                        format!("image url fetch failed with HTTP {status}"),
+                    );
+                    e.status = Some(status);
+                    e.code = Some("image_fetch".to_owned());
+                    return Step::failed(e);
+                }
                 let mut e = match &self.wire {
                     Some(w) => w.classify(status, &headers, &body),
                     None => ProviderError::new(ErrorKind::Server, format!("HTTP {status}")),
@@ -561,6 +578,9 @@ impl Operation {
                     },
                 });
             }
+            if self.wire.as_ref().is_some_and(|w| w.auth_optional()) {
+                return self.first_request();
+            }
             let tried: Vec<String> = sources.iter().map(auth::label).collect();
             let mut e = self.error(
                 ErrorKind::Auth,
@@ -638,6 +658,17 @@ impl Operation {
 
     fn first_request(&mut self) -> Step {
         let ctx = self.ctx.clone().expect("prepared");
+        if !self.fetch_planned {
+            self.fetch_planned = true;
+            if self.wire.as_ref().is_some_and(|w| w.inline_images()) {
+                if let Job::Chat { request, .. } = &self.job {
+                    self.fetch_queue = plan_fetches(&request.messages);
+                }
+            }
+        }
+        if !self.fetch_queue.is_empty() {
+            return self.next_fetch();
+        }
         let wire = self.wire.as_ref().expect("wire");
         let built = match &self.job {
             Job::Chat {
@@ -697,6 +728,53 @@ impl Operation {
         self.send()
     }
 
+    fn next_fetch(&mut self) -> Step {
+        let target = self.fetch_queue.remove(0);
+        let Job::Chat { request, .. } = &self.job else {
+            unreachable!()
+        };
+        let url = image_at(&request.messages, target)
+            .and_then(|b| b.url.clone())
+            .unwrap_or_default();
+        self.fetching = Some(target);
+        self.pending = Some(HttpRequest {
+            method: Method::Get,
+            url,
+            headers: Headers::new(),
+            body: None,
+            stream: false,
+            timeout: self.ctx.as_ref().and_then(|c| c.timeout),
+            purpose: Purpose::Fetch,
+        });
+        self.attempt = 0;
+        self.send()
+    }
+
+    fn fetched(&mut self, target: (usize, usize)) -> Step {
+        use base64::Engine;
+        let media_type = self
+            .response_headers
+            .get("content-type")
+            .map(|v| {
+                v.split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase()
+            })
+            .filter(|v| v.starts_with("image/"));
+        let data = base64::engine::general_purpose::STANDARD.encode(&self.body);
+        let Job::Chat { request, .. } = &mut self.job else {
+            unreachable!()
+        };
+        if let Some(block) = image_at_mut(&mut request.messages, target) {
+            block.media_type = media_type.or_else(|| wire::sniff_image(&data).map(str::to_owned));
+            block.data = Some(data);
+            block.url = None;
+        }
+        self.first_request()
+    }
+
     fn send(&mut self) -> Step {
         let request = self.pending.clone().expect("pending request");
         self.attempt += 1;
@@ -731,6 +809,14 @@ impl Operation {
                 headers,
                 body: Vec::new(),
             };
+            return Step {
+                notify,
+                effect: Effect::Receive,
+            };
+        }
+        self.response_headers = headers;
+        if self.fetching.is_some() {
+            self.state = State::Receiving;
             return Step {
                 notify,
                 effect: Effect::Receive,
@@ -807,6 +893,9 @@ impl Operation {
     }
 
     fn end(&mut self) -> Step {
+        if let Some(target) = self.fetching.take() {
+            return self.fetched(target);
+        }
         match &mut self.job {
             Job::Chat { .. } => self.end_chat(),
             Job::Embed { .. } => {
@@ -886,7 +975,7 @@ impl Operation {
                     .decode_model_info(&ctx, &self.body)
                 {
                     Ok(info) => {
-                        let vendor = Capabilities {
+                        let mut vendor = info.capabilities.clone().unwrap_or(Capabilities {
                             reasoning: None,
                             tool_choice: None,
                             parallel_tools: None,
@@ -894,15 +983,19 @@ impl Operation {
                             cache: None,
                             inputs: None,
                             tools: None,
-                            limits: (info.context_window.is_some()
-                                || info.max_output_tokens.is_some())
-                            .then_some(Limits {
-                                context_window: info.context_window,
-                                max_output_tokens: info.max_output_tokens,
-                            }),
+                            limits: None,
                             embeddings: None,
                             source: CapabilitySource::Vendor,
-                        };
+                        });
+                        vendor.source = CapabilitySource::Vendor;
+                        if vendor.limits.is_none()
+                            && (info.context_window.is_some() || info.max_output_tokens.is_some())
+                        {
+                            vendor.limits = Some(Limits {
+                                context_window: info.context_window,
+                                max_output_tokens: info.max_output_tokens,
+                            });
+                        }
                         let caps = match self
                             .config
                             .overrides
@@ -1141,5 +1234,33 @@ pub fn overlay_capabilities(base: Capabilities, user: Capabilities) -> Capabilit
         limits: user.limits.or(base.limits),
         embeddings: user.embeddings.or(base.embeddings),
         source: CapabilitySource::User,
+    }
+}
+
+fn plan_fetches(messages: &[Message]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for (mi, m) in messages.iter().enumerate() {
+        for (bi, b) in m.content.iter().enumerate() {
+            if let Block::Image(img) = b {
+                if img.data.is_none() && img.url.is_some() {
+                    out.push((mi, bi));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn image_at(messages: &[Message], (mi, bi): (usize, usize)) -> Option<&ImageBlock> {
+    match messages.get(mi)?.content.get(bi)? {
+        Block::Image(img) => Some(img),
+        _ => None,
+    }
+}
+
+fn image_at_mut(messages: &mut [Message], (mi, bi): (usize, usize)) -> Option<&mut ImageBlock> {
+    match messages.get_mut(mi)?.content.get_mut(bi)? {
+        Block::Image(img) => Some(img),
+        _ => None,
     }
 }

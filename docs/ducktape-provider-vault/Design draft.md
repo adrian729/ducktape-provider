@@ -133,7 +133,7 @@ Error (all: status?, code?, retryable, retry_after?, body, request_id?)
 | Phase | Deliverable |
 |---|---|
 | 0 | Interface spec frozen ([[Interface spec]], 2026-10-29). JSON Schema of the normalized types (`schema/provider.schema.json`, done). Fixtures recorded on demand from live vendor traffic on the chosen surfaces, scrubbed (decision 11): pending. |
-| 1 | Effects protocol schema (`schema/effects.schema.json`, done 2026-10-29). Rust workspace: `ducktape-core` (types, effects, operation driver, retry, auth), `ducktape-abi`, conformance runner over `fixtures/types/` and `fixtures/wire/` (done). Codecs done with synthetic wire fixtures: `anthropic.messages`, `openai.responses` (2026-10-29). Next: `ollama.native`, `google.interactions`; Python (PyO3, httpx); JS (Node, Electron, browser) on `core.wasm` |
+| 1 | Effects protocol schema (`schema/effects.schema.json`, done 2026-10-29). Rust workspace: `ducktape-core` (types, effects, operation driver, retry, auth), `ducktape-abi`, conformance runner over `fixtures/types/` and `fixtures/wire/` (done). Codecs done with synthetic wire fixtures: `anthropic.messages`, `openai.responses`, `ollama.native` (2026-10-29). Next: `google.interactions`; Python (PyO3, httpx); JS (Node, Electron, browser) on `core.wasm` |
 | 2 | Go (wazero) and Java (Chicory) on the same `core.wasm`; .NET and C/C++ on the native C ABI; Rust crate (+ optional reqwest). All part of the v1 release (decision 1); phases are build order only. |
 | later | fast in-core transport; sidecar binary; agents |
 
