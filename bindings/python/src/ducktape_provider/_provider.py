@@ -165,11 +165,16 @@ class _Base:
         strict: Optional[bool] = None,
         observer: Any = None,
         dangerously_allow_browser: Optional[bool] = None,
+        keychain: Optional[Callable[[str, str], Any]] = None,
     ) -> None:
         if ns not in NAMESPACES:
             raise ValueError(f"unknown namespace {ns!r}; one of {', '.join(NAMESPACES)}")
         self.ns = ns
         self.host = Host()
+        if keychain is not None:
+            if not callable(keychain):
+                raise TypeError("keychain must be a callable taking (service, account)")
+            self.host.keychain = keychain
         self.observer = observer
         self._config: dict[str, Any] = {"ns": ns}
         if base_url is not None:
@@ -429,6 +434,7 @@ class Provider(_Base):
         strict: Optional[bool] = None,
         observer: Any = None,
         dangerously_allow_browser: Optional[bool] = None,
+        keychain: Optional[Callable[[str, str], Any]] = None,
         client: Optional[httpx.Client] = None,
     ) -> None:
         super().__init__(
@@ -447,6 +453,7 @@ class Provider(_Base):
             strict=strict,
             observer=observer,
             dangerously_allow_browser=dangerously_allow_browser,
+            keychain=keychain,
         )
         self._client = client
 
@@ -585,6 +592,7 @@ class AsyncProvider(_Base):
         strict: Optional[bool] = None,
         observer: Any = None,
         dangerously_allow_browser: Optional[bool] = None,
+        keychain: Optional[Callable[[str, str], Any]] = None,
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         super().__init__(
@@ -603,6 +611,7 @@ class AsyncProvider(_Base):
             strict=strict,
             observer=observer,
             dangerously_allow_browser=dangerously_allow_browser,
+            keychain=keychain,
         )
         self._client = client
 

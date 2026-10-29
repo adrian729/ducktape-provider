@@ -8,6 +8,7 @@ from typing import Any, Callable, Generator, Optional
 
 from . import _core
 from ._errors import AuthError, ProviderError, UnsupportedError, error_from_dict
+from ._keychain import read_keychain
 
 
 @dataclass
@@ -85,6 +86,7 @@ class Host:
     def __init__(self) -> None:
         self.secrets: dict[str, str] = {}
         self.resolvers: dict[str, Callable[[], Any]] = {}
+        self.keychain: Callable[[str, str], Any] = read_keychain
 
 
 def clock() -> dict[str, Any]:
@@ -104,8 +106,18 @@ def _secret_value(value: Any) -> Optional[str]:
     return value
 
 
-def _read(locator: dict[str, Any]) -> dict[str, Any]:
+def _read(locator: dict[str, Any], host: Host) -> dict[str, Any]:
     kind = locator.get("type")
+    if kind == "keychain":
+        try:
+            value = host.keychain(locator["service"], locator["account"])
+        except Exception:
+            value = None
+        if isinstance(value, str):
+            value = value.encode()
+        if not value:
+            return {"type": "read", "found": False}
+        return {"type": "read", "found": True, "bytes": bytes(value)}
     if kind == "file":
         try:
             with open(locator["path"], "rb") as f:
@@ -203,7 +215,7 @@ def drive(
                 op.set_secret(ref, value.encode())
             data = {"type": "secret", "secret_ref": ref, "found": bool(value)}
         elif kind == "need_read":
-            data = _read(effect["locator"])
+            data = _read(effect["locator"], host)
         elif kind == "need_write":
             data = _write(effect)
         elif kind == "need_user_action":

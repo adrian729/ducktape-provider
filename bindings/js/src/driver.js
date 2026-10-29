@@ -197,6 +197,15 @@ export async function* drive(core, start, host, { fetch: doFetch, signal, cancel
           else if (locator.type === "env") {
             const v = getEnv(locator.name);
             if (v !== undefined) bytes = new TextEncoder().encode(v);
+          } else if (locator.type === "keychain" && host.keychain) {
+            let v = null;
+            try {
+              v = await host.keychain(locator.service, locator.account);
+            } catch {
+              v = null;
+            }
+            if (typeof v === "string") v = new TextEncoder().encode(v);
+            if (v && v.length) bytes = v;
           }
           input = bytes ? { type: "read", found: true, bytes: toBase64(bytes) } : { type: "read", found: false };
           break;

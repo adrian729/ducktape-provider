@@ -60,6 +60,7 @@ if r.stop.reason == "tool_call":
 | Refreshing another tool's login | `session("codex", refresh="memory")` keeps the new token in process; `refresh="write_back"` updates the tool's store |
 | Login state | `p.auth_status()` gives `source`, `expires_at` and `session`; `source` is `None` when nothing is configured |
 | Several sources in order | `Provider("anthropic", auth=[session("claude_code"), env("ANTHROPIC_API_KEY")])` |
+| Your own keychain reader | `Provider("openai", auth=session("codex"), keychain=lambda service, account: keyring.get_password(service, account))`; the default reads macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | Local Ollama | `Provider("ollama", default_model="llama3")` |
 | Options | `p.chat(msgs, options={"max_output_tokens": 500, "reasoning": "high", "tool_choice": {"name": "add"}})` |
 | Vendor fields | `p.chat(msgs, vendor={"anthropic": {"temperature": 0.2}})` |
@@ -110,6 +111,7 @@ if (reply.stop.reason === "tool_call") {
 | An existing login | `new Provider("openai", { auth: session("codex") })`, `session("anthropic_profile", { profile: "work" })` |
 | Refreshing another tool's login | `session("codex", { refresh: "memory" })` or `{ refresh: "write_back" }`, same meaning as in Python |
 | Login state | `await p.authStatus()` gives `source`, `expires_at` and `session` |
+| Your own keychain reader | `new Provider("openai", { auth: session("codex"), keychain: async (service, account) => ... })`; the default reads macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | In a browser | `resolver()` against your backend; an API key needs `dangerously_allow_browser: true` |
 | Cancel | `signal: controller.signal` on any call, or `stream.cancel()` |
 | Options and vendor fields | same keys as Python: `{ options: { reasoning: "high" }, vendor: { openai: { temperature: 0.2 } } }` |

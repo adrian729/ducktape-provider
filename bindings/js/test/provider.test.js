@@ -219,3 +219,39 @@ test("expired borrowed session names the owner", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("codex keychain fallback goes through the keychain reader", async () => {
+  const fixture = load(join(fixtures, "wire", "openai.responses", "session_codex_keychain_fallback.json"));
+  const dir = mkdtempSync(join(tmpdir(), "ducktape-codex-"));
+  process.env.CODEX_HOME = dir;
+  try {
+    const [[key, stored]] = Object.entries(fixture.keychain);
+    const [service, account] = key.split("|", 2);
+    const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const doc = JSON.parse(stored);
+    doc.tokens.access_token = `${b64url({ alg: "RS256" })}.${b64url({ exp: Math.floor(Date.now() / 1000) + 3600 })}.sig`;
+    const asked = [];
+    const keychain = async (s, a) => {
+      asked.push([s, a]);
+      return s === service ? JSON.stringify(doc) : null;
+    };
+    const seen = [];
+    const p = new Provider("openai", { auth: dp.session("codex"), keychain, fetch: scripted(fixture, seen) });
+    const req = requestOf(fixture);
+    const r = await p.chat(req.messages, { model: req.model });
+    assert.equal(r.text, doneResponse(fixture).content.at(-1).text);
+    assert.equal(asked[0][0], "Codex Auth");
+    assert.ok(asked[0][1].startsWith("cli|") && asked[0][1] !== account);
+    assert.equal(seen[0].init.headers["chatgpt-account-id"], "acct_1");
+    assert.throws(() => new Provider("openai", { keychain: "nope" }), TypeError);
+  } finally {
+    delete process.env.CODEX_HOME;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the default keychain reader never throws", async () => {
+  const { readKeychain } = await import("../src/keychain.js");
+  const value = await readKeychain("ducktape-provider-test", "nobody");
+  assert.ok(value === null || value instanceof Uint8Array);
+});

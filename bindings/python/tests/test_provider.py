@@ -265,3 +265,59 @@ def test_session_expired_names_the_owner(monkeypatch, tmp_path):
     assert info.value.code == "credential_expired" and "claude" in str(info.value)
     status = p.auth_status()
     assert status.source == "session:claude_code" and status.expires_at == "2025-10-28T23:59:55Z"
+
+
+def test_keychain_reader_uses_platform_tools(monkeypatch):
+    from ducktape_provider import _keychain
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        import subprocess
+
+        if argv[0] == "security":
+            return subprocess.CompletedProcess(argv, 0, stdout=b"from-mac\n", stderr=b"")
+        if argv[0] == "secret-tool":
+            return subprocess.CompletedProcess(argv, 1, stdout=b"", stderr=b"")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(_keychain.subprocess, "run", fake_run)
+    monkeypatch.setattr(_keychain.sys, "platform", "darwin")
+    assert _keychain.read_keychain("Codex Auth", "cli|abc") == b"from-mac"
+    assert calls[-1] == ["security", "find-generic-password", "-s", "Codex Auth", "-a", "cli|abc", "-w"]
+    monkeypatch.setattr(_keychain.sys, "platform", "linux")
+    assert _keychain.read_keychain("Codex Auth", "cli|abc") is None
+    assert calls[-1] == ["secret-tool", "lookup", "service", "Codex Auth", "username", "cli|abc"]
+    monkeypatch.setattr(_keychain.sys, "platform", "sunos5")
+    assert _keychain.read_keychain("Codex Auth", "cli|abc") is None
+
+
+def test_codex_keychain_fallback(monkeypatch, tmp_path):
+    fixture = load(FIXTURES / "wire" / "openai.responses" / "session_codex_keychain_fallback.json")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (service_account, stored), = fixture["keychain"].items()
+    service, account = service_account.split("|", 1)
+    import time
+
+    def jwt(payload):
+        enc = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+        return f"{enc({'alg': 'RS256'})}.{enc(payload)}.sig"
+
+    doc = json.loads(stored)
+    doc["tokens"]["access_token"] = jwt({"exp": int(time.time()) + 3600})
+    asked = []
+
+    def reader(s, a):
+        asked.append((s, a))
+        return json.dumps(doc) if s == service else None
+
+    seen = []
+    p = Provider("openai", auth=dp.session("codex"), keychain=reader, client=httpx.Client(transport=httpx.MockTransport(scripted(fixture, seen))))
+    req = request_of(fixture)
+    r = p.chat(req["messages"], model=req["model"])
+    assert r.text == done_response(fixture)["content"][-1]["text"]
+    assert asked[0][0] == service == "Codex Auth" and asked[0][1].startswith("cli|") and asked[0][1] != account
+    assert seen[0].headers["chatgpt-account-id"] == "acct_1"
+    with pytest.raises(TypeError):
+        Provider("openai", keychain="not callable")

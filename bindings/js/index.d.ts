@@ -286,7 +286,9 @@ export interface ProviderOptions {
   dangerously_allow_browser?: boolean;
   fetch?: Fetch;
   core?: Core | Promise<Core> | string | URL | Uint8Array | WebAssembly.Module;
+  keychain?: KeychainReader;
 }
+export type KeychainReader = (service: string, account: string) => string | Uint8Array | null | undefined | Promise<string | Uint8Array | null | undefined>;
 
 export interface ChatOptions {
   model?: string;

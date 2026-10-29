@@ -200,7 +200,7 @@ Our terms carry a responsible-use clause: the consumer decides which credential 
 - `claude_code` never refreshes (endpoint and client id unverified); on expiry it fails with `auth{credential_expired}` and the hint to run `claude`. `codex` defaults to `refresh: never`; `memory` and `write_back` use the public Codex client id at `auth.openai.com/oauth/token` and the written file keeps every field and updates `last_refresh`.
 - A 401 on a session credential forces exactly one re-read of the store and, when refresh is allowed, one refresh, then one retry; a second 401 is the error.
 - `auth_status()` never fails on an expired or unrefreshable session: it reports `source: session:<preset>` with the stale `expires_at`, so apps can tell "expired, run the tool" from "nothing configured" (`source: null`).
-- Keychain reads are emitted by core for `codex` (service `Codex Auth`); the Python and JS hosts answer them not-found for now.
+- Keychain reads (2026-10-30): core emits `NeedRead {keychain {service, account}}` for `codex`; the Python and JS hosts answer them through the platform's own tools, matching how the `keyring` crate 3.6 (which Codex uses) stores entries: macOS generic password with service and account (`security find-generic-password -s -a -w`), Linux Secret Service item with attributes `service` and `username` (`secret-tool lookup`), Windows generic credential with target name `<account>.<service>` and a UTF-16LE blob (`CredReadW` via ctypes in Python, via PowerShell `Add-Type` in Node). Both bindings take a `keychain` callable to replace the default. Only the Linux path has run locally (tool absent, answers not-found); macOS and Windows are written to the verified formats but not exercised.
 
 ## Verified / Unverified
 

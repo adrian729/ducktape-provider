@@ -2,6 +2,7 @@
 import { defaultCore, loadCore } from "./core.js";
 import { drive } from "./driver.js";
 import { NotFoundError } from "./errors.js";
+import { readKeychain } from "./keychain.js";
 import { isBrowser } from "./platform.js";
 import { blocks, withViews } from "./sugar.js";
 
@@ -158,6 +159,7 @@ export class Provider {
       dangerously_allow_browser,
       fetch: doFetch,
       core,
+      keychain,
       ...rest
     } = options;
     const unknown = Object.keys(rest);
@@ -167,6 +169,8 @@ export class Provider {
     this.resolvers = new Map();
     this.observer = observer ?? null;
     this.fetch = doFetch ?? globalThis.fetch.bind(globalThis);
+    if (keychain !== undefined && typeof keychain !== "function") throw new TypeError("keychain must be a function taking (service, account)");
+    this.keychain = keychain ?? readKeychain;
     this.corePromise = core ? (core.then ? core : loadCore(core)) : null;
     const config = { ns };
     if (base_url) config.base_url = base_url.replace(/\/+$/, "");
@@ -215,7 +219,7 @@ export class Provider {
   }
 
   get host() {
-    return { secrets: this.secrets, resolvers: this.resolvers };
+    return { secrets: this.secrets, resolvers: this.resolvers, keychain: this.keychain };
   }
 
   core() {
