@@ -128,6 +128,10 @@ Matrix (5 jobs; PRs can run only the Linux x64 and wasm jobs):
 
 Single-runner alternative: zig + xwin on one Linux box can build every native target for a pure-Rust crate, but the conformance suite still needs real runners, so it saves nothing.
 
+### Status (2026-10-30)
+
+The build matrix above is wired as `.github/workflows/package.yml` for wheels (abi3, five targets), the sdist and the npm tarball with `wasm-opt`; artifacts only, no publishing yet. Free-threaded wheels and the C, .NET, Java and Go artifacts are not built yet.
+
 ## 4. Release and distribution
 
 | Target | Artifact | Registry | Auth | Provenance |

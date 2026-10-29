@@ -1,0 +1,114 @@
+name: Package
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wheels:
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-24.04, target: x86_64, smoke: true }
+          - { runner: ubuntu-24.04, target: aarch64, smoke: false }
+          - { runner: windows-2025, target: x64, smoke: true }
+          - { runner: macos-15, target: aarch64, smoke: true }
+          - { runner: macos-15-intel, target: x86_64, smoke: true }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          manylinux: auto
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - if: matrix.platform.smoke
+        shell: bash
+        run: |
+          pip install --no-index --find-links dist ducktape-provider
+          pip install httpx pytest
+          python -c "import ducktape_provider as d; print(d.SCHEMA_VERSION)"
+          python -m pytest -q
+        working-directory: bindings/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
+          path: bindings/python/dist
+          if-no-files-found: error
+
+  sdist:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: bindings/python/dist
+          if-no-files-found: error
+
+  npm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      BINARYEN_VERSION: version_133
+      BINARYEN_SHA256: 2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install binaryen
+        run: |
+          curl -sSL -o binaryen.tar.gz "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          echo "${BINARYEN_SHA256}  binaryen.tar.gz" | sha256sum --check
+          tar xzf binaryen.tar.gz
+          echo "${PWD}/binaryen-${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+        working-directory: ${{ runner.temp }}
+      - run: npm run build:wasm
+        working-directory: bindings/js
+      - run: npm test
+        working-directory: bindings/js
+      - name: Check the package version matches the workspace
+        run: |
+          workspace=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "ducktape-core") | .version')
+          package=$(node -p "require('./bindings/js/package.json').version")
+          test "$workspace" = "$package" || { echo "package.json $package != workspace $workspace"; exit 1; }
+      - run: npm pack --pack-destination dist
+        working-directory: bindings/js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm
+          path: bindings/js/dist
+          if-no-files-found: error

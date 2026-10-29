@@ -131,6 +131,8 @@ cd bindings/python && uvx maturin develop --uv && .venv/bin/python -m pytest
 cd bindings/js && npm run build:wasm && npm test
 ```
 
+`npm run build:wasm` runs `wasm-opt -O3` on `core.wasm` when [binaryen](https://github.com/WebAssembly/binaryen) is on the PATH. Wheels, the sdist and the npm tarball are built by the Package workflow on every push and uploaded as artifacts.
+
 ## License
 
 [MIT](LICENSE)
