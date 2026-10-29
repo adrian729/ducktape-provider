@@ -1,0 +1,167 @@
+import assert from "node:assert/strict";
+import { join } from "node:path";
+import { test } from "node:test";
+
+import * as dp from "../src/index.js";
+import { Provider, assistant, tool, toolResult, user } from "../src/index.js";
+import { doneResponse, fixtures, load, requestOf, scripted, withoutAuthSource } from "./helpers.js";
+
+const anthropic = (name) => load(join(fixtures, "wire", "anthropic.messages", `${name}.json`));
+
+function provider(name, options = {}) {
+  const fixture = anthropic(name);
+  const seen = [];
+  const config = fixture.start.provider;
+  const p = new Provider(config.ns, { base_url: config.base_url, auth: "sk-ant-test-key", fetch: scripted(fixture, seen), ...options });
+  return { p, fixture, seen };
+}
+
+test("chat matches the fixture", async () => {
+  const { p, fixture, seen } = provider("chat_text_reasoning");
+  const req = requestOf(fixture);
+  const r = await p.chat(req.messages, { model: req.model, options: req.options });
+  const expected = doneResponse(fixture);
+  assert.deepEqual(withoutAuthSource(r.content), withoutAuthSource(expected.content));
+  assert.equal(r.stop.reason, expected.stop.reason);
+  assert.deepEqual(r.usage, expected.usage);
+  assert.ok(r.text.length > 0);
+  assert.equal(JSON.stringify(r).includes('"text"'), true);
+  assert.equal(seen[0].init.headers["x-api-key"], "sk-ant-test-key");
+  assert.equal(seen[0].body.model, req.model);
+});
+
+test("stream ends with finish and keeps text", async () => {
+  const { p, fixture } = provider("stream_text_reasoning_chunked");
+  const req = requestOf(fixture);
+  const events = [];
+  const s = p.stream(req.messages, { model: req.model });
+  for await (const ev of s) events.push(ev);
+  assert.equal(events.at(-1).type, "finish");
+  const text = events.filter((e) => e.type === "text_delta").map((e) => e.text).join("");
+  assert.equal(text, s.response.text);
+  assert.equal(events[0].type, "block_start");
+});
+
+test("tool round trip builds history", async () => {
+  const { p, fixture } = provider("chat_tool_call");
+  const req = requestOf(fixture);
+  const r = await p.chat(req.messages, { model: req.model, tools: req.tools });
+  assert.equal(r.stop.reason, "tool_call");
+  const call = r.toolCalls[0];
+  const history = [...req.messages, assistant(r), tool(toolResult(call.id, "4"))];
+  assert.equal(history.at(-2).role, "assistant");
+  assert.equal(history.at(-1).content[0].tool_call_id, call.id);
+});
+
+test("errors map to classes", async () => {
+  const { p, fixture } = provider("chat_context_overflow");
+  const req = requestOf(fixture);
+  await assert.rejects(p.chat(req.messages, { model: req.model }), (e) => {
+    assert.ok(e instanceof dp.ContextOverflowError);
+    assert.ok(e instanceof dp.ProviderError);
+    assert.equal(e.kind, "context_overflow");
+    return true;
+  });
+});
+
+test("no credential is an auth error", async () => {
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_AUTH_TOKEN;
+  const p = new Provider("anthropic", { default_model: "m", fetch: async () => new Response("", { status: 500 }) });
+  await assert.rejects(p.chat([user("hi")]), (e) => e instanceof dp.AuthError && e.code === "no_credential");
+});
+
+test("env credential is used", async () => {
+  process.env.ANTHROPIC_API_KEY = "sk-from-env";
+  try {
+    const fixture = anthropic("chat_text_reasoning");
+    const seen = [];
+    const p = new Provider("anthropic", { fetch: scripted(fixture, seen) });
+    const req = requestOf(fixture);
+    await p.chat(req.messages, { model: req.model });
+    assert.equal(seen[0].init.headers["x-api-key"], "sk-from-env");
+    assert.equal((await p.authStatus()).source, "env:ANTHROPIC_API_KEY");
+  } finally {
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});
+
+test("resolver credential, sync or async", async () => {
+  const fixture = anthropic("chat_text_reasoning");
+  const seen = [];
+  const p = new Provider("anthropic", { auth: dp.resolver(async () => ({ secret: "sk-resolved" })), fetch: scripted(fixture, seen) });
+  const req = requestOf(fixture);
+  await p.chat(req.messages, { model: req.model });
+  assert.equal(seen[0].init.headers["x-api-key"], "sk-resolved");
+});
+
+test("argument errors come before any request", async () => {
+  const p = new Provider("anthropic", { auth: "k", fetch: async () => new Response("", { status: 500 }) });
+  await assert.rejects(p.chat([user("hi")]), TypeError);
+  await assert.rejects(p.chat([user("hi")], { model: "m", options: { temperature: 1 } }), TypeError);
+  await assert.rejects(p.embed([], { model: "e" }), TypeError);
+  assert.throws(() => new Provider("mistral"), TypeError);
+});
+
+test("connection failure maps to a network error", async () => {
+  let calls = 0;
+  const p = new Provider("anthropic", {
+    auth: "k",
+    fetch: async () => {
+      calls += 1;
+      throw new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
+    },
+  });
+  await assert.rejects(p.chat([user("hi")], { model: "m", options: { retries: 0 } }), (e) => e instanceof dp.NetworkError);
+  assert.equal(calls, 1);
+});
+
+test("models are cached", async () => {
+  const { p, fixture, seen } = provider("models_two_pages");
+  const first = await p.models();
+  const second = await p.models();
+  assert.deepEqual(first.map((m) => m.id), second.map((m) => m.id));
+  assert.equal(seen.length, fixture.http.length);
+});
+
+test("capabilities come from the shipped table", async () => {
+  const { p, fixture } = provider("capabilities_shipped");
+  const caps = await p.capabilities(fixture.start.operation.model);
+  assert.deepEqual(caps, fixture.exchange.at(-1).step.effect.result.capabilities);
+});
+
+test("stream cancel raises cancelled", async () => {
+  const { p, fixture } = provider("stream_text_reasoning_chunked");
+  const req = requestOf(fixture);
+  const s = p.stream(req.messages, { model: req.model });
+  const first = await s.next();
+  assert.equal(first.value.type, "block_start");
+  s.cancel();
+  await assert.rejects(
+    (async () => {
+      for await (const _ of s) void _;
+    })(),
+    (e) => e instanceof dp.CancelledError,
+  );
+});
+
+test("abort signal cancels a chat", async () => {
+  const fixture = anthropic("chat_text_reasoning");
+  const controller = new AbortController();
+  const p = new Provider("anthropic", {
+    auth: "k",
+    fetch: (url, init) => {
+      controller.abort();
+      return scripted(fixture)(url, init);
+    },
+  });
+  const req = requestOf(fixture);
+  await assert.rejects(p.chat(req.messages, { model: req.model, signal: controller.signal }), (e) => e instanceof dp.CancelledError);
+});
+
+test("image bytes become base64", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const m = user("what is this?", dp.image(png));
+  assert.equal(m.content[1].data, Buffer.from(png).toString("base64"));
+  assert.deepEqual(m.content[0], { type: "text", text: "what is this?" });
+});

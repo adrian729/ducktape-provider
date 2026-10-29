@@ -30,3 +30,7 @@ target/
 # Native modules built in place
 *.so
 *.pyd
+
+# JS build output
+bindings/js/core.wasm
+node_modules/

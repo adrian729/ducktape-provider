@@ -1,0 +1,32 @@
+{
+  "name": "ducktape-provider",
+  "version": "0.1.0",
+  "description": "One normalized interface over model vendors",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./core.wasm": "./core.wasm"
+  },
+  "files": [
+    "src/",
+    "index.d.ts",
+    "core.wasm"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:wasm": "node scripts/build-wasm.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/adrian729/ducktape-provider"
+  }
+}

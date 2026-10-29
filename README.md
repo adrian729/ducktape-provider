@@ -20,6 +20,7 @@ Status: in development, not released. The interface is frozen in [`docs/ducktape
 | `crates/conformance` | Fixture runner |
 | `crates/py` | PyO3 module behind the Python package |
 | `bindings/python` | Python package: `Provider`, `AsyncProvider`, messages, errors |
+| `bindings/js` | npm package on `core.wasm`: `Provider`, streams, messages, errors, `index.d.ts` |
 | `fixtures/` | Samples every binding must pass |
 
 ## Python
@@ -68,6 +69,49 @@ Every error is a `ProviderError` with `kind`, `status`, `code`, `retryable`, `re
 
 Types are dataclasses in [`bindings/python/src/ducktape_provider/_types.py`](bindings/python/src/ducktape_provider/_types.py); the JSON contract behind them is [`schema/provider.schema.json`](schema/provider.schema.json).
 
+## JavaScript
+
+Not on npm yet. Build the wasm core into the package, then import it from `bindings/js`:
+
+```
+cd bindings/js && npm run build:wasm && npm test
+```
+
+```js
+import { Provider, user, assistant, tool, toolResult } from "ducktape-provider";
+
+const p = new Provider("openai", { default_model: "gpt-5" });            // key from OPENAI_API_KEY
+const r = await p.chat([user("hello")]);
+console.log(r.text, r.usage, r.stop.reason);
+
+for await (const ev of p.stream([user("tell me a story")])) {
+  if (ev.type === "text_delta") process.stdout.write(ev.text);
+}
+
+const add = { type: "function", name: "add", description: "Adds two numbers", input_schema: { type: "object", properties: { a: { type: "number" }, b: { type: "number" } } } };
+let history = [user("what is 2+2?")];
+let reply = await p.chat(history, { tools: [add] });
+if (reply.stop.reason === "tool_call") {
+  const call = reply.toolCalls[0];
+  history = [...history, assistant(reply), tool(toolResult(call.id, "4"))];
+  reply = await p.chat(history, { tools: [add] });
+}
+```
+
+| Need | Write |
+|---|---|
+| Another host, same wire | `new Provider("openai", { base_url: "https://api.groq.com/openai", auth: env("GROQ_API_KEY") })` |
+| A key in code | `new Provider("anthropic", { auth: "sk-ant-..." })` |
+| A token fetched at request time | `new Provider("openai", { auth: resolver(getToken) })` |
+| In a browser | `resolver()` against your backend; an API key needs `dangerously_allow_browser: true` |
+| Cancel | `signal: controller.signal` on any call, or `stream.cancel()` |
+| Options and vendor fields | same keys as Python: `{ options: { reasoning: "high" }, vendor: { openai: { temperature: 0.2 } } }` |
+| Images | `user("what is this?", image(pngBytes))` or `image(null, { url: "https://..." })` |
+| Your own transport | `new Provider("openai", { fetch: myFetch })` |
+| Your own `core.wasm` location | `new Provider("openai", { core: new URL("/static/core.wasm", location.href) })` |
+
+Data fields use the schema's names (`default_model`, `tool_call_id`); methods and views are camelCase (`modelInfo`, `toolCalls`). Errors are the same classes as in Python, with `kind` as the stable discriminator. Types: [`bindings/js/index.d.ts`](bindings/js/index.d.ts).
+
 ## Development
 
 ```
@@ -77,6 +121,7 @@ cargo test
 cargo build --profile wasm --target wasm32-unknown-unknown -p ducktape-abi
 pip install jsonschema referencing && python scripts/check_fixtures.py .
 cd bindings/python && uvx maturin develop --uv && .venv/bin/python -m pytest
+cd bindings/js && npm run build:wasm && npm test
 ```
 
 ## License
