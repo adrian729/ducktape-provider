@@ -1,0 +1,167 @@
+{
+  "name": "chat_payment_required",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "google"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gemini-3.8-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "google-key"
+  },
+  "http": [
+    {
+      "status": 402,
+      "headers": {},
+      "body": "{\"error\": {\"code\": \"payment_required\", \"message\": \"credit balance depleted\"}}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "GEMINI_API_KEY"
+            ],
+            "kind": "api_key",
+            "placement": "x-goog-api-key"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 178,
+              "headers": {
+                "content-type": "application/json",
+                "x-goog-api-key": "***"
+              },
+              "method": "POST",
+              "url": "https://generativelanguage.googleapis.com/v1beta/interactions"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://generativelanguage.googleapis.com/v1beta/interactions",
+            "headers": {
+              "content-type": "application/json",
+              "x-goog-api-key": "google-key"
+            },
+            "body": "{\"generation_config\":{\"thinking_summaries\":\"auto\"},\"input\":[{\"content\":[{\"text\":\"hi\",\"type\":\"text\"}],\"type\":\"user_input\"}],\"model\":\"gemini-3.8-flash\",\"store\":false,\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 402,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 402
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJlcnJvciI6IHsiY29kZSI6ICJwYXltZW50X3JlcXVpcmVkIiwgIm1lc3NhZ2UiOiAiY3JlZGl0IGJhbGFuY2UgZGVwbGV0ZWQifX0="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "quota",
+            "message": "HTTP 402: credit balance depleted",
+            "status": 402,
+            "code": "payment_required",
+            "retryable": false,
+            "attempts": 1,
+            "body": {
+              "error": {
+                "code": "payment_required",
+                "message": "credit balance depleted"
+              }
+            },
+            "origin": {
+              "wire": "google.interactions",
+              "ns": "google",
+              "base_url": "https://generativelanguage.googleapis.com",
+              "model": "gemini-3.8-flash",
+              "auth_source": "env:GEMINI_API_KEY"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

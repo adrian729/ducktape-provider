@@ -1,0 +1,188 @@
+{
+  "name": "chat_malformed_output_mid_stream",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "google"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gemini-3.8-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "add",
+            "description": "adds two numbers",
+            "input_schema": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "google-key"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "text/event-stream"
+      },
+      "body": "event: interaction.created\ndata: {\"interaction\":{\"id\":\"v1_abc\",\"status\":\"in_progress\",\"object\":\"interaction\",\"model\":\"gemini-3.8-flash\"},\"event_type\":\"interaction.created\"}\n\nevent: error\ndata: {\"error\":{\"code\":\"malformed_function_call\",\"message\":\"bad call\"},\"event_type\":\"error\"}\n\n"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "GEMINI_API_KEY"
+            ],
+            "kind": "api_key",
+            "placement": "x-goog-api-key"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 344,
+              "headers": {
+                "content-type": "application/json",
+                "x-goog-api-key": "***"
+              },
+              "method": "POST",
+              "url": "https://generativelanguage.googleapis.com/v1beta/interactions"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://generativelanguage.googleapis.com/v1beta/interactions",
+            "headers": {
+              "content-type": "application/json",
+              "x-goog-api-key": "google-key"
+            },
+            "body": "{\"generation_config\":{\"thinking_summaries\":\"auto\"},\"input\":[{\"content\":[{\"text\":\"hi\",\"type\":\"text\"}],\"type\":\"user_input\"}],\"model\":\"gemini-3.8-flash\",\"store\":false,\"stream\":true,\"tools\":[{\"description\":\"adds two numbers\",\"name\":\"add\",\"parameters\":{\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"type\":\"object\"},\"type\":\"function\"}]}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "ZXZlbnQ6IGludGVyYWN0aW9uLmNyZWF0ZWQKZGF0YTogeyJpbnRlcmFjdGlvbiI6eyJpZCI6InYxX2FiYyIsInN0YXR1cyI6ImluX3Byb2dyZXNzIiwib2JqZWN0IjoiaW50ZXJhY3Rpb24iLCJtb2RlbCI6ImdlbWluaS0zLjgtZmxhc2gifSwiZXZlbnRfdHlwZSI6ImludGVyYWN0aW9uLmNyZWF0ZWQifQoKZXZlbnQ6IGVycm9yCmRhdGE6IHsiZXJyb3IiOnsiY29kZSI6Im1hbGZvcm1lZF9mdW5jdGlvbl9jYWxsIiwibWVzc2FnZSI6ImJhZCBjYWxsIn0sImV2ZW50X3R5cGUiOiJlcnJvciJ9Cgo="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "response",
+            "response": {
+              "content": [],
+              "stop": {
+                "reason": "malformed_output",
+                "raw": "malformed_function_call"
+              },
+              "usage": null,
+              "warnings": [],
+              "origin": {
+                "wire": "google.interactions",
+                "ns": "google",
+                "base_url": "https://generativelanguage.googleapis.com",
+                "model": "gemini-3.8-flash",
+                "auth_source": "env:GEMINI_API_KEY"
+              },
+              "latency_ms": 400.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

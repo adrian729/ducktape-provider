@@ -1,0 +1,83 @@
+{
+  "name": "capabilities_shipped",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "google"
+    },
+    "operation": {
+      "type": "capabilities",
+      "model": "gemini-3.8-flash"
+    }
+  },
+  "secrets": {
+    "auth:0": "google-key"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "capabilities",
+            "capabilities": {
+              "reasoning": {
+                "levels": [
+                  "auto",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "can_disable": false
+              },
+              "tool_choice": [
+                "auto",
+                "none",
+                "required",
+                "named"
+              ],
+              "parallel_tools": {
+                "supported": true,
+                "toggle": false
+              },
+              "output": {
+                "json_schema": true
+              },
+              "cache": {
+                "breakpoints": false,
+                "ttls": null
+              },
+              "inputs": [
+                "text",
+                "image",
+                "document",
+                "audio",
+                "video"
+              ],
+              "tools": {
+                "functions": true,
+                "hosted": [
+                  "google.google_search",
+                  "google.google_maps",
+                  "google.code_execution",
+                  "google.url_context",
+                  "google.file_search",
+                  "google.computer_use",
+                  "google.mcp_server"
+                ]
+              },
+              "embeddings": false,
+              "source": "shipped"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

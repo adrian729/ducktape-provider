@@ -1,0 +1,254 @@
+{
+  "name": "models_two_pages",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "google"
+    },
+    "operation": {
+      "type": "models",
+      "refresh": false
+    }
+  },
+  "secrets": {
+    "auth:0": "google-key"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": "{\"models\": [{\"name\": \"models/gemini-3.8-flash\", \"baseModelId\": \"gemini-3.8-flash\", \"version\": \"001\", \"displayName\": \"gemini-3.8-flash\", \"inputTokenLimit\": 1048576, \"outputTokenLimit\": 65536, \"supportedGenerationMethods\": [\"generateContent\", \"createInteraction\"], \"thinking\": true}], \"nextPageToken\": \"p2\"}"
+    },
+    {
+      "status": 200,
+      "headers": {},
+      "body": "{\"models\": [{\"name\": \"models/gemini-embedding-2\", \"baseModelId\": \"gemini-embedding-2\", \"version\": \"001\", \"displayName\": \"gemini-embedding-2\", \"inputTokenLimit\": 2048, \"outputTokenLimit\": 1, \"supportedGenerationMethods\": [\"embedContent\"], \"thinking\": true}]}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "GEMINI_API_KEY"
+            ],
+            "kind": "api_key",
+            "placement": "x-goog-api-key"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 0,
+              "headers": {
+                "content-type": "application/json",
+                "x-goog-api-key": "***"
+              },
+              "method": "GET",
+              "url": "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+            "headers": {
+              "content-type": "application/json",
+              "x-goog-api-key": "google-key"
+            },
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJtb2RlbHMiOiBbeyJuYW1lIjogIm1vZGVscy9nZW1pbmktMy44LWZsYXNoIiwgImJhc2VNb2RlbElkIjogImdlbWluaS0zLjgtZmxhc2giLCAidmVyc2lvbiI6ICIwMDEiLCAiZGlzcGxheU5hbWUiOiAiZ2VtaW5pLTMuOC1mbGFzaCIsICJpbnB1dFRva2VuTGltaXQiOiAxMDQ4NTc2LCAib3V0cHV0VG9rZW5MaW1pdCI6IDY1NTM2LCAic3VwcG9ydGVkR2VuZXJhdGlvbk1ldGhvZHMiOiBbImdlbmVyYXRlQ29udGVudCIsICJjcmVhdGVJbnRlcmFjdGlvbiJdLCAidGhpbmtpbmciOiB0cnVlfV0sICJuZXh0UGFnZVRva2VuIjogInAyIn0="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 0,
+              "headers": {
+                "content-type": "application/json",
+                "x-goog-api-key": "***"
+              },
+              "method": "GET",
+              "url": "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&pageToken=p2"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&pageToken=p2",
+            "headers": {
+              "content-type": "application/json",
+              "x-goog-api-key": "google-key"
+            },
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 500.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJtb2RlbHMiOiBbeyJuYW1lIjogIm1vZGVscy9nZW1pbmktZW1iZWRkaW5nLTIiLCAiYmFzZU1vZGVsSWQiOiAiZ2VtaW5pLWVtYmVkZGluZy0yIiwgInZlcnNpb24iOiAiMDAxIiwgImRpc3BsYXlOYW1lIjogImdlbWluaS1lbWJlZGRpbmctMiIsICJpbnB1dFRva2VuTGltaXQiOiAyMDQ4LCAib3V0cHV0VG9rZW5MaW1pdCI6IDEsICJzdXBwb3J0ZWRHZW5lcmF0aW9uTWV0aG9kcyI6IFsiZW1iZWRDb250ZW50Il0sICJ0aGlua2luZyI6IHRydWV9XX0="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "models",
+            "models": [
+              {
+                "id": "gemini-3.8-flash",
+                "kind": "chat",
+                "context_window": 1048576,
+                "max_output_tokens": 65536,
+                "raw": {
+                  "baseModelId": "gemini-3.8-flash",
+                  "displayName": "gemini-3.8-flash",
+                  "inputTokenLimit": 1048576,
+                  "name": "models/gemini-3.8-flash",
+                  "outputTokenLimit": 65536,
+                  "supportedGenerationMethods": [
+                    "generateContent",
+                    "createInteraction"
+                  ],
+                  "thinking": true,
+                  "version": "001"
+                }
+              },
+              {
+                "id": "gemini-embedding-2",
+                "kind": "embedding",
+                "context_window": 2048,
+                "max_output_tokens": 1,
+                "raw": {
+                  "baseModelId": "gemini-embedding-2",
+                  "displayName": "gemini-embedding-2",
+                  "inputTokenLimit": 2048,
+                  "name": "models/gemini-embedding-2",
+                  "outputTokenLimit": 1,
+                  "supportedGenerationMethods": [
+                    "embedContent"
+                  ],
+                  "thinking": true,
+                  "version": "001"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

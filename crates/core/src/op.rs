@@ -332,6 +332,11 @@ impl Operation {
                     e.code = Some("image_fetch".to_owned());
                     return Step::failed(e);
                 }
+                if let (Job::Chat { .. }, Some(w), Some(ctx)) = (&self.job, &self.wire, &self.ctx) {
+                    if let Some(response) = w.error_as_response(ctx, status, &body) {
+                        return self.finish_chat(response);
+                    }
+                }
                 let mut e = match &self.wire {
                     Some(w) => w.classify(status, &headers, &body),
                     None => ProviderError::new(ErrorKind::Server, format!("HTTP {status}")),
@@ -1021,10 +1026,14 @@ impl Operation {
         let Some(mut decoder) = self.decoder.take() else {
             return Step::failed(self.error(ErrorKind::MalformedResponse, "no decoder"));
         };
-        let mut response = match decoder.finish() {
+        let response = match decoder.finish() {
             Ok(r) => r,
             Err(e) => return Step::failed(self.with_origin(e)),
         };
+        self.finish_chat(response)
+    }
+
+    fn finish_chat(&mut self, mut response: Response) -> Step {
         let elapsed = self.elapsed_ms();
         let wire = self.wire.as_ref().expect("wire");
         let continue_turn = wire.wants_continuation(&response);

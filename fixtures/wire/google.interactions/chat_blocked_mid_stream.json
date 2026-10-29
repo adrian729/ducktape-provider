@@ -1,0 +1,176 @@
+{
+  "name": "chat_blocked_mid_stream",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "google"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gemini-3.8-flash",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "google-key"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "text/event-stream"
+      },
+      "body": "event: interaction.created\ndata: {\"interaction\":{\"id\":\"v1_abc\",\"status\":\"in_progress\",\"object\":\"interaction\",\"model\":\"gemini-3.8-flash\"},\"event_type\":\"interaction.created\"}\n\nevent: step.start\ndata: {\"index\":0,\"step\":{\"type\":\"model_output\"},\"event_type\":\"step.start\"}\n\nevent: step.delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text\",\"text\":\"I was\"},\"event_type\":\"step.delta\"}\n\nevent: error\ndata: {\"error\":{\"code\":\"safety\",\"message\":\"blocked\"},\"event_type\":\"error\"}\n\n"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "GEMINI_API_KEY"
+            ],
+            "kind": "api_key",
+            "placement": "x-goog-api-key"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 178,
+              "headers": {
+                "content-type": "application/json",
+                "x-goog-api-key": "***"
+              },
+              "method": "POST",
+              "url": "https://generativelanguage.googleapis.com/v1beta/interactions"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://generativelanguage.googleapis.com/v1beta/interactions",
+            "headers": {
+              "content-type": "application/json",
+              "x-goog-api-key": "google-key"
+            },
+            "body": "{\"generation_config\":{\"thinking_summaries\":\"auto\"},\"input\":[{\"content\":[{\"text\":\"hi\",\"type\":\"text\"}],\"type\":\"user_input\"}],\"model\":\"gemini-3.8-flash\",\"store\":false,\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "ZXZlbnQ6IGludGVyYWN0aW9uLmNyZWF0ZWQKZGF0YTogeyJpbnRlcmFjdGlvbiI6eyJpZCI6InYxX2FiYyIsInN0YXR1cyI6ImluX3Byb2dyZXNzIiwib2JqZWN0IjoiaW50ZXJhY3Rpb24iLCJtb2RlbCI6ImdlbWluaS0zLjgtZmxhc2gifSwiZXZlbnRfdHlwZSI6ImludGVyYWN0aW9uLmNyZWF0ZWQifQoKZXZlbnQ6IHN0ZXAuc3RhcnQKZGF0YTogeyJpbmRleCI6MCwic3RlcCI6eyJ0eXBlIjoibW9kZWxfb3V0cHV0In0sImV2ZW50X3R5cGUiOiJzdGVwLnN0YXJ0In0KCmV2ZW50OiBzdGVwLmRlbHRhCmRhdGE6IHsiaW5kZXgiOjAsImRlbHRhIjp7InR5cGUiOiJ0ZXh0IiwidGV4dCI6Ikkgd2FzIn0sImV2ZW50X3R5cGUiOiJzdGVwLmRlbHRhIn0KCmV2ZW50OiBlcnJvcgpkYXRhOiB7ImVycm9yIjp7ImNvZGUiOiJzYWZldHkiLCJtZXNzYWdlIjoiYmxvY2tlZCJ9LCJldmVudF90eXBlIjoiZXJyb3IifQoK"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "response",
+            "response": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "I was"
+                }
+              ],
+              "stop": {
+                "reason": "content_filtered",
+                "raw": "safety"
+              },
+              "usage": null,
+              "warnings": [],
+              "origin": {
+                "wire": "google.interactions",
+                "ns": "google",
+                "base_url": "https://generativelanguage.googleapis.com",
+                "model": "gemini-3.8-flash",
+                "auth_source": "env:GEMINI_API_KEY"
+              },
+              "latency_ms": 400.0,
+              "first_token_ms": 300.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

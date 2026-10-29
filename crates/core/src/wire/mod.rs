@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
 pub mod anthropic;
+pub mod google;
 pub mod ollama;
 pub mod openai;
 
@@ -106,6 +107,15 @@ pub trait Wire {
     fn inline_images(&self) -> bool {
         false
     }
+    /// Turns a non-2xx chat reply into a response when the vendor reports blocked output as an error.
+    fn error_as_response(
+        &self,
+        _ctx: &CallContext,
+        _status: u16,
+        _body: &[u8],
+    ) -> Option<Response> {
+        None
+    }
 }
 
 /// Codec for a namespace.
@@ -114,6 +124,7 @@ pub fn for_ns(ns: &Ns) -> Option<Box<dyn Wire>> {
         Ns::Anthropic => Some(Box::new(anthropic::AnthropicMessages)),
         Ns::Openai => Some(Box::new(openai::OpenaiResponses)),
         Ns::Ollama => Some(Box::new(ollama::OllamaNative)),
+        Ns::Google => Some(Box::new(google::GoogleInteractions)),
         _ => None,
     }
 }
