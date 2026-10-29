@@ -26,3 +26,7 @@ tmp/
 
 # Rust
 target/
+
+# Native modules built in place
+*.so
+*.pyd

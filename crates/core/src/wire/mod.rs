@@ -58,7 +58,7 @@ pub struct Decoded {
 }
 
 /// Incremental decoder of one streamed chat reply.
-pub trait ChatDecoder {
+pub trait ChatDecoder: Send + Sync {
     /// Decodes a chunk into normalized events.
     fn feed(&mut self, bytes: &[u8]) -> Result<Decoded, ProviderError>;
     /// Builds the response once the body ended; `latency_ms` and `first_token_ms` are filled by the caller.
@@ -66,7 +66,7 @@ pub trait ChatDecoder {
 }
 
 /// A vendor wire protocol.
-pub trait Wire {
+pub trait Wire: Send + Sync {
     /// Builds the streamed chat request.
     fn build_chat(
         &self,

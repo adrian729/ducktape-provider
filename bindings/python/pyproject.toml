@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "ducktape-provider"
+description = "One normalized interface over model vendors"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dynamic = ["version"]
+dependencies = ["httpx>=0.27"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.urls]
+Repository = "https://github.com/adrian729/ducktape-provider"
+
+[tool.maturin]
+manifest-path = "../../crates/py/Cargo.toml"
+python-source = "src"
+module-name = "ducktape_provider._core"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -3,6 +3,7 @@
 use ducktape_core::effects::{Clock, Resume, Start, Step};
 use ducktape_core::types::{ErrorKind, ProviderError};
 use ducktape_core::Operation;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::slice;
 
 /// Version of this ABI; bumped on any breaking change to exports or JSON.
@@ -58,6 +59,20 @@ fn parse_error(message: String) -> Step {
     Step::failed(ProviderError::new(ErrorKind::BadRequest, message))
 }
 
+fn guarded(f: impl FnOnce() -> Step) -> Step {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|panic| {
+        let detail = panic
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        Step::failed(ProviderError::new(
+            ErrorKind::Other("internal".to_owned()),
+            format!("internal error: {detail}"),
+        ))
+    })
+}
+
 unsafe fn input<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     if ptr.is_null() || len == 0 {
         &[]
@@ -76,9 +91,17 @@ pub unsafe extern "C" fn ducktape_op_start(
 ) -> *mut Operation {
     match serde_json::from_slice::<Start>(input(json, len)) {
         Ok(start) => {
-            let (op, step) = Operation::start(start);
+            let mut op = None;
+            let step = guarded(|| {
+                let (started, step) = Operation::start(start);
+                op = Some(started);
+                step
+            });
             give_step(&step, out, out_len);
-            Box::into_raw(Box::new(op))
+            match op {
+                Some(op) => Box::into_raw(Box::new(op)),
+                None => std::ptr::null_mut(),
+            }
         }
         Err(e) => {
             give_step(
@@ -103,7 +126,7 @@ pub unsafe extern "C" fn ducktape_op_resume(
     let Some(op) = op.as_mut() else { return -1 };
     match serde_json::from_slice::<Resume>(input(json, len)) {
         Ok(resume) => {
-            give_step(&op.resume(resume), out, out_len);
+            give_step(&guarded(|| op.resume(resume)), out, out_len);
             0
         }
         Err(e) => {
@@ -131,7 +154,8 @@ pub unsafe extern "C" fn ducktape_op_feed(
     let Some(op) = op.as_mut() else { return -1 };
     match serde_json::from_slice::<Clock>(input(clock_json, clock_len)) {
         Ok(clock) => {
-            give_step(&op.feed(input(bytes, bytes_len), clock), out, out_len);
+            let bytes = input(bytes, bytes_len);
+            give_step(&guarded(|| op.feed(bytes, clock)), out, out_len);
             0
         }
         Err(e) => {

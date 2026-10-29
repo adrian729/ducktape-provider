@@ -1,0 +1,21 @@
+[package]
+name = "ducktape-py"
+description = "PyO3 module of ducktape-core: the effects state machine over native Python objects"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "ducktape_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+ducktape-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+pyo3 = { version = "0.30.1", features = ["extension-module", "abi3-py310"] }

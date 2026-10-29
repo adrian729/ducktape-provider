@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/abi", "crates/conformance"]
-default-members = ["crates/core", "crates/abi", "crates/conformance"]
+members = ["crates/core", "crates/abi", "crates/conformance", "crates/py"]
+default-members = ["crates/core", "crates/abi", "crates/conformance", "crates/py"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,8 +21,8 @@ zeroize = "1.8.1"
 lto = "fat"
 codegen-units = 1
 opt-level = 3
-panic = "abort"
 strip = true
 
-[profile.dev]
+[profile.wasm]
+inherits = "release"
 panic = "abort"
