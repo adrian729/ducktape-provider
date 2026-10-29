@@ -248,7 +248,7 @@ pub enum OperationResult {
     Response { response: Response },
     StreamEnd,
     Embed { response: EmbedResponse },
-    Models { models: Vec<String> },
+    Models { models: Vec<ModelInfo> },
     ModelInfo { info: Option<ModelInfo> },
     Capabilities { capabilities: Option<Capabilities> },
     AuthStatus { status: AuthStatus },

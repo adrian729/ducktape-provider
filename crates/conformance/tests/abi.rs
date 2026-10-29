@@ -23,17 +23,36 @@ fn abi_version_is_one() {
 #[test]
 fn auth_status_runs_through_the_abi() {
     let json = format!(
-        r#"{{"clock": {CLOCK}, "provider": {{"ns": "openai"}}, "operation": {{"type": "auth_status"}}}}"#
+        r#"{{"clock": {CLOCK}, "provider": {{"ns": "anthropic"}}, "operation": {{"type": "auth_status"}}}}"#
     );
     unsafe {
         let (op, step) = call_start(&json);
         assert!(!op.is_null());
-        assert!(matches!(
-            step.effect,
-            Effect::Done {
-                result: OperationResult::AuthStatus { .. }
+        assert!(matches!(step.effect, Effect::NeedSecret { .. }));
+        let mut out: *mut u8 = std::ptr::null_mut();
+        let mut out_len = 0usize;
+        for (i, expect_done) in [(0, false), (1, true)] {
+            let resume = format!(
+                r#"{{"clock": {CLOCK}, "input": {{"type": "secret", "secret_ref": "auth:{i}", "found": false}}}}"#
+            );
+            assert_eq!(
+                ducktape_op_resume(op, resume.as_ptr(), resume.len(), &mut out, &mut out_len),
+                0
+            );
+            let step: Step =
+                serde_json::from_slice(std::slice::from_raw_parts(out, out_len)).unwrap();
+            ducktape_free(out, out_len);
+            if expect_done {
+                assert!(matches!(
+                    step.effect,
+                    Effect::Done {
+                        result: OperationResult::AuthStatus { .. }
+                    }
+                ));
+            } else {
+                assert!(matches!(step.effect, Effect::NeedSecret { .. }));
             }
-        ));
+        }
         ducktape_op_free(op);
     }
 }

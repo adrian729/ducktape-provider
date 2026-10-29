@@ -6,6 +6,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+pub mod replay;
+
 /// A type sample: a schema definition name and a value that must round-trip.
 #[derive(Debug, serde::Deserialize)]
 pub struct TypeSample {

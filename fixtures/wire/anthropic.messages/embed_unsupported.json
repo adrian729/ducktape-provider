@@ -1,0 +1,70 @@
+{
+  "name": "embed_unsupported",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic"
+    },
+    "operation": {
+      "type": "embed",
+      "request": {
+        "model": "x",
+        "input": [
+          "a"
+        ]
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-ant-test-key"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "ANTHROPIC_API_KEY"
+            ],
+            "kind": "api_key",
+            "placement": "x-api-key"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "unsupported",
+            "message": "Anthropic has no embeddings endpoint",
+            "code": "embed",
+            "retryable": false,
+            "attempts": 0,
+            "origin": {
+              "wire": "anthropic.messages",
+              "ns": "anthropic",
+              "base_url": "https://api.anthropic.com",
+              "model": "x",
+              "auth_source": "env:ANTHROPIC_API_KEY"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

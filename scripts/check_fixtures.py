@@ -13,5 +13,11 @@ for f in sorted((root / "fixtures/types").glob("*.json")):
     sid = e["$id"] if d in e["$defs"] else p["$id"]
     errs = list(V({"$ref": f"{sid}#/$defs/{d}"}, registry=reg).iter_errors(s["value"]))
     if errs: fails += 1; print("FAIL", f.name, [x.message[:100] for x in errs][:2])
+for f in sorted((root / "fixtures/wire").glob("*/*.json")):
+    s = json.load(open(f))
+    docs = [("Start", s["start"])] + [("Step", x["step"]) for x in s["exchange"]] + [("Input", x["input"]) for x in s["exchange"] if x.get("input")]
+    for d, v in docs:
+        errs = list(V({"$ref": f"{e['$id']}#/$defs/{d}"}, registry=reg).iter_errors(v))
+        if errs: fails += 1; print("FAIL", f.parent.name, f.name, d, [x.message[:100] for x in errs][:2]); break
 print("fixtures checked, failures:", fails)
 sys.exit(1 if fails else 0)

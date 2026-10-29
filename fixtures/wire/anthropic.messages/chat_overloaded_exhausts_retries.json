@@ -1,0 +1,279 @@
+{
+  "name": "chat_overloaded_exhausts_retries",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "claude-opus-5-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ],
+        "options": {
+          "retries": 1
+        }
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-ant-test-key"
+  },
+  "http": [
+    {
+      "status": 529,
+      "headers": {},
+      "body": "{\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"Overloaded\"}}"
+    },
+    {
+      "status": 529,
+      "headers": {},
+      "body": "{\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"Overloaded\"}}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "ANTHROPIC_API_KEY"
+            ],
+            "kind": "api_key",
+            "placement": "x-api-key"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 184,
+              "headers": {
+                "anthropic-version": "2026-10-21",
+                "content-type": "application/json",
+                "x-api-key": "***"
+              },
+              "method": "POST",
+              "url": "https://api.anthropic.com/v1/messages"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://api.anthropic.com/v1/messages",
+            "headers": {
+              "anthropic-version": "2026-10-21",
+              "content-type": "application/json",
+              "x-api-key": "sk-ant-test-key"
+            },
+            "body": "{\"max_tokens\":128000,\"messages\":[{\"content\":[{\"text\":\"hi\",\"type\":\"text\"}],\"role\":\"user\"}],\"model\":\"claude-opus-5-5\",\"stream\":true,\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 529,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 529
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJ0eXBlIjogImVycm9yIiwgImVycm9yIjogeyJ0eXBlIjogIm92ZXJsb2FkZWRfZXJyb3IiLCAibWVzc2FnZSI6ICJPdmVybG9hZGVkIn19"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_retry",
+            "data": {
+              "attempt": 1,
+              "kind": "server",
+              "sleep_ms": 500,
+              "status": 529
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_sleep",
+          "ms": 500
+        }
+      },
+      "input": {
+        "type": "slept"
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 2,
+              "body_bytes": 184,
+              "headers": {
+                "anthropic-version": "2026-10-21",
+                "content-type": "application/json",
+                "x-api-key": "***"
+              },
+              "method": "POST",
+              "url": "https://api.anthropic.com/v1/messages"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://api.anthropic.com/v1/messages",
+            "headers": {
+              "anthropic-version": "2026-10-21",
+              "content-type": "application/json",
+              "x-api-key": "sk-ant-test-key"
+            },
+            "body": "{\"max_tokens\":128000,\"messages\":[{\"content\":[{\"text\":\"hi\",\"type\":\"text\"}],\"role\":\"user\"}],\"model\":\"claude-opus-5-5\",\"stream\":true,\"thinking\":{\"display\":\"summarized\",\"type\":\"adaptive\"}}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 529,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 2,
+              "elapsed_ms": 600.0,
+              "request_id": null,
+              "status": 529
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJ0eXBlIjogImVycm9yIiwgImVycm9yIjogeyJ0eXBlIjogIm92ZXJsb2FkZWRfZXJyb3IiLCAibWVzc2FnZSI6ICJPdmVybG9hZGVkIn19"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "server",
+            "message": "HTTP 529: Overloaded",
+            "status": 529,
+            "code": "overloaded_error",
+            "retryable": true,
+            "attempts": 2,
+            "body": {
+              "error": {
+                "message": "Overloaded",
+                "type": "overloaded_error"
+              },
+              "type": "error"
+            },
+            "origin": {
+              "wire": "anthropic.messages",
+              "ns": "anthropic",
+              "base_url": "https://api.anthropic.com",
+              "model": "claude-opus-5-5",
+              "auth_source": "env:ANTHROPIC_API_KEY"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

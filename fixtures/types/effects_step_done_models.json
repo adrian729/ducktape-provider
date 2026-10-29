@@ -6,7 +6,10 @@
       "result": {
         "type": "models",
         "models": [
-          "a"
+          {
+            "id": "a",
+            "kind": "chat"
+          }
         ]
       }
     }

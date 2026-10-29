@@ -1,0 +1,84 @@
+{
+  "name": "capabilities_shipped",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic"
+    },
+    "operation": {
+      "type": "capabilities",
+      "model": "claude-sonnet-5-5"
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-ant-test-key"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "capabilities",
+            "capabilities": {
+              "reasoning": {
+                "levels": [
+                  "auto",
+                  "none",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "can_disable": true
+              },
+              "tool_choice": [
+                "auto",
+                "none"
+              ],
+              "parallel_tools": {
+                "supported": true,
+                "toggle": true
+              },
+              "output": {
+                "json_schema": true
+              },
+              "cache": {
+                "breakpoints": true,
+                "ttls": [
+                  "short",
+                  "long"
+                ]
+              },
+              "inputs": [
+                "text",
+                "image",
+                "document"
+              ],
+              "tools": {
+                "functions": true,
+                "hosted": [
+                  "anthropic.web_search",
+                  "anthropic.web_fetch",
+                  "anthropic.code_execution"
+                ]
+              },
+              "limits": {
+                "context_window": 1000000,
+                "max_output_tokens": 128000
+              },
+              "embeddings": false,
+              "source": "shipped"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,156 @@
+{
+  "name": "model_info_not_found",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic"
+    },
+    "operation": {
+      "type": "model_info",
+      "model": "claude-nope"
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-ant-test-key"
+  },
+  "http": [
+    {
+      "status": 404,
+      "headers": {},
+      "body": "{\"type\": \"error\", \"error\": {\"type\": \"not_found_error\", \"message\": \"model: claude-nope\"}}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "ANTHROPIC_API_KEY"
+            ],
+            "kind": "api_key",
+            "placement": "x-api-key"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 0,
+              "headers": {
+                "anthropic-version": "2026-10-21",
+                "content-type": "application/json",
+                "x-api-key": "***"
+              },
+              "method": "GET",
+              "url": "https://api.anthropic.com/v1/models/claude-nope"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "https://api.anthropic.com/v1/models/claude-nope",
+            "headers": {
+              "anthropic-version": "2026-10-21",
+              "content-type": "application/json",
+              "x-api-key": "sk-ant-test-key"
+            },
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 404,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 404
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJ0eXBlIjogImVycm9yIiwgImVycm9yIjogeyJ0eXBlIjogIm5vdF9mb3VuZF9lcnJvciIsICJtZXNzYWdlIjogIm1vZGVsOiBjbGF1ZGUtbm9wZSJ9fQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "not_found",
+            "message": "HTTP 404: model: claude-nope",
+            "status": 404,
+            "code": "not_found_error",
+            "retryable": false,
+            "attempts": 1,
+            "body": {
+              "error": {
+                "message": "model: claude-nope",
+                "type": "not_found_error"
+              },
+              "type": "error"
+            },
+            "origin": {
+              "wire": "anthropic.messages",
+              "ns": "anthropic",
+              "base_url": "https://api.anthropic.com",
+              "model": "claude-nope",
+              "auth_source": "env:ANTHROPIC_API_KEY"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

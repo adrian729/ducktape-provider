@@ -1,0 +1,97 @@
+{
+  "name": "capabilities_user_override",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic",
+      "base_url": "https://proxy.example.com",
+      "auth": {
+        "sources": [
+          {
+            "type": "inline",
+            "secret_ref": "k"
+          }
+        ]
+      },
+      "overrides": {
+        "capabilities": {
+          "tools": {
+            "functions": true,
+            "hosted": []
+          },
+          "source": "user"
+        }
+      }
+    },
+    "operation": {
+      "type": "capabilities",
+      "model": "claude-opus-5-5"
+    }
+  },
+  "secrets": {
+    "k": "s"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "capabilities",
+            "capabilities": {
+              "reasoning": {
+                "levels": [
+                  "auto",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "can_disable": false
+              },
+              "tool_choice": [
+                "auto",
+                "none"
+              ],
+              "parallel_tools": {
+                "supported": true,
+                "toggle": true
+              },
+              "output": {
+                "json_schema": true
+              },
+              "cache": {
+                "breakpoints": true,
+                "ttls": [
+                  "short",
+                  "long"
+                ]
+              },
+              "inputs": [
+                "text",
+                "image",
+                "document"
+              ],
+              "tools": {
+                "functions": true,
+                "hosted": []
+              },
+              "limits": {
+                "context_window": 1000000,
+                "max_output_tokens": 128000
+              },
+              "embeddings": false,
+              "source": "user"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

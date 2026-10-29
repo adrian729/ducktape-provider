@@ -1,10 +1,15 @@
 //! Sans-I/O core: normalized types, codecs and the effects state machine.
 #![forbid(unsafe_code)]
+#![allow(clippy::result_large_err, clippy::large_enum_variant)]
 
+pub mod auth;
 pub mod effects;
 pub mod op;
+pub mod retry;
 pub mod secret;
+pub mod sse;
 pub mod types;
+pub mod wire;
 
 pub use op::Operation;
 pub use secret::Secret;

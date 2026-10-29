@@ -1,0 +1,144 @@
+{
+  "name": "capabilities_unknown_model_via_endpoint",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic"
+    },
+    "operation": {
+      "type": "capabilities",
+      "model": "claude-future-9"
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-ant-test-key"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": "{\"id\": \"claude-future-9\", \"type\": \"model\", \"max_input_tokens\": 2000000, \"max_tokens\": 256000}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "ANTHROPIC_API_KEY"
+            ],
+            "kind": "api_key",
+            "placement": "x-api-key"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 0,
+              "headers": {
+                "anthropic-version": "2026-10-21",
+                "content-type": "application/json",
+                "x-api-key": "***"
+              },
+              "method": "GET",
+              "url": "https://api.anthropic.com/v1/models/claude-future-9"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "https://api.anthropic.com/v1/models/claude-future-9",
+            "headers": {
+              "anthropic-version": "2026-10-21",
+              "content-type": "application/json",
+              "x-api-key": "sk-ant-test-key"
+            },
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJpZCI6ICJjbGF1ZGUtZnV0dXJlLTkiLCAidHlwZSI6ICJtb2RlbCIsICJtYXhfaW5wdXRfdG9rZW5zIjogMjAwMDAwMCwgIm1heF90b2tlbnMiOiAyNTYwMDB9"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "capabilities",
+            "capabilities": {
+              "limits": {
+                "context_window": 2000000,
+                "max_output_tokens": 256000
+              },
+              "source": "vendor"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

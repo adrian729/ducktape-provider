@@ -4,142 +4,909 @@
   "title": "Ducktape effects protocol",
   "description": "What crosses the core-to-host boundary: a host starts an operation, the core answers with a step, the host performs the effect and resumes with its result. One Start, then Resume until the effect is done or failed. Secrets cross through set_secret, never through these documents. Body bytes may cross as raw bytes on the ABI (op_feed); http_chunk is their JSON form, used by fixtures.",
   "$defs": {
-    "P": { "$ref": "provider.schema.json" },
+    "P": {
+      "$ref": "provider.schema.json"
+    },
     "Clock": {
       "type": "object",
       "description": "Supplied by the host on every Start and Resume; the core has no clock and no randomness",
       "properties": {
-        "now_ms": { "type": "integer", "description": "Unix time in milliseconds" },
-        "entropy": { "type": "string", "contentEncoding": "base64", "description": "32 fresh random bytes" }
+        "now_ms": {
+          "type": "integer",
+          "description": "Unix time in milliseconds"
+        },
+        "entropy": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "32 fresh random bytes"
+        }
       },
-      "required": ["now_ms", "entropy"]
+      "required": [
+        "now_ms",
+        "entropy"
+      ]
     },
     "Start": {
       "type": "object",
       "properties": {
-        "clock": { "$ref": "#/$defs/Clock" },
-        "provider": { "$ref": "provider.schema.json#/$defs/ProviderConfig" },
-        "operation": { "$ref": "#/$defs/Operation" }
+        "clock": {
+          "$ref": "#/$defs/Clock"
+        },
+        "provider": {
+          "$ref": "provider.schema.json#/$defs/ProviderConfig"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        }
       },
-      "required": ["clock", "provider", "operation"]
+      "required": [
+        "clock",
+        "provider",
+        "operation"
+      ]
     },
     "Operation": {
       "oneOf": [
-        { "type": "object", "properties": { "type": { "const": "chat" }, "request": { "$ref": "provider.schema.json#/$defs/ChatRequest" } }, "required": ["type", "request"] },
-        { "type": "object", "properties": { "type": { "const": "stream" }, "request": { "$ref": "provider.schema.json#/$defs/ChatRequest" } }, "required": ["type", "request"] },
-        { "type": "object", "properties": { "type": { "const": "embed" }, "request": { "$ref": "provider.schema.json#/$defs/EmbedRequest" } }, "required": ["type", "request"] },
-        { "type": "object", "properties": { "type": { "const": "models" }, "refresh": { "type": "boolean", "default": false } }, "required": ["type"] },
-        { "type": "object", "properties": { "type": { "const": "model_info" }, "model": { "type": "string" } }, "required": ["type", "model"] },
-        { "type": "object", "properties": { "type": { "const": "capabilities" }, "model": { "type": "string" } }, "required": ["type", "model"] },
-        { "type": "object", "properties": { "type": { "const": "login" }, "callback": { "enum": ["loopback", "paste"], "default": "loopback" }, "timeout_ms": { "type": "integer", "default": 300000 } }, "required": ["type"] },
-        { "type": "object", "properties": { "type": { "const": "logout" } }, "required": ["type"] },
-        { "type": "object", "properties": { "type": { "const": "auth_status" } }, "required": ["type"] }
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "chat"
+            },
+            "request": {
+              "$ref": "provider.schema.json#/$defs/ChatRequest"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "stream"
+            },
+            "request": {
+              "$ref": "provider.schema.json#/$defs/ChatRequest"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "embed"
+            },
+            "request": {
+              "$ref": "provider.schema.json#/$defs/EmbedRequest"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "models"
+            },
+            "refresh": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "model_info"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "model"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "capabilities"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "model"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "login"
+            },
+            "callback": {
+              "enum": [
+                "loopback",
+                "paste"
+              ],
+              "default": "loopback"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "default": 300000
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "logout"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "auth_status"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
       ],
-      "discriminator": { "propertyName": "type" }
+      "discriminator": {
+        "propertyName": "type"
+      }
     },
     "Resume": {
       "type": "object",
       "properties": {
-        "clock": { "$ref": "#/$defs/Clock" },
-        "input": { "$ref": "#/$defs/Input" }
+        "clock": {
+          "$ref": "#/$defs/Clock"
+        },
+        "input": {
+          "$ref": "#/$defs/Input"
+        }
       },
-      "required": ["clock", "input"]
+      "required": [
+        "clock",
+        "input"
+      ]
     },
     "Input": {
       "description": "The host's answer to the pending effect",
       "oneOf": [
-        { "type": "object", "properties": { "type": { "const": "http_response" }, "status": { "type": "integer" }, "headers": { "$ref": "#/$defs/Headers" } }, "required": ["type", "status", "headers"], "description": "Head of the response; the body follows as http_chunk inputs (or raw op_feed calls) ending with http_end" },
-        { "type": "object", "properties": { "type": { "const": "http_chunk" }, "bytes": { "type": "string", "contentEncoding": "base64" } }, "required": ["type", "bytes"] },
-        { "type": "object", "properties": { "type": { "const": "http_end" } }, "required": ["type"] },
-        { "type": "object", "properties": { "type": { "const": "http_error" }, "error": { "$ref": "#/$defs/TransportError" } }, "required": ["type", "error"] },
-        { "type": "object", "properties": { "type": { "const": "slept" } }, "required": ["type"] },
-        { "type": "object", "properties": { "type": { "const": "secret" }, "secret_ref": { "type": "string" }, "found": { "type": "boolean" } }, "required": ["type", "secret_ref", "found"], "description": "The host stored the value through set_secret before resuming" },
-        { "type": "object", "properties": { "type": { "const": "read" }, "found": { "type": "boolean" }, "bytes": { "type": "string", "contentEncoding": "base64" }, "etag": { "type": "string", "description": "Opaque version of what was read, echoed on need_write.expect" } }, "required": ["type", "found"] },
-        { "type": "object", "properties": { "type": { "const": "written" }, "ok": { "type": "boolean" }, "conflict": { "type": "boolean", "default": false } }, "required": ["type", "ok"] },
-        { "type": "object", "properties": { "type": { "const": "user_action" }, "value": { "type": "string", "description": "What the user pasted, for paste actions" } }, "required": ["type"] },
-        { "type": "object", "properties": { "type": { "const": "callback" }, "url": { "type": "string", "format": "uri", "description": "Full redirect URL received on the loopback listener, or pasted" } }, "required": ["type", "url"] },
-        { "type": "object", "properties": { "type": { "const": "cancelled" } }, "required": ["type"], "description": "Valid as the answer to any effect" }
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "http_response"
+            },
+            "status": {
+              "type": "integer"
+            },
+            "headers": {
+              "$ref": "#/$defs/Headers"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "headers"
+          ],
+          "description": "Head of the response; the body follows as http_chunk inputs (or raw op_feed calls) ending with http_end"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "http_chunk"
+            },
+            "bytes": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          },
+          "required": [
+            "type",
+            "bytes"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "http_end"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "http_error"
+            },
+            "error": {
+              "$ref": "#/$defs/TransportError"
+            }
+          },
+          "required": [
+            "type",
+            "error"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "slept"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "secret"
+            },
+            "secret_ref": {
+              "type": "string"
+            },
+            "found": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "secret_ref",
+            "found"
+          ],
+          "description": "The host stored the value through set_secret before resuming"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "read"
+            },
+            "found": {
+              "type": "boolean"
+            },
+            "bytes": {
+              "type": "string",
+              "contentEncoding": "base64"
+            },
+            "etag": {
+              "type": "string",
+              "description": "Opaque version of what was read, echoed on need_write.expect"
+            }
+          },
+          "required": [
+            "type",
+            "found"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "written"
+            },
+            "ok": {
+              "type": "boolean"
+            },
+            "conflict": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "required": [
+            "type",
+            "ok"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "user_action"
+            },
+            "value": {
+              "type": "string",
+              "description": "What the user pasted, for paste actions"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "callback"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "Full redirect URL received on the loopback listener, or pasted"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Valid as the answer to any effect"
+        }
       ],
-      "discriminator": { "propertyName": "type" }
+      "discriminator": {
+        "propertyName": "type"
+      }
     },
     "Step": {
       "type": "object",
       "description": "What the core returns from Start and every Resume",
       "properties": {
-        "notify": { "type": "array", "items": { "$ref": "#/$defs/Notification" }, "default": [] },
-        "effect": { "$ref": "#/$defs/Effect" }
+        "notify": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Notification"
+          },
+          "default": []
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect"
+        }
       },
-      "required": ["effect"]
+      "required": [
+        "effect"
+      ]
     },
     "Notification": {
       "description": "Delivered by the host before acting on the step's effect, in order",
       "oneOf": [
-        { "type": "object", "properties": { "type": { "const": "event" }, "event": { "$ref": "provider.schema.json#/$defs/Event" } }, "required": ["type", "event"], "description": "Stream event for the consumer; only stream operations emit them" },
-        { "type": "object", "properties": { "type": { "const": "observer" }, "hook": { "enum": ["on_request", "on_response", "on_event", "on_retry"] }, "data": { "description": "Redacted payload for the hook", "type": "object" } }, "required": ["type", "hook", "data"] }
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "event"
+            },
+            "event": {
+              "$ref": "provider.schema.json#/$defs/Event"
+            }
+          },
+          "required": [
+            "type",
+            "event"
+          ],
+          "description": "Stream event for the consumer; only stream operations emit them"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "observer"
+            },
+            "hook": {
+              "enum": [
+                "on_request",
+                "on_response",
+                "on_event",
+                "on_retry"
+              ]
+            },
+            "data": {
+              "description": "Redacted payload for the hook",
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "hook",
+            "data"
+          ]
+        }
       ],
-      "discriminator": { "propertyName": "type" }
+      "discriminator": {
+        "propertyName": "type"
+      }
     },
     "Effect": {
       "oneOf": [
-        { "type": "object", "properties": { "type": { "const": "need_http" }, "request": { "$ref": "#/$defs/HttpRequest" } }, "required": ["type", "request"] },
-        { "type": "object", "properties": { "type": { "const": "receive" } }, "required": ["type"], "description": "Keep delivering body chunks of the open response" },
-        { "type": "object", "properties": { "type": { "const": "need_sleep" }, "ms": { "type": "integer", "minimum": 0 } }, "required": ["type", "ms"] },
-        { "type": "object", "properties": { "type": { "const": "need_secret" }, "secret_ref": { "type": "string" }, "source": { "$ref": "provider.schema.json#/$defs/AuthSource" } }, "required": ["type", "secret_ref", "source"], "description": "Resolve the source (env var, resolver call, inline handle) and store the value under secret_ref with set_secret" },
-        { "type": "object", "properties": { "type": { "const": "need_read" }, "locator": { "$ref": "#/$defs/Locator" } }, "required": ["type", "locator"] },
-        { "type": "object", "properties": { "type": { "const": "need_write" }, "locator": { "$ref": "#/$defs/Locator" }, "bytes": { "type": "string", "contentEncoding": "base64" }, "expect": { "type": "string", "description": "etag from the read this write is based on; the host refuses when it changed" }, "private": { "type": "boolean", "default": true, "description": "Owner-only permissions, atomic replace" } }, "required": ["type", "locator", "bytes"] },
-        { "type": "object", "properties": { "type": { "const": "need_user_action" }, "action": { "$ref": "provider.schema.json#/$defs/LoginAction" } }, "required": ["type", "action"] },
-        { "type": "object", "properties": { "type": { "const": "need_callback" }, "redirect_uri": { "type": "string", "format": "uri" }, "timeout_ms": { "type": "integer" } }, "required": ["type", "redirect_uri"] },
-        { "type": "object", "properties": { "type": { "const": "done" }, "result": { "$ref": "#/$defs/Result" } }, "required": ["type", "result"] },
-        { "type": "object", "properties": { "type": { "const": "failed" }, "error": { "$ref": "provider.schema.json#/$defs/ProviderError" } }, "required": ["type", "error"] }
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "need_http"
+            },
+            "request": {
+              "$ref": "#/$defs/HttpRequest"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "receive"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "Keep delivering body chunks of the open response"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "need_sleep"
+            },
+            "ms": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "type",
+            "ms"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "need_secret"
+            },
+            "secret_ref": {
+              "type": "string"
+            },
+            "source": {
+              "$ref": "provider.schema.json#/$defs/AuthSource"
+            }
+          },
+          "required": [
+            "type",
+            "secret_ref",
+            "source"
+          ],
+          "description": "Resolve the source (env var, resolver call, inline handle) and store the value under secret_ref with set_secret"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "need_read"
+            },
+            "locator": {
+              "$ref": "#/$defs/Locator"
+            }
+          },
+          "required": [
+            "type",
+            "locator"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "need_write"
+            },
+            "locator": {
+              "$ref": "#/$defs/Locator"
+            },
+            "bytes": {
+              "type": "string",
+              "contentEncoding": "base64"
+            },
+            "expect": {
+              "type": "string",
+              "description": "etag from the read this write is based on; the host refuses when it changed"
+            },
+            "private": {
+              "type": "boolean",
+              "default": true,
+              "description": "Owner-only permissions, atomic replace"
+            }
+          },
+          "required": [
+            "type",
+            "locator",
+            "bytes"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "need_user_action"
+            },
+            "action": {
+              "$ref": "provider.schema.json#/$defs/LoginAction"
+            }
+          },
+          "required": [
+            "type",
+            "action"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "need_callback"
+            },
+            "redirect_uri": {
+              "type": "string",
+              "format": "uri"
+            },
+            "timeout_ms": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "redirect_uri"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "done"
+            },
+            "result": {
+              "$ref": "#/$defs/Result"
+            }
+          },
+          "required": [
+            "type",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "failed"
+            },
+            "error": {
+              "$ref": "provider.schema.json#/$defs/ProviderError"
+            }
+          },
+          "required": [
+            "type",
+            "error"
+          ]
+        }
       ],
-      "discriminator": { "propertyName": "type" }
+      "discriminator": {
+        "propertyName": "type"
+      }
     },
     "Result": {
       "oneOf": [
-        { "type": "object", "properties": { "type": { "const": "response" }, "response": { "$ref": "provider.schema.json#/$defs/Response" } }, "required": ["type", "response"], "description": "chat; stream delivers it inside the finish event instead" },
-        { "type": "object", "properties": { "type": { "const": "stream_end" } }, "required": ["type"] },
-        { "type": "object", "properties": { "type": { "const": "embed" }, "response": { "$ref": "provider.schema.json#/$defs/EmbedResponse" } }, "required": ["type", "response"] },
-        { "type": "object", "properties": { "type": { "const": "models" }, "models": { "type": "array", "items": { "type": "string" } } }, "required": ["type", "models"] },
-        { "type": "object", "properties": { "type": { "const": "model_info" }, "info": { "anyOf": [{ "$ref": "provider.schema.json#/$defs/ModelInfo" }, { "type": "null" }] } }, "required": ["type", "info"] },
-        { "type": "object", "properties": { "type": { "const": "capabilities" }, "capabilities": { "anyOf": [{ "$ref": "provider.schema.json#/$defs/Capabilities" }, { "type": "null" }] } }, "required": ["type", "capabilities"] },
-        { "type": "object", "properties": { "type": { "const": "auth_status" }, "status": { "$ref": "provider.schema.json#/$defs/AuthStatus" } }, "required": ["type", "status"] },
-        { "type": "object", "properties": { "type": { "const": "none" } }, "required": ["type"], "description": "logout" }
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "response"
+            },
+            "response": {
+              "$ref": "provider.schema.json#/$defs/Response"
+            }
+          },
+          "required": [
+            "type",
+            "response"
+          ],
+          "description": "chat; stream delivers it inside the finish event instead"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "stream_end"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "embed"
+            },
+            "response": {
+              "$ref": "provider.schema.json#/$defs/EmbedResponse"
+            }
+          },
+          "required": [
+            "type",
+            "response"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "models"
+            },
+            "models": {
+              "type": "array",
+              "items": {
+                "$ref": "provider.schema.json#/$defs/ModelInfo"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "models"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "model_info"
+            },
+            "info": {
+              "anyOf": [
+                {
+                  "$ref": "provider.schema.json#/$defs/ModelInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "info"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "capabilities"
+            },
+            "capabilities": {
+              "anyOf": [
+                {
+                  "$ref": "provider.schema.json#/$defs/Capabilities"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "capabilities"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "auth_status"
+            },
+            "status": {
+              "$ref": "provider.schema.json#/$defs/AuthStatus"
+            }
+          },
+          "required": [
+            "type",
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "none"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "description": "logout"
+        }
       ],
-      "discriminator": { "propertyName": "type" }
+      "discriminator": {
+        "propertyName": "type"
+      }
     },
     "HttpRequest": {
       "type": "object",
       "properties": {
-        "method": { "enum": ["GET", "POST", "PUT", "DELETE"] },
-        "url": { "type": "string", "format": "uri" },
-        "headers": { "$ref": "#/$defs/Headers", "description": "Complete, credentials included; the host sends them as given" },
-        "body": { "type": "string", "description": "UTF-8 body, usually JSON; absent for GET" },
-        "stream": { "type": "boolean", "default": false, "description": "Deliver the body as chunks while it arrives" },
-        "timeout": { "$ref": "provider.schema.json#/$defs/Timeout" },
-        "purpose": { "enum": ["chat", "embed", "models", "auth", "fetch"], "description": "auth requests are never logged or retried by the host; fetch is a URL image download" }
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "headers": {
+          "$ref": "#/$defs/Headers",
+          "description": "Complete, credentials included; the host sends them as given"
+        },
+        "body": {
+          "type": "string",
+          "description": "UTF-8 body, usually JSON; absent for GET"
+        },
+        "stream": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deliver the body as chunks while it arrives"
+        },
+        "timeout": {
+          "$ref": "provider.schema.json#/$defs/Timeout"
+        },
+        "purpose": {
+          "enum": [
+            "chat",
+            "embed",
+            "models",
+            "auth",
+            "fetch"
+          ],
+          "description": "auth requests are never logged or retried by the host; fetch is a URL image download"
+        }
       },
-      "required": ["method", "url", "headers", "purpose"]
+      "required": [
+        "method",
+        "url",
+        "headers",
+        "purpose"
+      ]
     },
     "Headers": {
       "type": "object",
-      "additionalProperties": { "type": "string" },
+      "additionalProperties": {
+        "type": "string"
+      },
       "description": "Lower-case names; repeated response headers joined with ', '"
     },
     "TransportError": {
       "type": "object",
       "properties": {
-        "kind": { "enum": ["connect", "timeout", "tls", "dns", "reset", "cancelled", "other"] },
-        "message": { "type": "string" }
+        "kind": {
+          "enum": [
+            "connect",
+            "timeout",
+            "tls",
+            "dns",
+            "reset",
+            "cancelled",
+            "other"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
       },
-      "required": ["kind", "message"]
+      "required": [
+        "kind",
+        "message"
+      ]
     },
     "Locator": {
       "oneOf": [
-        { "type": "object", "properties": { "type": { "const": "file" }, "path": { "type": "string" } }, "required": ["type", "path"] },
-        { "type": "object", "properties": { "type": { "const": "keychain" }, "service": { "type": "string" }, "account": { "type": "string" } }, "required": ["type", "service", "account"] },
-        { "type": "object", "properties": { "type": { "const": "env" }, "name": { "type": "string" } }, "required": ["type", "name"], "description": "Non-secret environment values only; secrets go through need_secret" }
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "file"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "keychain"
+            },
+            "service": {
+              "type": "string"
+            },
+            "account": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "service",
+            "account"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "env"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "description": "Non-secret environment values only; secrets go through need_secret"
+        }
       ],
-      "discriminator": { "propertyName": "type" }
+      "discriminator": {
+        "propertyName": "type"
+      }
     }
   }
 }
