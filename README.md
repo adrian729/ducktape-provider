@@ -56,6 +56,10 @@ if r.stop.reason == "tool_call":
 | Another host, same wire | `Provider("openai", base_url="https://api.groq.com/openai", auth=env("GROQ_API_KEY"))` |
 | A key in code | `Provider("anthropic", auth="sk-ant-...")` |
 | A token fetched at request time | `Provider("openai", auth=resolver(get_token))` |
+| An existing login | `Provider("openai", auth=session("codex"))`, `Provider("anthropic", auth=session("claude_code"))`, `session("anthropic_profile", profile="work")` |
+| Refreshing another tool's login | `session("codex", refresh="memory")` keeps the new token in process; `refresh="write_back"` updates the tool's store |
+| Login state | `p.auth_status()` gives `source`, `expires_at` and `session`; `source` is `None` when nothing is configured |
+| Several sources in order | `Provider("anthropic", auth=[session("claude_code"), env("ANTHROPIC_API_KEY")])` |
 | Local Ollama | `Provider("ollama", default_model="llama3")` |
 | Options | `p.chat(msgs, options={"max_output_tokens": 500, "reasoning": "high", "tool_choice": {"name": "add"}})` |
 | Vendor fields | `p.chat(msgs, vendor={"anthropic": {"temperature": 0.2}})` |
@@ -103,6 +107,9 @@ if (reply.stop.reason === "tool_call") {
 | Another host, same wire | `new Provider("openai", { base_url: "https://api.groq.com/openai", auth: env("GROQ_API_KEY") })` |
 | A key in code | `new Provider("anthropic", { auth: "sk-ant-..." })` |
 | A token fetched at request time | `new Provider("openai", { auth: resolver(getToken) })` |
+| An existing login | `new Provider("openai", { auth: session("codex") })`, `session("anthropic_profile", { profile: "work" })` |
+| Refreshing another tool's login | `session("codex", { refresh: "memory" })` or `{ refresh: "write_back" }`, same meaning as in Python |
+| Login state | `await p.authStatus()` gives `source`, `expires_at` and `session` |
 | In a browser | `resolver()` against your backend; an API key needs `dangerously_allow_browser: true` |
 | Cancel | `signal: controller.signal` on any call, or `stream.cancel()` |
 | Options and vendor fields | same keys as Python: `{ options: { reasoning: "high" }, vendor: { openai: { temperature: 0.2 } } }` |

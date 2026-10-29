@@ -61,6 +61,20 @@ function replay(core, fixture) {
         case "need_sleep":
           input = { type: "slept" };
           break;
+        case "need_read": {
+          const loc = effect.locator;
+          const value =
+            loc.type === "file"
+              ? fixture.files?.[loc.path]
+              : loc.type === "env"
+                ? fixture.env?.[loc.name]
+                : fixture.keychain?.[`${loc.service}|${loc.account}`];
+          input = value === undefined ? { type: "read", found: false } : { type: "read", found: true, bytes: Buffer.from(value).toString("base64") };
+          break;
+        }
+        case "need_write":
+          input = { type: "written", ok: true, conflict: false };
+          break;
         default:
           throw new Error(`unsupported effect in replay: ${effect.type}`);
       }

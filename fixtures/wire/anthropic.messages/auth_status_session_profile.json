@@ -1,0 +1,173 @@
+{
+  "name": "auth_status_session_profile",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "anthropic_profile"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "auth_status"
+    }
+  },
+  "secrets": {},
+  "env": {
+    "HOME": "/home/u"
+  },
+  "files": {
+    "/home/u/.config/anthropic/configs/default.json": "{\"version\": \"1.0\", \"authentication\": {\"type\": \"user_oauth\", \"client_id\": \"cid_1\"}, \"workspace_id\": \"ws_1\"}",
+    "/home/u/.config/anthropic/credentials/default.json": "{\"version\": \"1.0\", \"type\": \"oauth_token\", \"access_token\": \"sk-ant-oat01-valid\", \"expires_at\": 1761699600, \"refresh_token\": \"rt_1\"}"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "ANTHROPIC_CONFIG_DIR"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "ANTHROPIC_PROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "L2hvbWUvdQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "APPDATA"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.config/anthropic/active_config"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.config/anthropic/configs/default.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "eyJ2ZXJzaW9uIjogIjEuMCIsICJhdXRoZW50aWNhdGlvbiI6IHsidHlwZSI6ICJ1c2VyX29hdXRoIiwgImNsaWVudF9pZCI6ICJjaWRfMSJ9LCAid29ya3NwYWNlX2lkIjogIndzXzEifQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.config/anthropic/credentials/default.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "eyJ2ZXJzaW9uIjogIjEuMCIsICJ0eXBlIjogIm9hdXRoX3Rva2VuIiwgImFjY2Vzc190b2tlbiI6ICJzay1hbnQtb2F0MDEtdmFsaWQiLCAiZXhwaXJlc19hdCI6IDE3NjE2OTk2MDAsICJyZWZyZXNoX3Rva2VuIjogInJ0XzEifQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "auth_status",
+            "status": {
+              "source": "session:anthropic_profile",
+              "expires_at": "2025-10-29T01:00:00Z",
+              "session": "anthropic_profile"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

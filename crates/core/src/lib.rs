@@ -7,6 +7,7 @@ pub mod effects;
 pub mod op;
 pub mod retry;
 pub mod secret;
+pub mod session;
 pub mod sse;
 pub mod types;
 pub mod wire;

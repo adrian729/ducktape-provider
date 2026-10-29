@@ -1,0 +1,130 @@
+{
+  "name": "session_claude_code_not_logged_in",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "claude_code"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "claude-opus-5-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {},
+  "env": {
+    "HOME": "/home/u"
+  },
+  "files": {
+    "/home/u/.claude/.credentials.json": "{\"other\": 1}"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "CLAUDE_CONFIG_DIR"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "L2hvbWUvdQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.claude/.credentials.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "eyJvdGhlciI6IDF9"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "auth",
+            "message": "no credential found; tried session:claude_code",
+            "code": "no_credential",
+            "retryable": false,
+            "attempts": 0,
+            "origin": {
+              "wire": "anthropic.messages",
+              "ns": "anthropic",
+              "base_url": "https://api.anthropic.com",
+              "model": "claude-opus-5-5"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -59,6 +59,19 @@ def replay(fixture):
             data = queue.pop() if queue else {"type": "http_end"}
         elif kind == "need_sleep":
             data = {"type": "slept"}
+        elif kind == "need_read":
+            loc = effect["locator"]
+            if loc["type"] == "file":
+                value = fixture.get("files", {}).get(loc["path"])
+            elif loc["type"] == "env":
+                value = fixture.get("env", {}).get(loc["name"])
+            else:
+                value = fixture.get("keychain", {}).get(f"{loc['service']}|{loc['account']}")
+            data = {"type": "read", "found": value is not None}
+            if value is not None:
+                data["bytes"] = base64.b64encode(value.encode()).decode()
+        elif kind == "need_write":
+            data = {"type": "written", "ok": True, "conflict": False}
         else:
             raise AssertionError(f"unsupported effect in replay: {kind}")
         out.append({"step": step, "input": data})

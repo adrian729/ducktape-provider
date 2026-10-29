@@ -105,10 +105,15 @@ export function env(...names) {
 }
 
 /** Uses a login session of the given preset. */
-export function session(preset, { store, client_id } = {}) {
+export function session(preset, { store, client_id, profile, refresh } = {}) {
+  if (refresh !== undefined && !["never", "memory", "write_back"].includes(refresh)) {
+    throw new TypeError(`refresh must be "never", "memory" or "write_back", not ${JSON.stringify(refresh)}`);
+  }
   const source = { type: "session", preset };
   if (store) source.store = store;
   if (client_id) source.client_id = client_id;
+  if (profile) source.profile = profile;
+  if (refresh) source.refresh = refresh;
   return source;
 }
 

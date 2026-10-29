@@ -222,3 +222,46 @@ def test_image_bytes_become_base64():
     m = user("what is this?", dp.image(png))
     assert m.content[1].data == base64.b64encode(png).decode()
     assert m.to_dict()["content"][0] == {"type": "text", "text": "what is this?"}
+
+
+def session_store(fixture, tmp_path, prefix):
+    for path, text in fixture.get("files", {}).items():
+        target = tmp_path / path.removeprefix(prefix).lstrip("/")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+
+
+def test_session_profile_refreshes_and_writes_back(monkeypatch, tmp_path):
+    fixture = load(ANTHROPIC / "session_profile_refresh_write_back.json")
+    session_store(fixture, tmp_path, "/home/u/.config/anthropic")
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("ANTHROPIC_PROFILE", raising=False)
+    seen = []
+    p = Provider(
+        "anthropic", auth=dp.session("anthropic_profile"), client=httpx.Client(transport=httpx.MockTransport(scripted(fixture, seen)))
+    )
+    req = request_of(fixture)
+    r = p.chat(req["messages"], model=req["model"])
+    assert r.text == done_response(fixture)["content"][-1]["text"]
+    assert seen[0].url.path == "/v1/oauth/token"
+    assert seen[1].headers["authorization"] == "Bearer sk-ant-oat01-new"
+    assert seen[1].headers["anthropic-beta"] == "oauth-2025-04-20"
+    creds = tmp_path / "credentials" / "default.json"
+    written = json.loads(creds.read_text())
+    assert written["access_token"] == "sk-ant-oat01-new" and written["extra"] == "kept"
+    assert oct(creds.stat().st_mode & 0o777) == "0o600"
+    assert dp.session("codex", refresh="memory").refresh == "memory"
+    with pytest.raises(ValueError):
+        dp.session("codex", refresh="sometimes")
+
+
+def test_session_expired_names_the_owner(monkeypatch, tmp_path):
+    fixture = load(ANTHROPIC / "session_claude_code_expired.json")
+    session_store(fixture, tmp_path, "/home/u/.claude")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    p = Provider("anthropic", auth=dp.session("claude_code"), client=httpx.Client(transport=httpx.MockTransport(scripted(fixture))))
+    with pytest.raises(dp.AuthError) as info:
+        p.chat([user("hi")], model="m")
+    assert info.value.code == "credential_expired" and "claude" in str(info.value)
+    status = p.auth_status()
+    assert status.source == "session:claude_code" and status.expires_at == "2025-10-28T23:59:55Z"

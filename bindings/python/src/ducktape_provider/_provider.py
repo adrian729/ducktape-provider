@@ -222,10 +222,10 @@ class _Base:
                 sources.append(source)
             elif isinstance(item, SessionAuth):
                 source = {"type": "session", "preset": item.preset}
-                if item.store:
-                    source["store"] = item.store
-                if item.client_id:
-                    source["client_id"] = item.client_id
+                for key in ("store", "client_id", "profile", "refresh"):
+                    value = getattr(item, key)
+                    if value:
+                        source[key] = value
                 sources.append(source)
             elif isinstance(item, ResolverAuth):
                 rid = f"resolver:{i}"

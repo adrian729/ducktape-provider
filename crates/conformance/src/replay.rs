@@ -1,5 +1,5 @@
 //! Scripted host that replays a wire fixture through the core.
-use ducktape_core::effects::{Clock, Effect, Input, Resume, Start, Step, TransportError};
+use ducktape_core::effects::{Clock, Effect, Input, Locator, Resume, Start, Step, TransportError};
 use ducktape_core::types::Headers;
 use ducktape_core::Operation;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,12 @@ pub struct WireFixture {
     pub start: Start,
     #[serde(default)]
     pub secrets: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub env: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub files: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub keychain: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub http: Vec<ScriptedHttp>,
     #[serde(default)]
@@ -106,6 +112,24 @@ pub fn run(fixture: &WireFixture) -> Vec<Exchange> {
             }
             Effect::Receive => queue.pop().unwrap_or(Input::HttpEnd),
             Effect::NeedSleep { .. } => Input::Slept,
+            Effect::NeedRead { locator } => {
+                let found = match locator {
+                    Locator::File { path } => fixture.files.get(path),
+                    Locator::Env { name } => fixture.env.get(name),
+                    Locator::Keychain { service, account } => {
+                        fixture.keychain.get(&format!("{service}|{account}"))
+                    }
+                };
+                Input::Read {
+                    found: found.is_some(),
+                    bytes: found.map(|v| v.clone().into_bytes()),
+                    etag: None,
+                }
+            }
+            Effect::NeedWrite { .. } => Input::Written {
+                ok: true,
+                conflict: false,
+            },
             other => panic!("{}: unsupported effect in replay: {other:?}", fixture.name),
         };
         out.push(Exchange {

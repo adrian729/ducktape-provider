@@ -1,0 +1,62 @@
+{
+  "name": "session_chatgpt_plan_unavailable",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "chatgpt_plan"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gpt-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {},
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "auth",
+            "message": "session preset chatgpt_plan is not available yet; it ships once a recorded fixture proves the flow",
+            "code": "auth_source",
+            "retryable": false,
+            "attempts": 0,
+            "origin": {
+              "wire": "openai.responses",
+              "ns": "openai",
+              "base_url": "https://api.openai.com",
+              "model": "gpt-5"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

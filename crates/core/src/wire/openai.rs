@@ -381,6 +381,14 @@ fn base_headers(ctx: &CallContext) -> Headers {
     h
 }
 
+fn path(ctx: &CallContext, rest: &str) -> String {
+    match ctx.api_version.as_deref() {
+        Some("") => rest.to_owned(),
+        Some(v) => format!("{}/{rest}", v.trim_matches('/')),
+        None => format!("v1/{rest}"),
+    }
+}
+
 fn get(ctx: &CallContext, path: &str, purpose: Purpose) -> HttpRequest {
     HttpRequest {
         method: Method::Get,
@@ -522,7 +530,7 @@ impl Wire for OpenaiResponses {
         }
         let request = HttpRequest {
             method: Method::Post,
-            url: join_url(&ctx.base_url, "v1/responses"),
+            url: join_url(&ctx.base_url, &path(ctx, "responses")),
             headers,
             body: Some(Value::Object(body.map).to_string()),
             stream: true,
@@ -559,7 +567,7 @@ impl Wire for OpenaiResponses {
         }
         let request = HttpRequest {
             method: Method::Post,
-            url: join_url(&ctx.base_url, "v1/embeddings"),
+            url: join_url(&ctx.base_url, &path(ctx, "embeddings")),
             headers: base_headers(ctx),
             body: Some(Value::Object(body.map).to_string()),
             stream: false,
@@ -605,7 +613,7 @@ impl Wire for OpenaiResponses {
     }
 
     fn build_models(&self, ctx: &CallContext) -> Option<HttpRequest> {
-        Some(get(ctx, "v1/models", Purpose::Models))
+        Some(get(ctx, &path(ctx, "models"), Purpose::Models))
     }
 
     fn decode_models(
@@ -635,7 +643,11 @@ impl Wire for OpenaiResponses {
     }
 
     fn build_model_info(&self, ctx: &CallContext, model: &str) -> Option<HttpRequest> {
-        Some(get(ctx, &format!("v1/models/{model}"), Purpose::Models))
+        Some(get(
+            ctx,
+            &path(ctx, &format!("models/{model}")),
+            Purpose::Models,
+        ))
     }
 
     fn decode_model_info(

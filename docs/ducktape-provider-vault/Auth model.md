@@ -193,6 +193,15 @@ Our terms carry a responsible-use clause: the consumer decides which credential 
 - `anthropic_profile` login writes a profile in Anthropic's documented shared location; the client id a third party would use is unverified, so the preset ships only once a fixture proves the flow.
 - Entropy for PKCE, state and `jti` comes from the host with every start and resume, next to `now`.
 
+## Decided (2026-10-30, session sources shipped)
+
+- Session presets `anthropic_profile`, `claude_code`, `claude_code_token_env` and `codex` are in core (`crates/core/src/session.rs`) with synthetic fixtures under `fixtures/wire/anthropic.messages/session_*` and `fixtures/wire/openai.responses/session_*`. `chatgpt_plan` and `login` fail with `unsupported{auth_source}` until a recorded fixture proves the flow; `logout` on a borrowed preset fails with the owning tool's command.
+- `anthropic_profile` defaults to `refresh: write_back`, not `never`: the profile store is Anthropic's documented shared format and the official SDK itself refreshes and writes it back, so write-back is the expected behavior there. Only `user_oauth` profiles are read; federation profiles fail with `auth{auth_source}`. The config's `base_url` pins the endpoint; `workspace_id` goes out as `anthropic-workspace-id`.
+- `claude_code` never refreshes (endpoint and client id unverified); on expiry it fails with `auth{credential_expired}` and the hint to run `claude`. `codex` defaults to `refresh: never`; `memory` and `write_back` use the public Codex client id at `auth.openai.com/oauth/token` and the written file keeps every field and updates `last_refresh`.
+- A 401 on a session credential forces exactly one re-read of the store and, when refresh is allowed, one refresh, then one retry; a second 401 is the error.
+- `auth_status()` never fails on an expired or unrefreshable session: it reports `source: session:<preset>` with the stale `expires_at`, so apps can tell "expired, run the tool" from "nothing configured" (`source: null`).
+- Keychain reads are emitted by core for `codex` (service `Codex Auth`); the Python and JS hosts answer them not-found for now.
+
 ## Verified / Unverified
 
 Accessed 2026-10-28 unless noted; page dates in brackets where shown.

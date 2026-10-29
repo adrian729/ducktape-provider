@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 import * as dp from "../src/index.js";
@@ -164,4 +166,56 @@ test("image bytes become base64", () => {
   const m = user("what is this?", dp.image(png));
   assert.equal(m.content[1].data, Buffer.from(png).toString("base64"));
   assert.deepEqual(m.content[0], { type: "text", text: "what is this?" });
+});
+
+function sessionStore(fixture, dir, prefix) {
+  for (const [path, text] of Object.entries(fixture.files ?? {})) {
+    const target = join(dir, path.slice(prefix.length));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, text);
+  }
+}
+
+test("codex session refreshes and writes back", async () => {
+  const fixture = load(join(fixtures, "wire", "openai.responses", "session_codex_refresh_write_back.json"));
+  const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const fresh = `${b64url({ alg: "RS256" })}.${b64url({ exp: Math.floor(Date.now() / 1000) + 86400 })}.sig`;
+  fixture.http[0].body = JSON.stringify({ ...JSON.parse(fixture.http[0].body), access_token: fresh });
+  const dir = mkdtempSync(join(tmpdir(), "ducktape-codex-"));
+  sessionStore(fixture, dir, "/home/u/.codex");
+  process.env.CODEX_HOME = dir;
+  try {
+    const seen = [];
+    const p = new Provider("openai", { auth: dp.session("codex", { refresh: "write_back" }), fetch: scripted(fixture, seen) });
+    const req = requestOf(fixture);
+    const r = await p.chat(req.messages, { model: req.model });
+    assert.equal(r.text, doneResponse(fixture).content.at(-1).text);
+    assert.equal(seen[0].url, "https://auth.openai.com/oauth/token");
+    assert.equal(seen[1].url, "https://chatgpt.com/backend-api/codex/responses");
+    assert.equal(seen[1].init.headers["chatgpt-account-id"], "acct_1");
+    const written = JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
+    assert.equal(written.tokens.refresh_token, "rt_d");
+    assert.equal((await p.authStatus()).session, "codex");
+    assert.throws(() => dp.session("codex", { refresh: "sometimes" }), TypeError);
+  } finally {
+    delete process.env.CODEX_HOME;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("expired borrowed session names the owner", async () => {
+  const fixture = load(join(fixtures, "wire", "openai.responses", "session_codex_expired_never.json"));
+  const dir = mkdtempSync(join(tmpdir(), "ducktape-codex-"));
+  sessionStore(fixture, dir, "/home/u/.codex");
+  process.env.CODEX_HOME = dir;
+  try {
+    const p = new Provider("openai", { auth: dp.session("codex"), fetch: scripted(fixture) });
+    await assert.rejects(p.chat([user("hi")], { model: "m" }), (e) => e instanceof dp.AuthError && e.code === "credential_expired" && /codex login/.test(e.message));
+    const status = await p.authStatus();
+    assert.equal(status.source, "session:codex");
+    assert.equal(status.expires_at, "2025-10-28T23:59:55Z");
+  } finally {
+    delete process.env.CODEX_HOME;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

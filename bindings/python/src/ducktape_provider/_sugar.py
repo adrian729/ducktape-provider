@@ -127,6 +127,8 @@ class SessionAuth:
     preset: str
     store: Optional[str] = None
     client_id: Optional[str] = None
+    profile: Optional[str] = None
+    refresh: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -145,9 +147,18 @@ def env(*names: str, kind: Optional[str] = None, placement: Optional[str] = None
     return EnvAuth(tuple(names), kind, placement)
 
 
-def session(preset: str, *, store: Optional[str] = None, client_id: Optional[str] = None) -> SessionAuth:
+def session(
+    preset: str,
+    *,
+    store: Optional[str] = None,
+    client_id: Optional[str] = None,
+    profile: Optional[str] = None,
+    refresh: Optional[str] = None,
+) -> SessionAuth:
     """Uses a login session of the given preset."""
-    return SessionAuth(preset, store, client_id)
+    if refresh is not None and refresh not in ("never", "memory", "write_back"):
+        raise ValueError(f"refresh must be 'never', 'memory' or 'write_back', not {refresh!r}")
+    return SessionAuth(preset, store, client_id, profile, refresh)
 
 
 def resolver(fn: Callable[[], Any], *, kind: Optional[str] = None, placement: Optional[str] = None) -> ResolverAuth:

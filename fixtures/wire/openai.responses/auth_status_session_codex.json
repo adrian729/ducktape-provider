@@ -1,0 +1,111 @@
+{
+  "name": "auth_status_session_codex",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "codex"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "auth_status"
+    }
+  },
+  "secrets": {},
+  "env": {
+    "HOME": "/home/u"
+  },
+  "files": {
+    "/home/u/.codex/auth.json": "{\"auth_mode\": \"chatgpt\", \"OPENAI_API_KEY\": null, \"tokens\": {\"id_token\": \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn19.sig\", \"access_token\": \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjE3ODI0MDAsInN1YiI6InUxIn0.sig\", \"refresh_token\": \"rt_c\", \"account_id\": \"acct_1\"}, \"last_refresh\": \"2025-10-28T00:00:00Z\"}"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "CODEX_HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "L2hvbWUvdQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.codex/auth.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "eyJhdXRoX21vZGUiOiAiY2hhdGdwdCIsICJPUEVOQUlfQVBJX0tFWSI6IG51bGwsICJ0b2tlbnMiOiB7ImlkX3Rva2VuIjogImV5SmhiR2NpT2lKU1V6STFOaUlzSW5SNWNDSTZJa3BYVkNKOS5leUpvZEhSd2N6b3ZMMkZ3YVM1dmNHVnVZV2t1WTI5dEwyRjFkR2dpT25zaVkyaGhkR2R3ZEY5aFkyTnZkVzUwWDJsa0lqb2lZV05qZEY4eEluMTkuc2lnIiwgImFjY2Vzc190b2tlbiI6ICJleUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKbGVIQWlPakUzTmpFM09ESTBNREFzSW5OMVlpSTZJblV4SW4wLnNpZyIsICJyZWZyZXNoX3Rva2VuIjogInJ0X2MiLCAiYWNjb3VudF9pZCI6ICJhY2N0XzEifSwgImxhc3RfcmVmcmVzaCI6ICIyMDI1LTEwLTI4VDAwOjAwOjAwWiJ9"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "auth_status",
+            "status": {
+              "source": "session:codex",
+              "expires_at": "2025-10-30T00:00:00Z",
+              "session": "codex"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

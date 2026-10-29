@@ -6,6 +6,7 @@ use crate::effects::{
 };
 use crate::retry;
 use crate::secret::SecretStore;
+use crate::session::{self, Action, SessionFlow};
 use crate::types::*;
 use crate::wire::{self, CallContext, ChatDecoder, Wire};
 use serde_json::{json, Value};
@@ -115,6 +116,11 @@ enum State {
         body: Vec<u8>,
     },
     Sleeping,
+    Session,
+    SessionHttp {
+        status: Option<u16>,
+        body: Vec<u8>,
+    },
     Finished,
 }
 
@@ -141,6 +147,11 @@ pub struct Operation {
     fetch_planned: bool,
     fetch_queue: Vec<(usize, usize)>,
     fetching: Option<(usize, usize)>,
+    session: Option<SessionFlow>,
+    session_headers: Headers,
+    auth_sources: Vec<AuthSource>,
+    auth_index: usize,
+    refresh_forced: bool,
 }
 
 impl std::fmt::Debug for Operation {
@@ -150,6 +161,43 @@ impl std::fmt::Debug for Operation {
             .field("attempt", &self.attempt)
             .finish()
     }
+}
+
+fn login_or_logout(login: bool, config: &ProviderConfig) -> ProviderError {
+    let preset = config.auth.as_ref().and_then(|a| {
+        a.sources.iter().find_map(|s| match s {
+            AuthSource::Session { preset, .. } => Some(preset.clone()),
+            _ => None,
+        })
+    });
+    let mut e = match (login, preset) {
+        (_, None) => ProviderError::new(
+            ErrorKind::Unsupported,
+            "no session source configured: pass `auth=session(...)`",
+        ),
+        (true, Some(p)) => ProviderError::new(
+            ErrorKind::Unsupported,
+            format!(
+                "login for {} is not available yet; it ships once a recorded fixture proves the flow",
+                p.as_str()
+            ),
+        ),
+        (false, Some(p)) => match session::logout_hint(&p) {
+            Some(hint) => ProviderError::new(
+                ErrorKind::Unsupported,
+                format!(
+                    "{} is owned by another tool; log out with `{hint}`",
+                    p.as_str()
+                ),
+            ),
+            None => ProviderError::new(
+                ErrorKind::Unsupported,
+                format!("logout for {} is not available yet", p.as_str()),
+            ),
+        },
+    };
+    e.code = Some("auth_source".to_owned());
+    e
 }
 
 fn step_done(result: OperationResult) -> Step {
@@ -198,18 +246,14 @@ impl Operation {
             OperationKind::Capabilities { model } => Job::Capabilities { model },
             OperationKind::AuthStatus => Job::AuthStatus,
             OperationKind::Login { .. } | OperationKind::Logout => {
+                let login = matches!(start.operation, OperationKind::Login { .. });
                 let endpoint = Endpoint {
                     wire: "",
                     base_url: String::new(),
                 };
+                let step = Step::failed(login_or_logout(login, &start.provider));
                 let op = Operation::new(start.provider, endpoint, Job::AuthStatus, &start.clock);
-                return (
-                    op,
-                    Step::failed(ProviderError::new(
-                        ErrorKind::Unsupported,
-                        "login is not implemented yet",
-                    )),
-                );
+                return (op, step);
             }
         };
         let endpoint = match Endpoint::resolve(&start.provider) {
@@ -252,6 +296,11 @@ impl Operation {
             fetch_planned: false,
             fetch_queue: Vec::new(),
             fetching: None,
+            session: None,
+            session_headers: Headers::new(),
+            auth_sources: Vec::new(),
+            auth_index: 0,
+            refresh_forced: false,
         }
     }
 
@@ -332,6 +381,19 @@ impl Operation {
                     e.code = Some("image_fetch".to_owned());
                     return Step::failed(e);
                 }
+                if status == 401
+                    && !self.refresh_forced
+                    && self.session.as_ref().is_some_and(SessionFlow::can_refresh)
+                {
+                    self.refresh_forced = true;
+                    let now = self.now_ms;
+                    let action = self
+                        .session
+                        .as_mut()
+                        .map(|f| f.force_refresh(now))
+                        .unwrap_or(Action::NotFound);
+                    return self.session_act(action);
+                }
                 if let (Job::Chat { .. }, Some(w), Some(ctx)) = (&self.job, &self.wire, &self.ctx) {
                     if let Some(response) = w.error_as_response(ctx, status, &body) {
                         return self.finish_chat(response);
@@ -346,6 +408,49 @@ impl Operation {
                 self.fail_or_retry(e)
             }
             (State::Sleeping, Input::Slept) => self.send(),
+            (State::Session, Input::Read { found, bytes, .. }) => {
+                let now = self.now_ms;
+                let action = match &mut self.session {
+                    Some(flow) => flow.on_read(found, bytes, now),
+                    None => Action::NotFound,
+                };
+                self.session_act(action)
+            }
+            (State::Session, Input::Written { ok, .. }) => {
+                let action = match &mut self.session {
+                    Some(flow) => flow.on_written(ok),
+                    None => Action::NotFound,
+                };
+                self.session_act(action)
+            }
+            (State::SessionHttp { status: None, body }, Input::HttpResponse { status, .. }) => {
+                self.state = State::SessionHttp {
+                    status: Some(status),
+                    body,
+                };
+                Step::effect(Effect::Receive)
+            }
+            (State::SessionHttp { status, mut body }, Input::HttpChunk { bytes }) => {
+                body.extend_from_slice(&bytes);
+                self.state = State::SessionHttp { status, body };
+                Step::effect(Effect::Receive)
+            }
+            (State::SessionHttp { status, body }, Input::HttpEnd) => {
+                let now = self.now_ms;
+                let action = match &mut self.session {
+                    Some(flow) => flow.on_http(status.unwrap_or(0), &body, now),
+                    None => Action::NotFound,
+                };
+                self.session_act(action)
+            }
+            (State::SessionHttp { .. }, Input::HttpError { error }) => {
+                let now = self.now_ms;
+                let action = match &mut self.session {
+                    Some(flow) => flow.on_http_error(error.message, now),
+                    None => Action::NotFound,
+                };
+                self.session_act(action)
+            }
             (State::Finished, _) => {
                 Step::failed(self.error(ErrorKind::Unsupported, "operation already finished"))
             }
@@ -599,7 +704,32 @@ impl Operation {
                 let secret_ref = secret_ref.clone();
                 self.auth_answer(sources, index, &secret_ref, true)
             }
-            AuthSource::Session { .. } | AuthSource::Exchange { .. } => {
+            AuthSource::Session {
+                preset,
+                store,
+                profile,
+                refresh,
+                ..
+            } => {
+                let flow = SessionFlow::new(
+                    &self.config.ns,
+                    preset,
+                    store.clone(),
+                    profile.clone(),
+                    refresh.clone(),
+                );
+                match flow {
+                    Ok(mut flow) => {
+                        let action = flow.start(self.now_ms);
+                        self.session = Some(flow);
+                        self.auth_sources = sources;
+                        self.auth_index = index;
+                        self.session_act(action)
+                    }
+                    Err(e) => Step::failed(self.with_origin(e)),
+                }
+            }
+            AuthSource::Exchange { .. } => {
                 let mut e = self.error(
                     ErrorKind::Unsupported,
                     format!(
@@ -661,6 +791,106 @@ impl Operation {
         self.first_request()
     }
 
+    fn place_auth(&self, headers: &mut Headers) {
+        if let Some(chosen) = &self.chosen {
+            if let Some(secret) = self.secrets.get(&chosen.secret_ref) {
+                let cred = auth::Credential {
+                    kind: chosen.kind.clone(),
+                    placement: chosen.placement.clone(),
+                    secret,
+                    label: chosen.label.clone(),
+                };
+                auth::place(headers, &cred);
+            }
+        }
+        for (k, v) in &self.session_headers {
+            headers.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+
+    fn session_act(&mut self, action: Action) -> Step {
+        match action {
+            Action::Read(locator) => {
+                self.state = State::Session;
+                Step::effect(Effect::NeedRead { locator })
+            }
+            Action::Write { locator, bytes } => {
+                self.state = State::Session;
+                Step::effect(Effect::NeedWrite {
+                    locator,
+                    bytes,
+                    expect: None,
+                    private: true,
+                })
+            }
+            Action::Http(request) => {
+                self.state = State::SessionHttp {
+                    status: None,
+                    body: Vec::new(),
+                };
+                Step::effect(Effect::NeedHttp { request })
+            }
+            Action::NotFound => {
+                self.session = None;
+                let sources = std::mem::take(&mut self.auth_sources);
+                let index = self.auth_index;
+                self.auth_next(sources, index + 1)
+            }
+            Action::Failed(e) => {
+                let reportable = matches!(e.kind, ErrorKind::Auth)
+                    && matches!(
+                        e.code.as_deref(),
+                        Some("credential_expired") | Some("refresh_failed")
+                    );
+                if let (Job::AuthStatus, true, Some(flow)) = (&self.job, reportable, &self.session)
+                {
+                    let preset = flow.preset().as_str().to_owned();
+                    return step_done(OperationResult::AuthStatus {
+                        status: AuthStatus {
+                            source: Some(format!("session:{preset}")),
+                            expires_at: flow.expired_at_ms().map(session::rfc3339),
+                            session: Some(preset),
+                        },
+                    });
+                }
+                Step::failed(self.with_origin(e))
+            }
+            Action::Ready(cred) => {
+                let secret_ref = format!("session:{}", cred.session);
+                self.secrets.set(&secret_ref, cred.token.into_bytes());
+                self.session_headers = cred.headers;
+                if let Some(pin) = cred.base_url {
+                    self.endpoint.base_url = pin.clone();
+                    if let Some(ctx) = &mut self.ctx {
+                        ctx.base_url = pin;
+                    }
+                }
+                if let (Some(v), Some(ctx)) = (cred.api_version, &mut self.ctx) {
+                    ctx.api_version = Some(v);
+                }
+                if let Job::AuthStatus = self.job {
+                    return step_done(OperationResult::AuthStatus {
+                        status: AuthStatus {
+                            source: Some(cred.label),
+                            expires_at: cred.expires_at_ms.map(session::rfc3339),
+                            session: Some(cred.session),
+                        },
+                    });
+                }
+                self.chosen = Some(Chosen {
+                    secret_ref,
+                    kind: cred.kind,
+                    placement: cred.placement,
+                    label: cred.label.clone(),
+                });
+                if let Some(ctx) = &mut self.ctx {
+                    ctx.auth_source = Some(cred.label);
+                }
+                self.first_request()
+            }
+        }
+    }
+
     fn first_request(&mut self) -> Step {
         let ctx = self.ctx.clone().expect("prepared");
         if !self.fetch_planned {
@@ -716,17 +946,7 @@ impl Operation {
             warnings.extend(built.warnings);
         }
         let mut request = built.request;
-        if let Some(chosen) = &self.chosen {
-            if let Some(secret) = self.secrets.get(&chosen.secret_ref) {
-                let cred = auth::Credential {
-                    kind: chosen.kind.clone(),
-                    placement: chosen.placement.clone(),
-                    secret,
-                    label: chosen.label.clone(),
-                };
-                auth::place(&mut request.headers, &cred);
-            }
-        }
+        self.place_auth(&mut request.headers);
         request.timeout = Some(with_timeout_defaults(request.timeout.or(ctx.timeout)));
         self.pending = Some(request);
         self.attempt = 0;
@@ -933,19 +1153,7 @@ impl Operation {
                         collected.extend(page);
                         match next {
                             Some(mut r) => {
-                                if let Some(chosen) = &self.chosen {
-                                    if let Some(secret) = self.secrets.get(&chosen.secret_ref) {
-                                        auth::place(
-                                            &mut r.headers,
-                                            &auth::Credential {
-                                                kind: chosen.kind.clone(),
-                                                placement: chosen.placement.clone(),
-                                                secret,
-                                                label: chosen.label.clone(),
-                                            },
-                                        );
-                                    }
-                                }
+                                self.place_auth(&mut r.headers);
                                 self.pending = Some(r);
                                 self.attempt = 0;
                                 self.send()

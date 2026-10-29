@@ -1,0 +1,43 @@
+{
+  "name": "login_unavailable",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "anthropic_profile"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "login",
+      "callback": "paste"
+    }
+  },
+  "secrets": {},
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "unsupported",
+            "message": "login for anthropic_profile is not available yet; it ships once a recorded fixture proves the flow",
+            "code": "auth_source",
+            "retryable": false,
+            "attempts": 0
+          }
+        }
+      }
+    }
+  ]
+}

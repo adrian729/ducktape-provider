@@ -249,6 +249,8 @@ export interface SessionAuth {
   preset: string;
   store?: string;
   client_id?: string;
+  profile?: string;
+  refresh?: "never" | "memory" | "write_back";
 }
 export interface ResolverAuth {
   type: "resolver";
@@ -352,7 +354,7 @@ export declare function assistant(...parts: Array<Part | Response>): Message;
 export declare function system(...parts: Part[]): Message;
 export declare function tool(...results: ToolResultBlock[]): Message;
 export declare function env(...names: string[]): EnvAuth;
-export declare function session(preset: string, options?: { store?: string; client_id?: string }): SessionAuth;
+export declare function session(preset: string, options?: { store?: string; client_id?: string; profile?: string; refresh?: "never" | "memory" | "write_back" }): SessionAuth;
 export declare function resolver(fn: ResolverAuth["fn"], options?: { kind?: string; placement?: string }): ResolverAuth;
 
 export declare class ProviderError extends Error {

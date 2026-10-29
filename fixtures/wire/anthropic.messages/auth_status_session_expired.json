@@ -1,0 +1,111 @@
+{
+  "name": "auth_status_session_expired",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "anthropic",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "claude_code"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "auth_status"
+    }
+  },
+  "secrets": {},
+  "env": {
+    "HOME": "/home/u"
+  },
+  "files": {
+    "/home/u/.claude/.credentials.json": "{\"claudeAiOauth\": {\"accessToken\": \"sk-ant-oat01-cc\", \"refreshToken\": \"rt_cc\", \"expiresAt\": 1761695995000, \"scopes\": [\"user:inference\"], \"subscriptionType\": \"max\"}}"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "CLAUDE_CONFIG_DIR"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "L2hvbWUvdQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.claude/.credentials.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "eyJjbGF1ZGVBaU9hdXRoIjogeyJhY2Nlc3NUb2tlbiI6ICJzay1hbnQtb2F0MDEtY2MiLCAicmVmcmVzaFRva2VuIjogInJ0X2NjIiwgImV4cGlyZXNBdCI6IDE3NjE2OTU5OTUwMDAsICJzY29wZXMiOiBbInVzZXI6aW5mZXJlbmNlIl0sICJzdWJzY3JpcHRpb25UeXBlIjogIm1heCJ9fQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "auth_status",
+            "status": {
+              "source": "session:claude_code",
+              "expires_at": "2025-10-28T23:59:55Z",
+              "session": "claude_code"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
