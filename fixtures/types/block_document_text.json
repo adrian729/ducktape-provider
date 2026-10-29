@@ -1,0 +1,15 @@
+{
+  "def": "Block",
+  "value": {
+    "type": "document",
+    "text": "plain",
+    "name": "notes.txt",
+    "vendor": {
+      "anthropic": {
+        "citations": {
+          "enabled": true
+        }
+      }
+    }
+  }
+}

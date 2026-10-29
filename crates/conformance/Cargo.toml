@@ -1,0 +1,16 @@
+[package]
+name = "ducktape-conformance"
+description = "Fixture runner for the core and the ABI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+ducktape-core = { path = "../core" }
+ducktape-abi = { path = "../abi" }
+serde.workspace = true
+serde_json.workspace = true

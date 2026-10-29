@@ -1,0 +1,49 @@
+{
+  "def": "ProviderConfig",
+  "value": {
+    "ns": "openai",
+    "base_url": "https://api.groq.com/openai",
+    "auth": {
+      "sources": [
+        {
+          "type": "inline",
+          "secret_ref": "s1"
+        }
+      ],
+      "origins": [
+        "https://api.groq.com"
+      ],
+      "dangerously_allow_browser": false
+    },
+    "headers": {
+      "x-app": "1"
+    },
+    "timeout": {
+      "connect": 5.0
+    },
+    "default_model": "m",
+    "default_embedding_model": "e",
+    "default_system": [
+      {
+        "type": "text",
+        "text": "sys"
+      }
+    ],
+    "default_tools": [],
+    "default_options": {
+      "retries": 1
+    },
+    "default_vendor": {
+      "openai": {
+        "store": false
+      }
+    },
+    "overrides": {
+      "api_version": "2026-10-21",
+      "dialect": {
+        "x": 1
+      }
+    },
+    "strict": false
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "def": "Start",
+  "value": {
+    "clock": {
+      "now_ms": 1761696000000,
+      "entropy": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "provider": {
+      "ns": "openai"
+    },
+    "operation": {
+      "type": "login",
+      "callback": "paste",
+      "timeout_ms": 60000
+    }
+  }
+}

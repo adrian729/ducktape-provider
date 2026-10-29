@@ -1,0 +1,13 @@
+{
+  "def": "Resume",
+  "value": {
+    "clock": {
+      "now_ms": 1761696000000,
+      "entropy": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "input": {
+      "type": "http_chunk",
+      "bytes": "ZGF0YTogaGkK"
+    }
+  }
+}

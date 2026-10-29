@@ -1,0 +1,9 @@
+{
+  "def": "AuthSource",
+  "value": {
+    "type": "session",
+    "preset": "chatgpt_plan",
+    "store": "/tmp/x",
+    "refresh": "write_back"
+  }
+}

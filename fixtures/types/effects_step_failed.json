@@ -1,0 +1,14 @@
+{
+  "def": "Step",
+  "value": {
+    "effect": {
+      "type": "failed",
+      "error": {
+        "kind": "cancelled",
+        "message": "cancelled",
+        "retryable": false,
+        "attempts": 1
+      }
+    }
+  }
+}

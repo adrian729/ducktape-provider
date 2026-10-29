@@ -1,0 +1,13 @@
+{
+  "def": "EmbedRequest",
+  "value": {
+    "model": "text-embedding-3-small",
+    "input": [
+      "hello",
+      "world"
+    ],
+    "options": {
+      "dimensions": 512
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "def": "Message",
+  "value": {
+    "role": "user",
+    "content": [
+      {
+        "type": "text",
+        "text": "hi"
+      }
+    ]
+  }
+}

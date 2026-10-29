@@ -1,0 +1,15 @@
+{
+  "def": "ChatRequest",
+  "value": {
+    "model": "m",
+    "messages": [
+      {
+        "role": "user",
+        "content": []
+      }
+    ],
+    "options": {
+      "reasoning": "ultra"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "def": "Resume",
+  "value": {
+    "clock": {
+      "now_ms": 1761696000000,
+      "entropy": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "input": {
+      "type": "http_response",
+      "status": 200,
+      "headers": {
+        "content-type": "text/event-stream"
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "def": "Event",
+  "value": {
+    "type": "block_start",
+    "index": 0,
+    "kind": "tool_call",
+    "id": "c1",
+    "name": "add"
+  }
+}

@@ -23,3 +23,6 @@ venv/
 
 # Local working notes
 tmp/
+
+# Rust
+target/

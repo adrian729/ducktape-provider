@@ -1,0 +1,11 @@
+{
+  "def": "ModelInfo",
+  "value": {
+    "id": "x",
+    "kind": "unknown",
+    "capabilities": {
+      "embeddings": null,
+      "source": "vendor"
+    }
+  }
+}

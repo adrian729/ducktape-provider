@@ -1,0 +1,11 @@
+{
+  "def": "Event",
+  "value": {
+    "type": "block_stop",
+    "index": 0,
+    "block": {
+      "type": "text",
+      "text": "hey"
+    }
+  }
+}

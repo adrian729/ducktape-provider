@@ -1,0 +1,7 @@
+language = "C"
+include_guard = "DUCKTAPE_H"
+pragma_once = false
+cpp_compat = true
+documentation = true
+[export]
+prefix = "ducktape_"

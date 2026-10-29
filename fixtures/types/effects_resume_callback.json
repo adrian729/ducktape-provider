@@ -1,0 +1,13 @@
+{
+  "def": "Resume",
+  "value": {
+    "clock": {
+      "now_ms": 1761696000000,
+      "entropy": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "input": {
+      "type": "callback",
+      "url": "http://127.0.0.1:1455/cb?code=x&state=y"
+    }
+  }
+}

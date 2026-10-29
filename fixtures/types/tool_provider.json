@@ -1,0 +1,10 @@
+{
+  "def": "Tool",
+  "value": {
+    "type": "provider",
+    "provider_tool": "openai.web_search",
+    "config": {
+      "search_context_size": "low"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "def": "Step",
+  "value": {
+    "effect": {
+      "type": "need_http",
+      "request": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "headers": {
+          "authorization": "Bearer x"
+        },
+        "body": "{}",
+        "stream": true,
+        "timeout": {
+          "total": 60.0
+        },
+        "purpose": "chat"
+      }
+    }
+  }
+}

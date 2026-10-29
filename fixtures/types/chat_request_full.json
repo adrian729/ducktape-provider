@@ -1,0 +1,62 @@
+{
+  "def": "ChatRequest",
+  "value": {
+    "model": "gpt-5.5",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      }
+    ],
+    "system": [
+      {
+        "type": "text",
+        "text": "be brief"
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "add",
+        "description": "d",
+        "input_schema": {}
+      }
+    ],
+    "options": {
+      "reasoning": "high",
+      "tool_choice": {
+        "mode": "named",
+        "name": "add"
+      },
+      "cache": "auto",
+      "output": {
+        "json_schema": {
+          "type": "object"
+        },
+        "name": "out"
+      },
+      "stop_sequences": [
+        "END"
+      ],
+      "retries": 0
+    },
+    "vendor": {
+      "openai": {
+        "temperature": 0.2
+      }
+    },
+    "timeout": {
+      "total": 30.0
+    },
+    "headers": {
+      "x-trace": "1"
+    },
+    "strict": true,
+    "include_raw": false
+  }
+}

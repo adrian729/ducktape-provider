@@ -1,0 +1,8 @@
+{
+  "def": "Event",
+  "value": {
+    "type": "tool_call_delta",
+    "index": 1,
+    "arguments_json": "{\"a\":"
+  }
+}

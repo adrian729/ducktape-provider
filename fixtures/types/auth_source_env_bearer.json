@@ -1,0 +1,11 @@
+{
+  "def": "AuthSource",
+  "value": {
+    "type": "env",
+    "names": [
+      "GROQ_API_KEY"
+    ],
+    "kind": "bearer",
+    "placement": "authorization"
+  }
+}

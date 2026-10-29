@@ -1,0 +1,15 @@
+{
+  "def": "Step",
+  "value": {
+    "effect": {
+      "type": "need_write",
+      "locator": {
+        "type": "file",
+        "path": "/home/x/.config/ducktape/openai.json"
+      },
+      "bytes": "e30=",
+      "expect": "abc",
+      "private": true
+    }
+  }
+}

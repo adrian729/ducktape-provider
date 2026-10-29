@@ -1,0 +1,16 @@
+{
+  "def": "Message",
+  "value": {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool_call",
+        "id": "c1",
+        "name": "add",
+        "arguments": {},
+        "truncated": true,
+        "arguments_json": "{\"a\":"
+      }
+    ]
+  }
+}

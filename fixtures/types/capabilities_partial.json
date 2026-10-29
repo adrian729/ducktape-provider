@@ -1,0 +1,21 @@
+{
+  "def": "Capabilities",
+  "value": {
+    "reasoning": {
+      "levels": [
+        "low",
+        "high"
+      ],
+      "can_disable": false
+    },
+    "tool_choice": null,
+    "inputs": [
+      "text",
+      "image"
+    ],
+    "limits": {
+      "context_window": 200000
+    },
+    "source": "shipped"
+  }
+}

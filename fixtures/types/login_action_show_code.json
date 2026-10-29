@@ -1,0 +1,9 @@
+{
+  "def": "LoginAction",
+  "value": {
+    "type": "show_code",
+    "url": "https://x/y",
+    "code": "ABCD",
+    "instructions": "Enter the code"
+  }
+}

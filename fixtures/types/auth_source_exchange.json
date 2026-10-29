@@ -1,0 +1,10 @@
+{
+  "def": "AuthSource",
+  "value": {
+    "type": "exchange",
+    "grant": "jwt_bearer",
+    "params": {
+      "token_file": "/run/token"
+    }
+  }
+}

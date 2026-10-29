@@ -1,0 +1,10 @@
+{
+  "def": "Event",
+  "value": {
+    "type": "raw",
+    "parent_id": "agent-1",
+    "event": {
+      "type": "ping"
+    }
+  }
+}

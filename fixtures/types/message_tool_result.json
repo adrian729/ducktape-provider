@@ -1,0 +1,19 @@
+{
+  "def": "Message",
+  "value": {
+    "role": "tool",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_call_id": "c1",
+        "content": [
+          {
+            "type": "text",
+            "text": "42"
+          }
+        ],
+        "is_error": false
+      }
+    ]
+  }
+}

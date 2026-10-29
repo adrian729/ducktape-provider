@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/abi", "crates/conformance"]
+default-members = ["crates/core", "crates/abi", "crates/conformance"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/adrian729/ducktape-provider"
+authors = ["Adrian Sanchez Albanell <adrian.sanchez.albanell@gmail.com>"]
+
+[workspace.dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.140", features = ["raw_value"] }
+base64 = "0.22.1"
+zeroize = "1.8.1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+panic = "abort"
+strip = true
+
+[profile.dev]
+panic = "abort"

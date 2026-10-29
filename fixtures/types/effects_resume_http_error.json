@@ -1,0 +1,16 @@
+{
+  "def": "Resume",
+  "value": {
+    "clock": {
+      "now_ms": 1761696000000,
+      "entropy": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "input": {
+      "type": "http_error",
+      "error": {
+        "kind": "reset",
+        "message": "connection reset"
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "def": "Resume",
+  "value": {
+    "clock": {
+      "now_ms": 1761696000000,
+      "entropy": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    "input": {
+      "type": "read",
+      "found": true,
+      "bytes": "e30=",
+      "etag": "v1"
+    }
+  }
+}

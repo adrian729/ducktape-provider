@@ -1,0 +1,23 @@
+{
+  "def": "Step",
+  "value": {
+    "notify": [
+      {
+        "type": "event",
+        "event": {
+          "type": "text_delta",
+          "index": 0,
+          "text": "he"
+        }
+      },
+      {
+        "type": "observer",
+        "hook": "on_event",
+        "data": {}
+      }
+    ],
+    "effect": {
+      "type": "receive"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "def": "Tool",
+  "value": {
+    "type": "function",
+    "name": "add",
+    "description": "d",
+    "input_schema": {
+      "type": "object"
+    },
+    "strict": true
+  }
+}

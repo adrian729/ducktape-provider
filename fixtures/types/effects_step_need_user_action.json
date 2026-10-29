@@ -1,0 +1,13 @@
+{
+  "def": "Step",
+  "value": {
+    "effect": {
+      "type": "need_user_action",
+      "action": {
+        "type": "open_url",
+        "url": "https://auth.openai.com/x",
+        "instructions": "Sign in"
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "def": "Block",
+  "value": {
+    "type": "image",
+    "url": "https://example.com/a.png",
+    "media_type": "image/png",
+    "cache": {
+      "ttl": "long"
+    }
+  }
+}

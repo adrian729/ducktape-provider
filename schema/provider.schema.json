@@ -1,0 +1,1984 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/adrian729/ducktape-provider/schema/1.0.0",
+  "title": "ducktape provider normalized types",
+  "description": "Cross-language contract. Version in $id: minor = additive, major = breaking. Open world: unknown fields are preserved and ignored, enums are open, unknown block and event types decode as custom / raw. Every union carries a discriminator.",
+  "$defs": {
+    "VendorMap": {
+      "type": "object",
+      "description": "Vendor-specific passthrough keyed by namespace",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "CacheMark": {
+      "type": "object",
+      "properties": {
+        "ttl": {
+          "anyOf": [
+            {
+              "enum": [
+                "short",
+                "long"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "description": "Cache breakpoint on a block or tool list"
+    },
+    "Origin": {
+      "type": "object",
+      "properties": {
+        "wire": {
+          "type": "string"
+        },
+        "ns": {
+          "anyOf": [
+            {
+              "enum": [
+                "anthropic",
+                "openai",
+                "google",
+                "ollama"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Vendor namespace, company name"
+        },
+        "base_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "model": {
+          "type": "string"
+        },
+        "auth_source": {
+          "type": "string",
+          "description": "env:NAME, session:PRESET, resolver, inline"
+        }
+      },
+      "required": [
+        "wire",
+        "ns",
+        "base_url",
+        "model"
+      ],
+      "description": "Where a response or an opaque block came from; opaque state is replayed when wire and base_url match the call"
+    },
+    "Role": {
+      "anyOf": [
+        {
+          "enum": [
+            "user",
+            "assistant",
+            "system",
+            "tool"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "TextBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "id": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheMark"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "provider_executed": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ]
+    },
+    "ImageBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "image"
+        },
+        "id": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheMark"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "provider_executed": {
+          "type": "boolean"
+        },
+        "data": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "data"
+          ]
+        },
+        {
+          "required": [
+            "url"
+          ]
+        },
+        {
+          "required": [
+            "file_id"
+          ]
+        }
+      ]
+    },
+    "DocumentBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "document"
+        },
+        "id": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheMark"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "provider_executed": {
+          "type": "boolean"
+        },
+        "data": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "data"
+          ]
+        },
+        {
+          "required": [
+            "url"
+          ]
+        },
+        {
+          "required": [
+            "file_id"
+          ]
+        },
+        {
+          "required": [
+            "text"
+          ]
+        }
+      ]
+    },
+    "ToolCallBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool_call"
+        },
+        "id": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheMark"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "provider_executed": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "arguments_json": {
+          "type": "string",
+          "description": "Raw arguments text when parsing failed or was cut"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "enum": [
+                "pending",
+                "in_progress",
+                "completed",
+                "failed",
+                "cancelled"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Reserved for agents"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name",
+        "arguments"
+      ]
+    },
+    "ToolResultBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "tool_result"
+        },
+        "id": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheMark"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "provider_executed": {
+          "type": "boolean"
+        },
+        "tool_call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Block"
+          }
+        },
+        "is_error": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "tool_call_id",
+        "content"
+      ]
+    },
+    "ReasoningBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reasoning"
+        },
+        "id": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheMark"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "provider_executed": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "vendor_state": {
+          "description": "Opaque"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ]
+    },
+    "CompactionBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "compaction"
+        },
+        "id": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheMark"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "provider_executed": {
+          "type": "boolean"
+        },
+        "vendor_state": {
+          "description": "Opaque"
+        },
+        "text": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        }
+      },
+      "required": [
+        "type",
+        "vendor_state",
+        "origin"
+      ]
+    },
+    "CustomBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "custom"
+        },
+        "id": {
+          "type": "string"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheMark"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "provider_executed": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+\\.[A-Za-z0-9_.-]+$",
+          "description": "<ns>.<type>"
+        },
+        "data": {},
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        }
+      },
+      "required": [
+        "type",
+        "kind"
+      ]
+    },
+    "Block": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/TextBlock"
+        },
+        {
+          "$ref": "#/$defs/ImageBlock"
+        },
+        {
+          "$ref": "#/$defs/DocumentBlock"
+        },
+        {
+          "$ref": "#/$defs/ToolCallBlock"
+        },
+        {
+          "$ref": "#/$defs/ToolResultBlock"
+        },
+        {
+          "$ref": "#/$defs/ReasoningBlock"
+        },
+        {
+          "$ref": "#/$defs/CompactionBlock"
+        },
+        {
+          "$ref": "#/$defs/CustomBlock"
+        }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      },
+      "description": "Unknown types decode as CustomBlock"
+    },
+    "Message": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/Role"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Block"
+          }
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "ToolDef": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "function"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "input_schema": {
+          "type": "object"
+        },
+        "strict": {
+          "type": "boolean"
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheMark"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "description",
+        "input_schema"
+      ]
+    },
+    "ProviderTool": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "provider"
+        },
+        "provider_tool": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+\\.[A-Za-z0-9_.-]+$"
+        },
+        "config": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "provider_tool"
+      ],
+      "description": "A tool the vendor runs itself; config is the vendor's own object"
+    },
+    "Tool": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ToolDef"
+        },
+        {
+          "$ref": "#/$defs/ProviderTool"
+        }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "ReasoningLevel": {
+      "anyOf": [
+        {
+          "enum": [
+            "auto",
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "ToolChoice": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "auto",
+                "none",
+                "required",
+                "named"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "description": "Canonical form; bindings accept the strings auto / none / required and {name} as sugar"
+    },
+    "OutputFormat": {
+      "type": "object",
+      "properties": {
+        "json_schema": {
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "json_schema"
+      ]
+    },
+    "Timeout": {
+      "type": "object",
+      "properties": {
+        "connect": {
+          "type": "number"
+        },
+        "read": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "description": "Seconds; bindings accept a plain number as total"
+    },
+    "Options": {
+      "type": "object",
+      "properties": {
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reasoning": {
+          "$ref": "#/$defs/ReasoningLevel"
+        },
+        "reasoning_summary": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "auto"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "tool_choice": {
+          "$ref": "#/$defs/ToolChoice"
+        },
+        "parallel_tools": {
+          "type": "boolean"
+        },
+        "output": {
+          "$ref": "#/$defs/OutputFormat"
+        },
+        "stop_sequences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cache": {
+          "anyOf": [
+            {
+              "enum": [
+                "none",
+                "auto",
+                "explicit"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "user_id": {
+          "type": "string"
+        }
+      },
+      "description": "Portable options; everything else goes through vendor"
+    },
+    "ChatRequest": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "minItems": 1
+        },
+        "system": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TextBlock"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          }
+        },
+        "options": {
+          "$ref": "#/$defs/Options"
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "timeout": {
+          "$ref": "#/$defs/Timeout"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "strict": {
+          "type": "boolean"
+        },
+        "include_raw": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "model",
+        "messages"
+      ]
+    },
+    "StopReason": {
+      "anyOf": [
+        {
+          "enum": [
+            "complete",
+            "tool_call",
+            "max_output_tokens",
+            "stop_sequence",
+            "context_window_exceeded",
+            "refusal",
+            "content_filtered",
+            "continue_required",
+            "compaction",
+            "malformed_output",
+            "other"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "Stop": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/StopReason"
+        },
+        "raw": {
+          "description": "Vendor's own value"
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "integer"
+            },
+            "cache_read": {
+              "type": "integer"
+            },
+            "cache_write": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total"
+          ],
+          "description": "total includes cached tokens"
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "integer"
+            },
+            "reasoning": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total"
+          ]
+        },
+        "raw": {}
+      },
+      "required": [
+        "input",
+        "output"
+      ]
+    },
+    "Warning": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "unsupported",
+                "compatibility",
+                "deprecated"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "feature": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "feature"
+      ]
+    },
+    "Response": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Block"
+          }
+        },
+        "stop": {
+          "$ref": "#/$defs/Stop"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "first_token_ms": {
+          "type": "number"
+        },
+        "raw": {
+          "description": "Vendor reply body; only with include_raw"
+        }
+      },
+      "required": [
+        "content",
+        "stop",
+        "usage",
+        "warnings",
+        "origin",
+        "latency_ms"
+      ]
+    },
+    "BlockKind": {
+      "anyOf": [
+        {
+          "enum": [
+            "text",
+            "reasoning",
+            "tool_call",
+            "compaction",
+            "custom"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "block_start"
+            },
+            "parent_id": {
+              "type": "string",
+              "description": "Reserved for agents"
+            },
+            "index": {
+              "type": "integer"
+            },
+            "kind": {
+              "$ref": "#/$defs/BlockKind"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "text_delta"
+            },
+            "parent_id": {
+              "type": "string",
+              "description": "Reserved for agents"
+            },
+            "index": {
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "reasoning_delta"
+            },
+            "parent_id": {
+              "type": "string",
+              "description": "Reserved for agents"
+            },
+            "index": {
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_call_delta"
+            },
+            "parent_id": {
+              "type": "string",
+              "description": "Reserved for agents"
+            },
+            "index": {
+              "type": "integer"
+            },
+            "arguments_json": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "arguments_json"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "block_stop"
+            },
+            "parent_id": {
+              "type": "string",
+              "description": "Reserved for agents"
+            },
+            "index": {
+              "type": "integer"
+            },
+            "block": {
+              "$ref": "#/$defs/Block"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "block"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "finish"
+            },
+            "parent_id": {
+              "type": "string",
+              "description": "Reserved for agents"
+            },
+            "response": {
+              "$ref": "#/$defs/Response"
+            }
+          },
+          "required": [
+            "type",
+            "response"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "raw"
+            },
+            "parent_id": {
+              "type": "string",
+              "description": "Reserved for agents"
+            },
+            "event": {}
+          },
+          "required": [
+            "type",
+            "event"
+          ]
+        }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      },
+      "description": "Unknown event types are delivered as raw"
+    },
+    "ErrorKind": {
+      "anyOf": [
+        {
+          "enum": [
+            "auth",
+            "rate_limit",
+            "quota",
+            "server",
+            "connection",
+            "timeout",
+            "cancelled",
+            "not_found",
+            "context_overflow",
+            "request_too_large",
+            "bad_request",
+            "malformed_response",
+            "unsupported"
+          ]
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderError": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ErrorKind"
+        },
+        "message": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer"
+        },
+        "code": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "retry_after": {
+          "type": "number"
+        },
+        "attempts": {
+          "type": "integer"
+        },
+        "body": {
+          "description": "Redacted vendor error body"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        }
+      },
+      "required": [
+        "kind",
+        "message",
+        "retryable",
+        "attempts"
+      ]
+    },
+    "EmbedRequest": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "input": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "options": {
+          "type": "object",
+          "properties": {
+            "dimensions": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "retries": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "timeout": {
+          "$ref": "#/$defs/Timeout"
+        },
+        "include_raw": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "model",
+        "input"
+      ]
+    },
+    "EmbedResponse": {
+      "type": "object",
+      "properties": {
+        "embeddings": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "input": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "total"
+                  ]
+                }
+              },
+              "required": [
+                "input"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Warning"
+          }
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "latency_ms": {
+          "type": "number"
+        },
+        "raw": {}
+      },
+      "required": [
+        "embeddings",
+        "usage",
+        "warnings",
+        "origin",
+        "latency_ms"
+      ]
+    },
+    "Capabilities": {
+      "type": "object",
+      "properties": {
+        "reasoning": {
+          "type": "object",
+          "properties": {
+            "levels": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ReasoningLevel"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "can_disable": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true, false or null = unknown"
+            }
+          }
+        },
+        "tool_choice": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "auto",
+                      "none",
+                      "required",
+                      "named"
+                    ]
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parallel_tools": {
+          "type": "object",
+          "properties": {
+            "supported": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true, false or null = unknown"
+            },
+            "toggle": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true, false or null = unknown"
+            }
+          }
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "json_schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true, false or null = unknown"
+            }
+          }
+        },
+        "cache": {
+          "type": "object",
+          "properties": {
+            "breakpoints": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true, false or null = unknown"
+            },
+            "ttls": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "short",
+                          "long"
+                        ]
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "text",
+                      "image",
+                      "document",
+                      "audio",
+                      "video"
+                    ]
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "functions": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true, false or null = unknown"
+            },
+            "hosted": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "context_window": {
+              "type": "integer"
+            },
+            "max_output_tokens": {
+              "type": "integer"
+            }
+          }
+        },
+        "embeddings": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "true, false or null = unknown"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "enum": [
+                "shipped",
+                "vendor",
+                "user"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source"
+      ]
+    },
+    "ModelInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "chat",
+                "embedding",
+                "unknown"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "context_window": {
+          "type": "integer"
+        },
+        "max_output_tokens": {
+          "type": "integer"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "raw": {}
+      },
+      "required": [
+        "id",
+        "kind"
+      ]
+    },
+    "AuthStatus": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ]
+    },
+    "LoginAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "open_url"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url",
+            "instructions"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "show_code"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "code": {
+              "type": "string"
+            },
+            "instructions": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url",
+            "code",
+            "instructions"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "paste"
+            },
+            "prompt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "prompt"
+          ]
+        }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "AuthSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "inline"
+            },
+            "secret_ref": {
+              "type": "string",
+              "description": "Handle filled through set_secret; never the secret"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "none",
+                    "api_key",
+                    "bearer",
+                    "sigv4"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "placement": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "x-api-key",
+                    "authorization",
+                    "x-goog-api-key",
+                    "api-key"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "secret_ref"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "env"
+            },
+            "names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "none",
+                    "api_key",
+                    "bearer",
+                    "sigv4"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "placement": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "x-api-key",
+                    "authorization",
+                    "x-goog-api-key",
+                    "api-key"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "names"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "resolver"
+            },
+            "resolver_id": {
+              "type": "string"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "none",
+                    "api_key",
+                    "bearer",
+                    "sigv4"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "placement": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "x-api-key",
+                    "authorization",
+                    "x-goog-api-key",
+                    "api-key"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "resolver_id"
+          ],
+          "description": "Host callback"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "session"
+            },
+            "preset": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "anthropic_profile",
+                    "claude_code",
+                    "claude_code_token_env",
+                    "codex",
+                    "chatgpt_plan"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "store": {
+              "type": "string"
+            },
+            "client_id": {
+              "type": "string"
+            },
+            "profile": {
+              "type": "string"
+            },
+            "refresh": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "never",
+                    "memory",
+                    "write_back"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "preset"
+          ],
+          "description": "kind, placement, base_url, headers and dialect come from the preset"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "exchange"
+            },
+            "grant": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "refresh_token",
+                    "jwt_bearer",
+                    "client_credentials",
+                    "sts_web_identity",
+                    "gcp_metadata",
+                    "aws_imds",
+                    "aws_container"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "params": {
+              "type": "object"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "none",
+                    "api_key",
+                    "bearer",
+                    "sigv4"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "placement": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "x-api-key",
+                    "authorization",
+                    "x-goog-api-key",
+                    "api-key"
+                  ]
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "grant"
+          ]
+        }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "Auth": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuthSource"
+          },
+          "description": "Tried in literal order"
+        },
+        "origins": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": "Where credentials may be sent; default = base_url origin"
+        },
+        "extra_headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "dangerously_allow_browser": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sources"
+      ],
+      "description": "See Auth model note"
+    },
+    "Overrides": {
+      "type": "object",
+      "properties": {
+        "api_version": {
+          "type": "string"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "dialect": {
+          "type": "object"
+        }
+      }
+    },
+    "ProviderConfig": {
+      "type": "object",
+      "properties": {
+        "ns": {
+          "anyOf": [
+            {
+              "enum": [
+                "anthropic",
+                "openai",
+                "google",
+                "ollama"
+              ]
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Vendor namespace, company name"
+        },
+        "base_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "auth": {
+          "$ref": "#/$defs/Auth"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "timeout": {
+          "$ref": "#/$defs/Timeout"
+        },
+        "default_model": {
+          "type": "string"
+        },
+        "default_embedding_model": {
+          "type": "string"
+        },
+        "default_system": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TextBlock"
+          }
+        },
+        "default_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Tool"
+          }
+        },
+        "default_options": {
+          "$ref": "#/$defs/Options"
+        },
+        "default_vendor": {
+          "$ref": "#/$defs/VendorMap"
+        },
+        "overrides": {
+          "$ref": "#/$defs/Overrides"
+        },
+        "strict": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ns"
+      ],
+      "description": "What a binding hands the core for one Provider"
+    }
+  }
+}
