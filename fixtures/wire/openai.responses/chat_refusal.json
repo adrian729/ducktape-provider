@@ -1,0 +1,196 @@
+{
+  "name": "chat_refusal",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gpt-5.5",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-test-key"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "text/event-stream",
+        "x-request-id": "req_1"
+      },
+      "body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_01\",\"object\":\"response\",\"created_at\":1761696000,\"status\":\"in_progress\",\"model\":\"gpt-5.5\",\"output\":[],\"incomplete_details\":null,\"error\":null},\"sequence_number\":0}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_02\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]},\"sequence_number\":1}\n\nevent: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_02\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"refusal\",\"refusal\":\"\"},\"sequence_number\":2}\n\nevent: response.refusal.delta\ndata: {\"type\":\"response.refusal.delta\",\"item_id\":\"msg_02\",\"output_index\":0,\"content_index\":0,\"delta\":\"I can't help with that.\",\"sequence_number\":3}\n\nevent: response.refusal.done\ndata: {\"type\":\"response.refusal.done\",\"item_id\":\"msg_02\",\"output_index\":0,\"content_index\":0,\"refusal\":\"I can't help with that.\",\"sequence_number\":4}\n\nevent: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_02\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"refusal\",\"refusal\":\"I can't help with that.\"},\"sequence_number\":5}\n\nevent: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_02\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"I can't help with that.\"}]},\"sequence_number\":6}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_01\",\"object\":\"response\",\"created_at\":1761696000,\"status\":\"completed\",\"model\":\"gpt-5.5\",\"output\":[{\"id\":\"msg_02\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"I can't help with that.\"}]}],\"incomplete_details\":null,\"error\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":8,\"total_tokens\":18}},\"sequence_number\":7}\n\n"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OPENAI_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 209,
+              "headers": {
+                "authorization": "***",
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "https://api.openai.com/v1/responses"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://api.openai.com/v1/responses",
+            "headers": {
+              "authorization": "Bearer sk-test-key",
+              "content-type": "application/json"
+            },
+            "body": "{\"include\":[\"reasoning.encrypted_content\"],\"input\":[{\"content\":[{\"text\":\"hi\",\"type\":\"input_text\"}],\"role\":\"user\",\"type\":\"message\"}],\"model\":\"gpt-5.5\",\"reasoning\":{\"summary\":\"auto\"},\"store\":false,\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream",
+          "x-request-id": "req_1"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": "req_1",
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "ZXZlbnQ6IHJlc3BvbnNlLmNyZWF0ZWQKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2UuY3JlYXRlZCIsInJlc3BvbnNlIjp7ImlkIjoicmVzcF8wMSIsIm9iamVjdCI6InJlc3BvbnNlIiwiY3JlYXRlZF9hdCI6MTc2MTY5NjAwMCwic3RhdHVzIjoiaW5fcHJvZ3Jlc3MiLCJtb2RlbCI6ImdwdC01LjUiLCJvdXRwdXQiOltdLCJpbmNvbXBsZXRlX2RldGFpbHMiOm51bGwsImVycm9yIjpudWxsfSwic2VxdWVuY2VfbnVtYmVyIjowfQoKZXZlbnQ6IHJlc3BvbnNlLm91dHB1dF9pdGVtLmFkZGVkCmRhdGE6IHsidHlwZSI6InJlc3BvbnNlLm91dHB1dF9pdGVtLmFkZGVkIiwib3V0cHV0X2luZGV4IjowLCJpdGVtIjp7ImlkIjoibXNnXzAyIiwidHlwZSI6Im1lc3NhZ2UiLCJzdGF0dXMiOiJpbl9wcm9ncmVzcyIsInJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbXX0sInNlcXVlbmNlX251bWJlciI6MX0KCmV2ZW50OiByZXNwb25zZS5jb250ZW50X3BhcnQuYWRkZWQKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2UuY29udGVudF9wYXJ0LmFkZGVkIiwiaXRlbV9pZCI6Im1zZ18wMiIsIm91dHB1dF9pbmRleCI6MCwiY29udGVudF9pbmRleCI6MCwicGFydCI6eyJ0eXBlIjoicmVmdXNhbCIsInJlZnVzYWwiOiIifSwic2VxdWVuY2VfbnVtYmVyIjoyfQoKZXZlbnQ6IHJlc3BvbnNlLnJlZnVzYWwuZGVsdGEKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2UucmVmdXNhbC5kZWx0YSIsIml0ZW1faWQiOiJtc2dfMDIiLCJvdXRwdXRfaW5kZXgiOjAsImNvbnRlbnRfaW5kZXgiOjAsImRlbHRhIjoiSSBjYW4ndCBoZWxwIHdpdGggdGhhdC4iLCJzZXF1ZW5jZV9udW1iZXIiOjN9CgpldmVudDogcmVzcG9uc2UucmVmdXNhbC5kb25lCmRhdGE6IHsidHlwZSI6InJlc3BvbnNlLnJlZnVzYWwuZG9uZSIsIml0ZW1faWQiOiJtc2dfMDIiLCJvdXRwdXRfaW5kZXgiOjAsImNvbnRlbnRfaW5kZXgiOjAsInJlZnVzYWwiOiJJIGNhbid0IGhlbHAgd2l0aCB0aGF0LiIsInNlcXVlbmNlX251bWJlciI6NH0KCmV2ZW50OiByZXNwb25zZS5jb250ZW50X3BhcnQuZG9uZQpkYXRhOiB7InR5cGUiOiJyZXNwb25zZS5jb250ZW50X3BhcnQuZG9uZSIsIml0ZW1faWQiOiJtc2dfMDIiLCJvdXRwdXRfaW5kZXgiOjAsImNvbnRlbnRfaW5kZXgiOjAsInBhcnQiOnsidHlwZSI6InJlZnVzYWwiLCJyZWZ1c2FsIjoiSSBjYW4ndCBoZWxwIHdpdGggdGhhdC4ifSwic2VxdWVuY2VfbnVtYmVyIjo1fQoKZXZlbnQ6IHJlc3BvbnNlLm91dHB1dF9pdGVtLmRvbmUKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2Uub3V0cHV0X2l0ZW0uZG9uZSIsIm91dHB1dF9pbmRleCI6MCwiaXRlbSI6eyJpZCI6Im1zZ18wMiIsInR5cGUiOiJtZXNzYWdlIiwic3RhdHVzIjoiY29tcGxldGVkIiwicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJyZWZ1c2FsIiwicmVmdXNhbCI6IkkgY2FuJ3QgaGVscCB3aXRoIHRoYXQuIn1dfSwic2VxdWVuY2VfbnVtYmVyIjo2fQoKZXZlbnQ6IHJlc3BvbnNlLmNvbXBsZXRlZApkYXRhOiB7InR5cGUiOiJyZXNwb25zZS5jb21wbGV0ZWQiLCJyZXNwb25zZSI6eyJpZCI6InJlc3BfMDEiLCJvYmplY3QiOiJyZXNwb25zZSIsImNyZWF0ZWRfYXQiOjE3NjE2OTYwMDAsInN0YXR1cyI6ImNvbXBsZXRlZCIsIm1vZGVsIjoiZ3B0LTUuNSIsIm91dHB1dCI6W3siaWQiOiJtc2dfMDIiLCJ0eXBlIjoibWVzc2FnZSIsInN0YXR1cyI6ImNvbXBsZXRlZCIsInJvbGUiOiJhc3Npc3RhbnQiLCJjb250ZW50IjpbeyJ0eXBlIjoicmVmdXNhbCIsInJlZnVzYWwiOiJJIGNhbid0IGhlbHAgd2l0aCB0aGF0LiJ9XX1dLCJpbmNvbXBsZXRlX2RldGFpbHMiOm51bGwsImVycm9yIjpudWxsLCJ1c2FnZSI6eyJpbnB1dF90b2tlbnMiOjEwLCJvdXRwdXRfdG9rZW5zIjo4LCJ0b3RhbF90b2tlbnMiOjE4fX0sInNlcXVlbmNlX251bWJlciI6N30KCg=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "response",
+            "response": {
+              "content": [
+                {
+                  "type": "text",
+                  "id": "msg_02",
+                  "vendor": {
+                    "openai": {
+                      "refusal": true
+                    }
+                  },
+                  "text": "I can't help with that."
+                }
+              ],
+              "stop": {
+                "reason": "refusal",
+                "raw": "completed"
+              },
+              "usage": {
+                "input": {
+                  "total": 10
+                },
+                "output": {
+                  "total": 8
+                },
+                "raw": {
+                  "input_tokens": 10,
+                  "output_tokens": 8,
+                  "total_tokens": 18
+                }
+              },
+              "warnings": [],
+              "origin": {
+                "wire": "openai.responses",
+                "ns": "openai",
+                "base_url": "https://api.openai.com",
+                "model": "gpt-5.5",
+                "auth_source": "env:OPENAI_API_KEY"
+              },
+              "latency_ms": 400.0,
+              "first_token_ms": 300.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

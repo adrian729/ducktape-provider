@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
 pub mod anthropic;
+pub mod openai;
 
 /// Everything a codec needs to know about the call besides the request.
 #[derive(Debug, Clone)]
@@ -102,6 +103,7 @@ pub trait Wire {
 pub fn for_ns(ns: &Ns) -> Option<Box<dyn Wire>> {
     match ns {
         Ns::Anthropic => Some(Box::new(anthropic::AnthropicMessages)),
+        Ns::Openai => Some(Box::new(openai::OpenaiResponses)),
         _ => None,
     }
 }
@@ -252,6 +254,27 @@ pub fn join_url(base: &str, path: &str) -> String {
         base.trim_end_matches('/'),
         path.trim_start_matches('/')
     )
+}
+
+/// Picks `tool_call` or `max_output_tokens` from the content, whatever the vendor said.
+pub fn derive_stop(content: &[Block], vendor: StopReason) -> StopReason {
+    let calls: Vec<&ToolCallBlock> = content
+        .iter()
+        .filter_map(|b| {
+            if let Block::ToolCall(t) = b {
+                Some(t)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if calls.iter().any(|c| c.truncated == Some(true)) {
+        StopReason::MaxOutputTokens
+    } else if !calls.is_empty() {
+        StopReason::ToolCall
+    } else {
+        vendor
+    }
 }
 
 /// Reads a string field.

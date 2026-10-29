@@ -1,0 +1,285 @@
+{
+  "name": "chat_overloaded_exhausts_retries",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gpt-5.5",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ],
+        "options": {
+          "retries": 1
+        }
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-test-key"
+  },
+  "http": [
+    {
+      "status": 503,
+      "headers": {
+        "x-request-id": "req_1"
+      },
+      "body": "{\"error\": {\"message\": \"The engine is currently overloaded\", \"type\": \"service_unavailable_error\", \"param\": null, \"code\": \"server_is_overloaded\"}}"
+    },
+    {
+      "status": 503,
+      "headers": {
+        "x-request-id": "req_1"
+      },
+      "body": "{\"error\": {\"message\": \"The engine is currently overloaded\", \"type\": \"service_unavailable_error\", \"param\": null, \"code\": \"server_is_overloaded\"}}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OPENAI_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 209,
+              "headers": {
+                "authorization": "***",
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "https://api.openai.com/v1/responses"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://api.openai.com/v1/responses",
+            "headers": {
+              "authorization": "Bearer sk-test-key",
+              "content-type": "application/json"
+            },
+            "body": "{\"include\":[\"reasoning.encrypted_content\"],\"input\":[{\"content\":[{\"text\":\"hi\",\"type\":\"input_text\"}],\"role\":\"user\",\"type\":\"message\"}],\"model\":\"gpt-5.5\",\"reasoning\":{\"summary\":\"auto\"},\"store\":false,\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 503,
+        "headers": {
+          "x-request-id": "req_1"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": "req_1",
+              "status": 503
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJlcnJvciI6IHsibWVzc2FnZSI6ICJUaGUgZW5naW5lIGlzIGN1cnJlbnRseSBvdmVybG9hZGVkIiwgInR5cGUiOiAic2VydmljZV91bmF2YWlsYWJsZV9lcnJvciIsICJwYXJhbSI6IG51bGwsICJjb2RlIjogInNlcnZlcl9pc19vdmVybG9hZGVkIn19"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_retry",
+            "data": {
+              "attempt": 1,
+              "kind": "server",
+              "sleep_ms": 500,
+              "status": 503
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_sleep",
+          "ms": 500
+        }
+      },
+      "input": {
+        "type": "slept"
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 2,
+              "body_bytes": 209,
+              "headers": {
+                "authorization": "***",
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "https://api.openai.com/v1/responses"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://api.openai.com/v1/responses",
+            "headers": {
+              "authorization": "Bearer sk-test-key",
+              "content-type": "application/json"
+            },
+            "body": "{\"include\":[\"reasoning.encrypted_content\"],\"input\":[{\"content\":[{\"text\":\"hi\",\"type\":\"input_text\"}],\"role\":\"user\",\"type\":\"message\"}],\"model\":\"gpt-5.5\",\"reasoning\":{\"summary\":\"auto\"},\"store\":false,\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 503,
+        "headers": {
+          "x-request-id": "req_1"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 2,
+              "elapsed_ms": 600.0,
+              "request_id": "req_1",
+              "status": 503
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJlcnJvciI6IHsibWVzc2FnZSI6ICJUaGUgZW5naW5lIGlzIGN1cnJlbnRseSBvdmVybG9hZGVkIiwgInR5cGUiOiAic2VydmljZV91bmF2YWlsYWJsZV9lcnJvciIsICJwYXJhbSI6IG51bGwsICJjb2RlIjogInNlcnZlcl9pc19vdmVybG9hZGVkIn19"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "server",
+            "message": "HTTP 503: The engine is currently overloaded",
+            "status": 503,
+            "code": "server_is_overloaded",
+            "retryable": true,
+            "attempts": 2,
+            "body": {
+              "error": {
+                "code": "server_is_overloaded",
+                "message": "The engine is currently overloaded",
+                "param": null,
+                "type": "service_unavailable_error"
+              }
+            },
+            "request_id": "req_1",
+            "origin": {
+              "wire": "openai.responses",
+              "ns": "openai",
+              "base_url": "https://api.openai.com",
+              "model": "gpt-5.5",
+              "auth_source": "env:OPENAI_API_KEY"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

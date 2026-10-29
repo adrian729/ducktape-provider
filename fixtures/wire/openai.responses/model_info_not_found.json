@@ -1,0 +1,160 @@
+{
+  "name": "model_info_not_found",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai"
+    },
+    "operation": {
+      "type": "model_info",
+      "model": "gpt-nope"
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-test-key"
+  },
+  "http": [
+    {
+      "status": 404,
+      "headers": {
+        "x-request-id": "req_1"
+      },
+      "body": "{\"error\": {\"message\": \"The model `gpt-nope` does not exist\", \"type\": \"invalid_request_error\", \"param\": \"model\", \"code\": \"model_not_found\"}}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OPENAI_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 0,
+              "headers": {
+                "authorization": "***",
+                "content-type": "application/json"
+              },
+              "method": "GET",
+              "url": "https://api.openai.com/v1/models/gpt-nope"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "https://api.openai.com/v1/models/gpt-nope",
+            "headers": {
+              "authorization": "Bearer sk-test-key",
+              "content-type": "application/json"
+            },
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 404,
+        "headers": {
+          "x-request-id": "req_1"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": "req_1",
+              "status": 404
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJlcnJvciI6IHsibWVzc2FnZSI6ICJUaGUgbW9kZWwgYGdwdC1ub3BlYCBkb2VzIG5vdCBleGlzdCIsICJ0eXBlIjogImludmFsaWRfcmVxdWVzdF9lcnJvciIsICJwYXJhbSI6ICJtb2RlbCIsICJjb2RlIjogIm1vZGVsX25vdF9mb3VuZCJ9fQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "not_found",
+            "message": "HTTP 404: The model `gpt-nope` does not exist",
+            "status": 404,
+            "code": "model_not_found",
+            "retryable": false,
+            "attempts": 1,
+            "body": {
+              "error": {
+                "code": "model_not_found",
+                "message": "The model `gpt-nope` does not exist",
+                "param": "model",
+                "type": "invalid_request_error"
+              }
+            },
+            "request_id": "req_1",
+            "origin": {
+              "wire": "openai.responses",
+              "ns": "openai",
+              "base_url": "https://api.openai.com",
+              "model": "gpt-nope",
+              "auth_source": "env:OPENAI_API_KEY"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

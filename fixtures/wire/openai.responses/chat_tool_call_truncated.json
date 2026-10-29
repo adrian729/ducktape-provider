@@ -1,0 +1,215 @@
+{
+  "name": "chat_tool_call_truncated",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gpt-5.5",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "add"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "add",
+            "description": "adds two numbers",
+            "input_schema": {
+              "properties": {
+                "a": {
+                  "type": "number"
+                },
+                "b": {
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          }
+        ],
+        "options": {
+          "max_output_tokens": 3
+        }
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-test-key"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "text/event-stream",
+        "x-request-id": "req_1"
+      },
+      "body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_01\",\"object\":\"response\",\"created_at\":1761696000,\"status\":\"in_progress\",\"model\":\"gpt-5.5\",\"output\":[],\"incomplete_details\":null,\"error\":null},\"sequence_number\":0}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"fc_02\",\"type\":\"function_call\",\"status\":\"in_progress\",\"call_id\":\"call_02\",\"name\":\"add\",\"arguments\":\"\"},\"sequence_number\":1}\n\nevent: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_02\",\"output_index\":0,\"delta\":\"{\\\"a\\\": 1, \\\"b\\\"\",\"sequence_number\":2}\n\nevent: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"fc_02\",\"type\":\"function_call\",\"status\":\"incomplete\",\"call_id\":\"call_02\",\"name\":\"add\",\"arguments\":\"{\\\"a\\\": 1, \\\"b\\\"\"},\"sequence_number\":3}\n\nevent: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_01\",\"object\":\"response\",\"created_at\":1761696000,\"status\":\"incomplete\",\"model\":\"gpt-5.5\",\"output\":[{\"id\":\"fc_02\",\"type\":\"function_call\",\"status\":\"incomplete\",\"call_id\":\"call_02\",\"name\":\"add\",\"arguments\":\"{\\\"a\\\": 1, \\\"b\\\"\"}],\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"error\":null,\"usage\":{\"input_tokens\":30,\"output_tokens\":3,\"total_tokens\":33}},\"sequence_number\":4}\n\n"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OPENAI_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 398,
+              "headers": {
+                "authorization": "***",
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "https://api.openai.com/v1/responses"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://api.openai.com/v1/responses",
+            "headers": {
+              "authorization": "Bearer sk-test-key",
+              "content-type": "application/json"
+            },
+            "body": "{\"include\":[\"reasoning.encrypted_content\"],\"input\":[{\"content\":[{\"text\":\"add\",\"type\":\"input_text\"}],\"role\":\"user\",\"type\":\"message\"}],\"max_output_tokens\":3,\"model\":\"gpt-5.5\",\"reasoning\":{\"summary\":\"auto\"},\"store\":false,\"stream\":true,\"tools\":[{\"description\":\"adds two numbers\",\"name\":\"add\",\"parameters\":{\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"type\":\"object\"},\"type\":\"function\"}]}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream",
+          "x-request-id": "req_1"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": "req_1",
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "ZXZlbnQ6IHJlc3BvbnNlLmNyZWF0ZWQKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2UuY3JlYXRlZCIsInJlc3BvbnNlIjp7ImlkIjoicmVzcF8wMSIsIm9iamVjdCI6InJlc3BvbnNlIiwiY3JlYXRlZF9hdCI6MTc2MTY5NjAwMCwic3RhdHVzIjoiaW5fcHJvZ3Jlc3MiLCJtb2RlbCI6ImdwdC01LjUiLCJvdXRwdXQiOltdLCJpbmNvbXBsZXRlX2RldGFpbHMiOm51bGwsImVycm9yIjpudWxsfSwic2VxdWVuY2VfbnVtYmVyIjowfQoKZXZlbnQ6IHJlc3BvbnNlLm91dHB1dF9pdGVtLmFkZGVkCmRhdGE6IHsidHlwZSI6InJlc3BvbnNlLm91dHB1dF9pdGVtLmFkZGVkIiwib3V0cHV0X2luZGV4IjowLCJpdGVtIjp7ImlkIjoiZmNfMDIiLCJ0eXBlIjoiZnVuY3Rpb25fY2FsbCIsInN0YXR1cyI6ImluX3Byb2dyZXNzIiwiY2FsbF9pZCI6ImNhbGxfMDIiLCJuYW1lIjoiYWRkIiwiYXJndW1lbnRzIjoiIn0sInNlcXVlbmNlX251bWJlciI6MX0KCmV2ZW50OiByZXNwb25zZS5mdW5jdGlvbl9jYWxsX2FyZ3VtZW50cy5kZWx0YQpkYXRhOiB7InR5cGUiOiJyZXNwb25zZS5mdW5jdGlvbl9jYWxsX2FyZ3VtZW50cy5kZWx0YSIsIml0ZW1faWQiOiJmY18wMiIsIm91dHB1dF9pbmRleCI6MCwiZGVsdGEiOiJ7XCJhXCI6IDEsIFwiYlwiIiwic2VxdWVuY2VfbnVtYmVyIjoyfQoKZXZlbnQ6IHJlc3BvbnNlLm91dHB1dF9pdGVtLmRvbmUKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2Uub3V0cHV0X2l0ZW0uZG9uZSIsIm91dHB1dF9pbmRleCI6MCwiaXRlbSI6eyJpZCI6ImZjXzAyIiwidHlwZSI6ImZ1bmN0aW9uX2NhbGwiLCJzdGF0dXMiOiJpbmNvbXBsZXRlIiwiY2FsbF9pZCI6ImNhbGxfMDIiLCJuYW1lIjoiYWRkIiwiYXJndW1lbnRzIjoie1wiYVwiOiAxLCBcImJcIiJ9LCJzZXF1ZW5jZV9udW1iZXIiOjN9CgpldmVudDogcmVzcG9uc2UuaW5jb21wbGV0ZQpkYXRhOiB7InR5cGUiOiJyZXNwb25zZS5pbmNvbXBsZXRlIiwicmVzcG9uc2UiOnsiaWQiOiJyZXNwXzAxIiwib2JqZWN0IjoicmVzcG9uc2UiLCJjcmVhdGVkX2F0IjoxNzYxNjk2MDAwLCJzdGF0dXMiOiJpbmNvbXBsZXRlIiwibW9kZWwiOiJncHQtNS41Iiwib3V0cHV0IjpbeyJpZCI6ImZjXzAyIiwidHlwZSI6ImZ1bmN0aW9uX2NhbGwiLCJzdGF0dXMiOiJpbmNvbXBsZXRlIiwiY2FsbF9pZCI6ImNhbGxfMDIiLCJuYW1lIjoiYWRkIiwiYXJndW1lbnRzIjoie1wiYVwiOiAxLCBcImJcIiJ9XSwiaW5jb21wbGV0ZV9kZXRhaWxzIjp7InJlYXNvbiI6Im1heF9vdXRwdXRfdG9rZW5zIn0sImVycm9yIjpudWxsLCJ1c2FnZSI6eyJpbnB1dF90b2tlbnMiOjMwLCJvdXRwdXRfdG9rZW5zIjozLCJ0b3RhbF90b2tlbnMiOjMzfX0sInNlcXVlbmNlX251bWJlciI6NH0KCg=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "response",
+            "response": {
+              "content": [
+                {
+                  "type": "tool_call",
+                  "id": "call_02",
+                  "name": "add",
+                  "arguments": {},
+                  "truncated": true,
+                  "arguments_json": "{\"a\": 1, \"b\""
+                }
+              ],
+              "stop": {
+                "reason": "max_output_tokens",
+                "raw": "incomplete/max_output_tokens"
+              },
+              "usage": {
+                "input": {
+                  "total": 30
+                },
+                "output": {
+                  "total": 3
+                },
+                "raw": {
+                  "input_tokens": 30,
+                  "output_tokens": 3,
+                  "total_tokens": 33
+                }
+              },
+              "warnings": [],
+              "origin": {
+                "wire": "openai.responses",
+                "ns": "openai",
+                "base_url": "https://api.openai.com",
+                "model": "gpt-5.5",
+                "auth_source": "env:OPENAI_API_KEY"
+              },
+              "latency_ms": 400.0,
+              "first_token_ms": 300.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

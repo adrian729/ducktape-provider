@@ -1267,27 +1267,6 @@ fn map_stop(raw: Option<&str>) -> StopReason {
     }
 }
 
-/// Picks `tool_call` or `max_output_tokens` from the content, whatever the vendor said.
-pub fn derive_stop(content: &[Block], vendor: StopReason) -> StopReason {
-    let calls: Vec<&ToolCallBlock> = content
-        .iter()
-        .filter_map(|b| {
-            if let Block::ToolCall(t) = b {
-                Some(t)
-            } else {
-                None
-            }
-        })
-        .collect();
-    if calls.iter().any(|c| c.truncated == Some(true)) {
-        StopReason::MaxOutputTokens
-    } else if !calls.is_empty() {
-        StopReason::ToolCall
-    } else {
-        vendor
-    }
-}
-
 impl ChatDecoder for Decoder {
     fn feed(&mut self, bytes: &[u8]) -> Result<Decoded, ProviderError> {
         let mut out = Decoded::default();

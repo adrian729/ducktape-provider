@@ -894,7 +894,9 @@ impl Operation {
                             cache: None,
                             inputs: None,
                             tools: None,
-                            limits: Some(Limits {
+                            limits: (info.context_window.is_some()
+                                || info.max_output_tokens.is_some())
+                            .then_some(Limits {
                                 context_window: info.context_window,
                                 max_output_tokens: info.max_output_tokens,
                             }),
@@ -963,8 +965,7 @@ impl Operation {
             });
         }
         response.content = std::mem::take(content);
-        response.stop.reason =
-            wire::anthropic::derive_stop(&response.content, response.stop.reason.clone());
+        response.stop.reason = wire::derive_stop(&response.content, response.stop.reason.clone());
         response.usage = usage.take();
         response.warnings = std::mem::take(warnings);
         response.latency_ms = elapsed;

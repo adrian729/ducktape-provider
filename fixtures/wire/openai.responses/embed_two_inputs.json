@@ -1,0 +1,173 @@
+{
+  "name": "embed_two_inputs",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai"
+    },
+    "operation": {
+      "type": "embed",
+      "request": {
+        "model": "text-embedding-3-small",
+        "input": [
+          "a",
+          "b"
+        ],
+        "options": {
+          "dimensions": 3
+        }
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-test-key"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": "{\"object\": \"list\", \"data\": [{\"object\": \"embedding\", \"index\": 1, \"embedding\": [0.4, 0.5, 0.6]}, {\"object\": \"embedding\", \"index\": 0, \"embedding\": [0.1, 0.2, 0.3]}], \"model\": \"text-embedding-3-small\", \"usage\": {\"prompt_tokens\": 2, \"total_tokens\": 2}}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OPENAI_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 93,
+              "headers": {
+                "authorization": "***",
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "https://api.openai.com/v1/embeddings"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://api.openai.com/v1/embeddings",
+            "headers": {
+              "authorization": "Bearer sk-test-key",
+              "content-type": "application/json"
+            },
+            "body": "{\"dimensions\":3,\"encoding_format\":\"float\",\"input\":[\"a\",\"b\"],\"model\":\"text-embedding-3-small\"}",
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "embed"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJvYmplY3QiOiAibGlzdCIsICJkYXRhIjogW3sib2JqZWN0IjogImVtYmVkZGluZyIsICJpbmRleCI6IDEsICJlbWJlZGRpbmciOiBbMC40LCAwLjUsIDAuNl19LCB7Im9iamVjdCI6ICJlbWJlZGRpbmciLCAiaW5kZXgiOiAwLCAiZW1iZWRkaW5nIjogWzAuMSwgMC4yLCAwLjNdfV0sICJtb2RlbCI6ICJ0ZXh0LWVtYmVkZGluZy0zLXNtYWxsIiwgInVzYWdlIjogeyJwcm9tcHRfdG9rZW5zIjogMiwgInRvdGFsX3Rva2VucyI6IDJ9fQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "embed",
+            "response": {
+              "embeddings": [
+                [
+                  0.1,
+                  0.2,
+                  0.3
+                ],
+                [
+                  0.4,
+                  0.5,
+                  0.6
+                ]
+              ],
+              "usage": {
+                "input": {
+                  "total": 2
+                }
+              },
+              "warnings": [],
+              "origin": {
+                "wire": "openai.responses",
+                "ns": "openai",
+                "base_url": "https://api.openai.com",
+                "model": "text-embedding-3-small",
+                "auth_source": "env:OPENAI_API_KEY"
+              },
+              "latency_ms": 400.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

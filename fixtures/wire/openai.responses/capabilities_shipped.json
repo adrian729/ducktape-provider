@@ -1,0 +1,88 @@
+{
+  "name": "capabilities_shipped",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai"
+    },
+    "operation": {
+      "type": "capabilities",
+      "model": "gpt-5.5"
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-test-key"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "capabilities",
+            "capabilities": {
+              "reasoning": {
+                "levels": [
+                  "auto",
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "can_disable": null
+              },
+              "tool_choice": [
+                "auto",
+                "none",
+                "required",
+                "named"
+              ],
+              "parallel_tools": {
+                "supported": true,
+                "toggle": true
+              },
+              "output": {
+                "json_schema": true
+              },
+              "cache": {
+                "breakpoints": null,
+                "ttls": [
+                  "short",
+                  "long"
+                ]
+              },
+              "inputs": [
+                "text",
+                "image",
+                "document"
+              ],
+              "tools": {
+                "functions": true,
+                "hosted": [
+                  "openai.web_search",
+                  "openai.file_search",
+                  "openai.code_interpreter",
+                  "openai.computer",
+                  "openai.image_generation",
+                  "openai.mcp",
+                  "openai.shell",
+                  "openai.apply_patch"
+                ]
+              },
+              "embeddings": false,
+              "source": "shipped"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

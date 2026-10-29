@@ -1,0 +1,261 @@
+{
+  "name": "chat_foreign_reasoning_dropped",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gpt-5.5",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "reasoning",
+                "text": "x",
+                "vendor_state": {
+                  "signature": "zzz"
+                },
+                "origin": {
+                  "wire": "anthropic.messages",
+                  "ns": "anthropic",
+                  "base_url": "https://api.anthropic.com",
+                  "model": "claude-opus-5-5"
+                }
+              },
+              {
+                "type": "text",
+                "text": "earlier"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "again"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-test-key"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "text/event-stream",
+        "x-request-id": "req_1"
+      },
+      "body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_01\",\"object\":\"response\",\"created_at\":1761696000,\"status\":\"in_progress\",\"model\":\"gpt-5.5\",\"output\":[],\"incomplete_details\":null,\"error\":null},\"sequence_number\":0}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"rs_01\",\"type\":\"reasoning\",\"summary\":[]},\"sequence_number\":1}\n\nevent: response.reasoning_summary_part.added\ndata: {\"type\":\"response.reasoning_summary_part.added\",\"item_id\":\"rs_01\",\"output_index\":0,\"summary_index\":0,\"part\":{\"type\":\"summary_text\",\"text\":\"\"},\"sequence_number\":2}\n\nevent: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_01\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Let me \",\"sequence_number\":3}\n\nevent: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_01\",\"output_index\":0,\"summary_index\":0,\"delta\":\"think.\",\"sequence_number\":4}\n\nevent: response.reasoning_summary_text.done\ndata: {\"type\":\"response.reasoning_summary_text.done\",\"item_id\":\"rs_01\",\"output_index\":0,\"summary_index\":0,\"text\":\"Let me think.\",\"sequence_number\":5}\n\nevent: response.reasoning_summary_part.done\ndata: {\"type\":\"response.reasoning_summary_part.done\",\"item_id\":\"rs_01\",\"output_index\":0,\"summary_index\":0,\"part\":{\"type\":\"summary_text\",\"text\":\"Let me think.\"},\"sequence_number\":6}\n\nevent: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_01\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Let me think.\"}],\"encrypted_content\":\"enc_abc\"},\"sequence_number\":7}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_01\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]},\"sequence_number\":8}\n\nevent: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_01\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]},\"sequence_number\":9}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_01\",\"output_index\":1,\"content_index\":0,\"delta\":\"Hel\",\"sequence_number\":10}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_01\",\"output_index\":1,\"content_index\":0,\"delta\":\"lo\",\"sequence_number\":11}\n\nevent: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_01\",\"output_index\":1,\"content_index\":0,\"text\":\"Hello\",\"sequence_number\":12}\n\nevent: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_01\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"Hello\",\"annotations\":[]},\"sequence_number\":13}\n\nevent: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_01\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello\",\"annotations\":[]}]},\"sequence_number\":14}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_01\",\"object\":\"response\",\"created_at\":1761696000,\"status\":\"completed\",\"model\":\"gpt-5.5\",\"output\":[{\"id\":\"rs_01\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"Let me think.\"}],\"encrypted_content\":\"enc_abc\"},{\"id\":\"msg_01\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello\",\"annotations\":[]}]}],\"incomplete_details\":null,\"error\":null,\"usage\":{\"input_tokens\":12,\"input_tokens_details\":{\"cached_tokens\":4,\"cache_write_tokens\":0},\"output_tokens\":9,\"output_tokens_details\":{\"reasoning_tokens\":3},\"total_tokens\":21}},\"sequence_number\":15}\n\n"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OPENAI_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 398,
+              "headers": {
+                "authorization": "***",
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "https://api.openai.com/v1/responses"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://api.openai.com/v1/responses",
+            "headers": {
+              "authorization": "Bearer sk-test-key",
+              "content-type": "application/json"
+            },
+            "body": "{\"include\":[\"reasoning.encrypted_content\"],\"input\":[{\"content\":[{\"text\":\"hi\",\"type\":\"input_text\"}],\"role\":\"user\",\"type\":\"message\"},{\"content\":[{\"annotations\":[],\"text\":\"earlier\",\"type\":\"output_text\"}],\"role\":\"assistant\",\"type\":\"message\"},{\"content\":[{\"text\":\"again\",\"type\":\"input_text\"}],\"role\":\"user\",\"type\":\"message\"}],\"model\":\"gpt-5.5\",\"reasoning\":{\"summary\":\"auto\"},\"store\":false,\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream",
+          "x-request-id": "req_1"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": "req_1",
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "ZXZlbnQ6IHJlc3BvbnNlLmNyZWF0ZWQKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2UuY3JlYXRlZCIsInJlc3BvbnNlIjp7ImlkIjoicmVzcF8wMSIsIm9iamVjdCI6InJlc3BvbnNlIiwiY3JlYXRlZF9hdCI6MTc2MTY5NjAwMCwic3RhdHVzIjoiaW5fcHJvZ3Jlc3MiLCJtb2RlbCI6ImdwdC01LjUiLCJvdXRwdXQiOltdLCJpbmNvbXBsZXRlX2RldGFpbHMiOm51bGwsImVycm9yIjpudWxsfSwic2VxdWVuY2VfbnVtYmVyIjowfQoKZXZlbnQ6IHJlc3BvbnNlLm91dHB1dF9pdGVtLmFkZGVkCmRhdGE6IHsidHlwZSI6InJlc3BvbnNlLm91dHB1dF9pdGVtLmFkZGVkIiwib3V0cHV0X2luZGV4IjowLCJpdGVtIjp7ImlkIjoicnNfMDEiLCJ0eXBlIjoicmVhc29uaW5nIiwic3VtbWFyeSI6W119LCJzZXF1ZW5jZV9udW1iZXIiOjF9CgpldmVudDogcmVzcG9uc2UucmVhc29uaW5nX3N1bW1hcnlfcGFydC5hZGRlZApkYXRhOiB7InR5cGUiOiJyZXNwb25zZS5yZWFzb25pbmdfc3VtbWFyeV9wYXJ0LmFkZGVkIiwiaXRlbV9pZCI6InJzXzAxIiwib3V0cHV0X2luZGV4IjowLCJzdW1tYXJ5X2luZGV4IjowLCJwYXJ0Ijp7InR5cGUiOiJzdW1tYXJ5X3RleHQiLCJ0ZXh0IjoiIn0sInNlcXVlbmNlX251bWJlciI6Mn0KCmV2ZW50OiByZXNwb25zZS5yZWFzb25pbmdfc3VtbWFyeV90ZXh0LmRlbHRhCmRhdGE6IHsidHlwZSI6InJlc3BvbnNlLnJlYXNvbmluZ19zdW1tYXJ5X3RleHQuZGVsdGEiLCJpdGVtX2lkIjoicnNfMDEiLCJvdXRwdXRfaW5kZXgiOjAsInN1bW1hcnlfaW5kZXgiOjAsImRlbHRhIjoiTGV0IG1lICIsInNlcXVlbmNlX251bWJlciI6M30KCmV2ZW50OiByZXNwb25zZS5yZWFzb25pbmdfc3VtbWFyeV90ZXh0LmRlbHRhCmRhdGE6IHsidHlwZSI6InJlc3BvbnNlLnJlYXNvbmluZ19zdW1tYXJ5X3RleHQuZGVsdGEiLCJpdGVtX2lkIjoicnNfMDEiLCJvdXRwdXRfaW5kZXgiOjAsInN1bW1hcnlfaW5kZXgiOjAsImRlbHRhIjoidGhpbmsuIiwic2VxdWVuY2VfbnVtYmVyIjo0fQoKZXZlbnQ6IHJlc3BvbnNlLnJlYXNvbmluZ19zdW1tYXJ5X3RleHQuZG9uZQpkYXRhOiB7InR5cGUiOiJyZXNwb25zZS5yZWFzb25pbmdfc3VtbWFyeV90ZXh0LmRvbmUiLCJpdGVtX2lkIjoicnNfMDEiLCJvdXRwdXRfaW5kZXgiOjAsInN1bW1hcnlfaW5kZXgiOjAsInRleHQiOiJMZXQgbWUgdGhpbmsuIiwic2VxdWVuY2VfbnVtYmVyIjo1fQoKZXZlbnQ6IHJlc3BvbnNlLnJlYXNvbmluZ19zdW1tYXJ5X3BhcnQuZG9uZQpkYXRhOiB7InR5cGUiOiJyZXNwb25zZS5yZWFzb25pbmdfc3VtbWFyeV9wYXJ0LmRvbmUiLCJpdGVtX2lkIjoicnNfMDEiLCJvdXRwdXRfaW5kZXgiOjAsInN1bW1hcnlfaW5kZXgiOjAsInBhcnQiOnsidHlwZSI6InN1bW1hcnlfdGV4dCIsInRleHQiOiJMZXQgbWUgdGhpbmsuIn0sInNlcXVlbmNlX251bWJlciI6Nn0KCmV2ZW50OiByZXNwb25zZS5vdXRwdXRfaXRlbS5kb25lCmRhdGE6IHsidHlwZSI6InJlc3BvbnNlLm91dHB1dF9pdGVtLmRvbmUiLCJvdXRwdXRfaW5kZXgiOjAsIml0ZW0iOnsiaWQiOiJyc18wMSIsInR5cGUiOiJyZWFzb25pbmciLCJzdW1tYXJ5IjpbeyJ0eXBlIjoic3VtbWFyeV90ZXh0IiwidGV4dCI6IkxldCBtZSB0aGluay4ifV0sImVuY3J5cHRlZF9jb250ZW50IjoiZW5jX2FiYyJ9LCJzZXF1ZW5jZV9udW1iZXIiOjd9CgpldmVudDogcmVzcG9uc2Uub3V0cHV0X2l0ZW0uYWRkZWQKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2Uub3V0cHV0X2l0ZW0uYWRkZWQiLCJvdXRwdXRfaW5kZXgiOjEsIml0ZW0iOnsiaWQiOiJtc2dfMDEiLCJ0eXBlIjoibWVzc2FnZSIsInN0YXR1cyI6ImluX3Byb2dyZXNzIiwicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOltdfSwic2VxdWVuY2VfbnVtYmVyIjo4fQoKZXZlbnQ6IHJlc3BvbnNlLmNvbnRlbnRfcGFydC5hZGRlZApkYXRhOiB7InR5cGUiOiJyZXNwb25zZS5jb250ZW50X3BhcnQuYWRkZWQiLCJpdGVtX2lkIjoibXNnXzAxIiwib3V0cHV0X2luZGV4IjoxLCJjb250ZW50X2luZGV4IjowLCJwYXJ0Ijp7InR5cGUiOiJvdXRwdXRfdGV4dCIsInRleHQiOiIiLCJhbm5vdGF0aW9ucyI6W119LCJzZXF1ZW5jZV9udW1iZXIiOjl9CgpldmVudDogcmVzcG9uc2Uub3V0cHV0X3RleHQuZGVsdGEKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2Uub3V0cHV0X3RleHQuZGVsdGEiLCJpdGVtX2lkIjoibXNnXzAxIiwib3V0cHV0X2luZGV4IjoxLCJjb250ZW50X2luZGV4IjowLCJkZWx0YSI6IkhlbCIsInNlcXVlbmNlX251bWJlciI6MTB9CgpldmVudDogcmVzcG9uc2Uub3V0cHV0X3RleHQuZGVsdGEKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2Uub3V0cHV0X3RleHQuZGVsdGEiLCJpdGVtX2lkIjoibXNnXzAxIiwib3V0cHV0X2luZGV4IjoxLCJjb250ZW50X2luZGV4IjowLCJkZWx0YSI6ImxvIiwic2VxdWVuY2VfbnVtYmVyIjoxMX0KCmV2ZW50OiByZXNwb25zZS5vdXRwdXRfdGV4dC5kb25lCmRhdGE6IHsidHlwZSI6InJlc3BvbnNlLm91dHB1dF90ZXh0LmRvbmUiLCJpdGVtX2lkIjoibXNnXzAxIiwib3V0cHV0X2luZGV4IjoxLCJjb250ZW50X2luZGV4IjowLCJ0ZXh0IjoiSGVsbG8iLCJzZXF1ZW5jZV9udW1iZXIiOjEyfQoKZXZlbnQ6IHJlc3BvbnNlLmNvbnRlbnRfcGFydC5kb25lCmRhdGE6IHsidHlwZSI6InJlc3BvbnNlLmNvbnRlbnRfcGFydC5kb25lIiwiaXRlbV9pZCI6Im1zZ18wMSIsIm91dHB1dF9pbmRleCI6MSwiY29udGVudF9pbmRleCI6MCwicGFydCI6eyJ0eXBlIjoib3V0cHV0X3RleHQiLCJ0ZXh0IjoiSGVsbG8iLCJhbm5vdGF0aW9ucyI6W119LCJzZXF1ZW5jZV9udW1iZXIiOjEzfQoKZXZlbnQ6IHJlc3BvbnNlLm91dHB1dF9pdGVtLmRvbmUKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2Uub3V0cHV0X2l0ZW0uZG9uZSIsIm91dHB1dF9pbmRleCI6MSwiaXRlbSI6eyJpZCI6Im1zZ18wMSIsInR5cGUiOiJtZXNzYWdlIiwic3RhdHVzIjoiY29tcGxldGVkIiwicm9sZSI6ImFzc2lzdGFudCIsImNvbnRlbnQiOlt7InR5cGUiOiJvdXRwdXRfdGV4dCIsInRleHQiOiJIZWxsbyIsImFubm90YXRpb25zIjpbXX1dfSwic2VxdWVuY2VfbnVtYmVyIjoxNH0KCmV2ZW50OiByZXNwb25zZS5jb21wbGV0ZWQKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2UuY29tcGxldGVkIiwicmVzcG9uc2UiOnsiaWQiOiJyZXNwXzAxIiwib2JqZWN0IjoicmVzcG9uc2UiLCJjcmVhdGVkX2F0IjoxNzYxNjk2MDAwLCJzdGF0dXMiOiJjb21wbGV0ZWQiLCJtb2RlbCI6ImdwdC01LjUiLCJvdXRwdXQiOlt7ImlkIjoicnNfMDEiLCJ0eXBlIjoicmVhc29uaW5nIiwic3VtbWFyeSI6W3sidHlwZSI6InN1bW1hcnlfdGV4dCIsInRleHQiOiJMZXQgbWUgdGhpbmsuIn1dLCJlbmNyeXB0ZWRfY29udGVudCI6ImVuY19hYmMifSx7ImlkIjoibXNnXzAxIiwidHlwZSI6Im1lc3NhZ2UiLCJzdGF0dXMiOiJjb21wbGV0ZWQiLCJyb2xlIjoiYXNzaXN0YW50IiwiY29udGVudCI6W3sidHlwZSI6Im91dHB1dF90ZXh0IiwidGV4dCI6IkhlbGxvIiwiYW5ub3RhdGlvbnMiOltdfV19XSwiaW5jb21wbGV0ZV9kZXRhaWxzIjpudWxsLCJlcnJvciI6bnVsbCwidXNhZ2UiOnsiaW5wdXRfdG9rZW5zIjoxMiwiaW5wdXRfdG9rZW5zX2RldGFpbHMiOnsiY2FjaGVkX3Rva2VucyI6NCwiY2FjaGVfd3JpdGVfdG9rZW5zIjowfSwib3V0cHV0X3Rva2VucyI6OSwib3V0cHV0X3Rva2Vuc19kZXRhaWxzIjp7InJlYXNvbmluZ190b2tlbnMiOjN9LCJ0b3RhbF90b2tlbnMiOjIxfX0sInNlcXVlbmNlX251bWJlciI6MTV9Cgo="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "response",
+            "response": {
+              "content": [
+                {
+                  "type": "reasoning",
+                  "id": "rs_01",
+                  "text": "Let me think.",
+                  "vendor_state": {
+                    "encrypted_content": "enc_abc",
+                    "id": "rs_01",
+                    "summary": [
+                      {
+                        "text": "Let me think.",
+                        "type": "summary_text"
+                      }
+                    ],
+                    "type": "reasoning"
+                  },
+                  "origin": {
+                    "wire": "openai.responses",
+                    "ns": "openai",
+                    "base_url": "https://api.openai.com",
+                    "model": "gpt-5.5",
+                    "auth_source": "env:OPENAI_API_KEY"
+                  }
+                },
+                {
+                  "type": "text",
+                  "id": "msg_01",
+                  "text": "Hello"
+                }
+              ],
+              "stop": {
+                "reason": "complete",
+                "raw": "completed"
+              },
+              "usage": {
+                "input": {
+                  "total": 12,
+                  "cache_read": 4,
+                  "cache_write": 0
+                },
+                "output": {
+                  "total": 9,
+                  "reasoning": 3
+                },
+                "raw": {
+                  "input_tokens": 12,
+                  "input_tokens_details": {
+                    "cache_write_tokens": 0,
+                    "cached_tokens": 4
+                  },
+                  "output_tokens": 9,
+                  "output_tokens_details": {
+                    "reasoning_tokens": 3
+                  },
+                  "total_tokens": 21
+                }
+              },
+              "warnings": [
+                {
+                  "kind": "unsupported",
+                  "feature": "reasoning",
+                  "detail": "reasoning block from another endpoint dropped"
+                }
+              ],
+              "origin": {
+                "wire": "openai.responses",
+                "ns": "openai",
+                "base_url": "https://api.openai.com",
+                "model": "gpt-5.5",
+                "auth_source": "env:OPENAI_API_KEY"
+              },
+              "latency_ms": 400.0,
+              "first_token_ms": 300.0
+            }
+          }
+        }
+      }
+    }
+  ]
+}

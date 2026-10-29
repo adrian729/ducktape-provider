@@ -1,0 +1,173 @@
+{
+  "name": "chat_stream_failed_event",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "ns": "openai"
+    },
+    "operation": {
+      "type": "chat",
+      "request": {
+        "model": "gpt-5.5",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "secrets": {
+    "auth:0": "sk-test-key"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "text/event-stream",
+        "x-request-id": "req_1"
+      },
+      "body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_01\",\"object\":\"response\",\"created_at\":1761696000,\"status\":\"in_progress\",\"model\":\"gpt-5.5\",\"output\":[],\"incomplete_details\":null,\"error\":null},\"sequence_number\":0}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_01\",\"object\":\"response\",\"created_at\":1761696000,\"status\":\"failed\",\"model\":\"gpt-5.5\",\"output\":[],\"incomplete_details\":null,\"error\":{\"code\":\"server_error\",\"message\":\"upstream failure\"}},\"sequence_number\":1}\n\n"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_secret",
+          "secret_ref": "auth:0",
+          "source": {
+            "type": "env",
+            "names": [
+              "OPENAI_API_KEY"
+            ],
+            "kind": "bearer",
+            "placement": "authorization"
+          }
+        }
+      },
+      "input": {
+        "type": "secret",
+        "secret_ref": "auth:0",
+        "found": true
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 209,
+              "headers": {
+                "authorization": "***",
+                "content-type": "application/json"
+              },
+              "method": "POST",
+              "url": "https://api.openai.com/v1/responses"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://api.openai.com/v1/responses",
+            "headers": {
+              "authorization": "Bearer sk-test-key",
+              "content-type": "application/json"
+            },
+            "body": "{\"include\":[\"reasoning.encrypted_content\"],\"input\":[{\"content\":[{\"text\":\"hi\",\"type\":\"input_text\"}],\"role\":\"user\",\"type\":\"message\"}],\"model\":\"gpt-5.5\",\"reasoning\":{\"summary\":\"auto\"},\"store\":false,\"stream\":true}",
+            "stream": true,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "chat"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream",
+          "x-request-id": "req_1"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 200.0,
+              "request_id": "req_1",
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "ZXZlbnQ6IHJlc3BvbnNlLmNyZWF0ZWQKZGF0YTogeyJ0eXBlIjoicmVzcG9uc2UuY3JlYXRlZCIsInJlc3BvbnNlIjp7ImlkIjoicmVzcF8wMSIsIm9iamVjdCI6InJlc3BvbnNlIiwiY3JlYXRlZF9hdCI6MTc2MTY5NjAwMCwic3RhdHVzIjoiaW5fcHJvZ3Jlc3MiLCJtb2RlbCI6ImdwdC01LjUiLCJvdXRwdXQiOltdLCJpbmNvbXBsZXRlX2RldGFpbHMiOm51bGwsImVycm9yIjpudWxsfSwic2VxdWVuY2VfbnVtYmVyIjowfQoKZXZlbnQ6IHJlc3BvbnNlLmZhaWxlZApkYXRhOiB7InR5cGUiOiJyZXNwb25zZS5mYWlsZWQiLCJyZXNwb25zZSI6eyJpZCI6InJlc3BfMDEiLCJvYmplY3QiOiJyZXNwb25zZSIsImNyZWF0ZWRfYXQiOjE3NjE2OTYwMDAsInN0YXR1cyI6ImZhaWxlZCIsIm1vZGVsIjoiZ3B0LTUuNSIsIm91dHB1dCI6W10sImluY29tcGxldGVfZGV0YWlscyI6bnVsbCwiZXJyb3IiOnsiY29kZSI6InNlcnZlcl9lcnJvciIsIm1lc3NhZ2UiOiJ1cHN0cmVhbSBmYWlsdXJlIn19LCJzZXF1ZW5jZV9udW1iZXIiOjF9Cgo="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "server",
+            "message": "response failed: upstream failure",
+            "code": "server_error",
+            "retryable": false,
+            "attempts": 1,
+            "body": {
+              "response": {
+                "created_at": 1761696000,
+                "error": {
+                  "code": "server_error",
+                  "message": "upstream failure"
+                },
+                "id": "resp_01",
+                "incomplete_details": null,
+                "model": "gpt-5.5",
+                "object": "response",
+                "output": [],
+                "status": "failed"
+              },
+              "sequence_number": 1,
+              "type": "response.failed"
+            },
+            "origin": {
+              "wire": "openai.responses",
+              "ns": "openai",
+              "base_url": "https://api.openai.com",
+              "model": "gpt-5.5",
+              "auth_source": "env:OPENAI_API_KEY"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
