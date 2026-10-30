@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ducktape-provider browser conformance</title>
+  <style>body { font: 14px/1.4 system-ui, sans-serif; margin: 24px; } pre { white-space: pre-wrap; } .fail { color: #b00020; } .pass { color: #0a7d2a; }</style>
+</head>
+<body>
+  <h1>ducktape-provider browser conformance</h1>
+  <p id="status">running…</p>
+  <pre id="log"></pre>
+  <script type="module">
+    import { loadCore } from "../../src/core.js";
+    import { Provider, user } from "../../src/index.js";
+    import { mismatch, replay } from "../replay.js";
+
+    const log = document.getElementById("log");
+    const status = document.getElementById("status");
+    const say = (text, cls = "") => { const line = document.createElement("div"); line.textContent = text; line.className = cls; log.append(line); };
+    const results = { pass: 0, fail: 0, failures: [], provider: {} };
+    window.__conformance = results;
+
+    function scripted(fixture) {
+      const script = fixture.http[Symbol.iterator]();
+      return async (url, init) => {
+        const h = script.next().value;
+        if (!h) throw new Error("script exhausted");
+        if (h.error) throw new TypeError("fetch failed", { cause: { message: h.error.message } });
+        const chunks = h.chunks?.length ? h.chunks : h.body !== undefined ? [h.body] : [];
+        const encoder = new TextEncoder();
+        const body = new ReadableStream({ pull(c) { if (chunks.length) c.enqueue(encoder.encode(chunks.shift())); else c.close(); } });
+        return new Response(body, { status: h.status ?? 200, headers: h.headers ?? {} });
+      };
+    }
+
+    try {
+      const core = await loadCore(new URL("../../core.wasm", import.meta.url));
+      const index = await (await fetch("/fixtures.json")).json();
+      for (const f of index) {
+        const fixture = await (await fetch(f.path)).json();
+        const problem = mismatch(replay(core, fixture), fixture.exchange);
+        if (problem) { results.fail += 1; results.failures.push(`${f.wire}/${f.name}: ${problem}`); say(`✖ ${f.wire}/${f.name}: ${problem}`, "fail"); }
+        else results.pass += 1;
+      }
+      say(`fixtures: ${results.pass} passed, ${results.fail} failed`, results.fail ? "fail" : "pass");
+
+      const chat = await (await fetch("/fixtures/wire/anthropic.messages/chat_text_reasoning.json")).json();
+      const p = new Provider("anthropic", { auth: { type: "resolver", fn: async () => "sk-browser" }, fetch: scripted(chat), core });
+      const req = chat.start.operation.request;
+      const r = await p.chat(req.messages, { model: req.model });
+      results.provider.chat = r.text;
+      const stream = await (await fetch("/fixtures/wire/anthropic.messages/stream_text_reasoning_chunked.json")).json();
+      const q = new Provider("anthropic", { auth: { type: "resolver", fn: async () => "sk-browser" }, fetch: scripted(stream), core });
+      const sreq = stream.start.operation.request;
+      const events = [];
+      for await (const ev of q.stream(sreq.messages, { model: sreq.model })) events.push(ev.type);
+      results.provider.stream = events;
+      let gate = null;
+      try { new Provider("anthropic", { auth: "sk-plain", core }); } catch (e) { gate = e.message; }
+      results.provider.browser_gate = gate;
+      say(`provider: chat text ${JSON.stringify(r.text).slice(0, 60)}; stream ${events.length} events ending in ${events.at(-1)}; browser gate ${gate ? "enforced" : "MISSING"}`, gate && events.at(-1) === "finish" ? "pass" : "fail");
+      results.done = true;
+      status.textContent = results.fail || !gate ? "FAILED" : "PASSED";
+    } catch (e) {
+      results.error = String(e?.stack ?? e);
+      results.done = true;
+      status.textContent = "ERROR";
+      say(results.error, "fail");
+    }
+  </script>
+</body>
+</html>

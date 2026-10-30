@@ -23,7 +23,9 @@
   },
   "scripts": {
     "build:wasm": "node scripts/build-wasm.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "serve:browser": "node scripts/serve-browser.js",
+    "test:browser": "node scripts/test-browser.js"
   },
   "repository": {
     "type": "git",

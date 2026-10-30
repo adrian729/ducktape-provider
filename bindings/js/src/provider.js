@@ -1,5 +1,5 @@
 /** The Provider class and its streams. */
-import { defaultCore, loadCore } from "./core.js";
+import { Core, defaultCore, loadCore } from "./core.js";
 import { drive } from "./driver.js";
 import { NotFoundError } from "./errors.js";
 import { readKeychain } from "./keychain.js";
@@ -171,7 +171,7 @@ export class Provider {
     this.fetch = doFetch ?? globalThis.fetch.bind(globalThis);
     if (keychain !== undefined && typeof keychain !== "function") throw new TypeError("keychain must be a function taking (service, account)");
     this.keychain = keychain ?? readKeychain;
-    this.corePromise = core ? (core.then ? core : loadCore(core)) : null;
+    this.corePromise = core ? (core instanceof Core ? Promise.resolve(core) : core.then ? core : loadCore(core)) : null;
     const config = { ns };
     if (base_url) config.base_url = base_url.replace(/\/+$/, "");
     if (auth !== undefined || dangerously_allow_browser !== undefined) {

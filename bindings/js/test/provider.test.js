@@ -255,3 +255,12 @@ test("the default keychain reader never throws", async () => {
   const value = await readKeychain("ducktape-provider-test", "nobody");
   assert.ok(value === null || value instanceof Uint8Array);
 });
+
+test("a loaded core can be shared between providers", async () => {
+  const core = await dp.loadCore();
+  const { p, fixture, seen } = provider("chat_text_reasoning", { core });
+  const req = requestOf(fixture);
+  const r = await p.chat(req.messages, { model: req.model });
+  assert.equal(r.text, doneResponse(fixture).content.at(-1).text);
+  assert.equal(seen.length, 1);
+});

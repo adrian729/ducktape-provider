@@ -130,10 +130,10 @@ cargo test
 cargo build --profile wasm --target wasm32-unknown-unknown -p ducktape-abi
 pip install jsonschema referencing && python scripts/check_fixtures.py .
 cd bindings/python && uvx maturin develop --uv && .venv/bin/python -m pytest
-cd bindings/js && npm run build:wasm && npm test
+cd bindings/js && npm run build:wasm && npm test && npm run test:browser
 ```
 
-`npm run build:wasm` runs `wasm-opt -O3` on `core.wasm` when [binaryen](https://github.com/WebAssembly/binaryen) is on the PATH. Wheels, the sdist and the npm tarball are built by the Package workflow on every push and uploaded as artifacts.
+`npm run test:browser` replays every fixture and runs a chat and a stream inside headless Chrome (`CHROME_BIN` picks the binary; `npm run serve:browser` serves the same page for any browser). `npm run build:wasm` runs `wasm-opt -O3` on `core.wasm` when [binaryen](https://github.com/WebAssembly/binaryen) is on the PATH. Wheels, the sdist and the npm tarball are built by the Package workflow on every push and uploaded as artifacts.
 
 ## License
 
