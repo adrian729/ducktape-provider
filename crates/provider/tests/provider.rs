@@ -1,6 +1,6 @@
 use ducktape_conformance::replay::{ScriptedHttp, WireFixture};
 use ducktape_provider::transport::{
-    Body, BoxFuture, HttpRequest, Reply, Transport, TransportError, TransportErrorKind,
+    BoxFuture, HttpBody, HttpRequest, HttpTransport, Reply, TransportError, TransportErrorKind,
 };
 use ducktape_provider::*;
 use serde_json::Value;
@@ -22,6 +22,7 @@ struct Scripted {
     seen: Mutex<Vec<Seen>>,
     delay: Duration,
     on_request: Option<Hook>,
+    bodies_dropped: Arc<AtomicUsize>,
 }
 
 impl Scripted {
@@ -35,11 +36,16 @@ impl Scripted {
             seen: Mutex::new(Vec::new()),
             delay,
             on_request: None,
+            bodies_dropped: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     fn requests(&self) -> usize {
         self.seen.lock().unwrap().len()
+    }
+
+    fn bodies_dropped(&self) -> usize {
+        self.bodies_dropped.load(Ordering::SeqCst)
     }
 
     fn header(&self, index: usize, name: &str) -> Option<String> {
@@ -58,9 +64,16 @@ impl Scripted {
 struct Chunks {
     chunks: VecDeque<Vec<u8>>,
     delay: Duration,
+    dropped: Arc<AtomicUsize>,
 }
 
-impl Body for Chunks {
+impl Drop for Chunks {
+    fn drop(&mut self) {
+        self.dropped.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl HttpBody for Chunks {
     fn next(&mut self) -> BoxFuture<'_, std::result::Result<Option<Vec<u8>>, TransportError>> {
         Box::pin(async move {
             if !self.delay.is_zero() {
@@ -71,7 +84,7 @@ impl Body for Chunks {
     }
 }
 
-impl Transport for Scripted {
+impl HttpTransport for Scripted {
     fn send(
         &self,
         request: HttpRequest,
@@ -113,6 +126,7 @@ impl Transport for Scripted {
                 body: Box::new(Chunks {
                     chunks,
                     delay: self.delay,
+                    dropped: self.bodies_dropped.clone(),
                 }),
             })
         })
@@ -172,20 +186,35 @@ fn provider(fixture: &WireFixture, server: Arc<Scripted>) -> Provider {
     b.build().unwrap()
 }
 
-fn temp_dir() -> std::path::PathBuf {
+static TEMP_DIRS: AtomicUsize = AtomicUsize::new(0);
+
+struct TempDir(std::path::PathBuf);
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+fn temp_dir() -> TempDir {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let dir = std::env::temp_dir().join(format!(
-        "ducktape-rs-{}-{}",
+        "ducktape-rs-{}-{}-{nanos}",
         std::process::id(),
-        ducktape_conformance::replay::etag(
-            &std::time::SystemTime::now()
-                .elapsed()
-                .unwrap_or_default()
-                .as_nanos()
-                .to_le_bytes()
-        )
+        TEMP_DIRS.fetch_add(1, Ordering::SeqCst)
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
 }
 
 fn session_store(fixture: &WireFixture, dir: &std::path::Path, prefix: &str) {
@@ -232,6 +261,7 @@ async fn chat_matches_fixture() {
         server.seen.lock().unwrap()[0].body.as_ref().unwrap()["model"],
         req.model
     );
+    assert_eq!(server.bodies_dropped(), 1);
 }
 
 #[tokio::test]
@@ -321,6 +351,24 @@ async fn no_credential_is_auth_error() {
     let e = p.chat([user("hi")]).model("m").await.unwrap_err();
     assert!(e.is(ErrorKind::Auth));
     assert_eq!(server.requests(), 0);
+    let empty_inline = Credential::source(AuthSource::Inline {
+        secret_ref: String::new(),
+        transport: Default::default(),
+    });
+    assert!(matches!(
+        Provider::builder("anthropic")
+            .transport(server.clone())
+            .auth([empty_inline])
+            .build(),
+        Err(Error::Argument(_))
+    ));
+    assert!(matches!(
+        Provider::builder("anthropic")
+            .transport(server.clone())
+            .auth([Credential::key("k").profile("work")])
+            .build(),
+        Err(Error::Argument(_))
+    ));
 }
 
 #[tokio::test]
@@ -379,6 +427,26 @@ async fn argument_errors_come_first() {
         p.embed(Vec::<String>::new()).await,
         Err(Error::Argument(_))
     ));
+    let bad = Headers::from([("x-bad".to_owned(), "a\nb".to_owned())]);
+    assert!(matches!(
+        p.chat([user("hi")]).model("m").headers(bad.clone()).await,
+        Err(Error::Argument(_))
+    ));
+    assert!(matches!(
+        Provider::builder("anthropic")
+            .transport(server.clone())
+            .headers(bad)
+            .build(),
+        Err(Error::Argument(_))
+    ));
+    let bad_name = Headers::from([("bad name".to_owned(), "v".to_owned())]);
+    assert!(matches!(
+        Provider::builder("anthropic")
+            .transport(server.clone())
+            .headers(bad_name)
+            .build(),
+        Err(Error::Argument(_))
+    ));
     assert_eq!(server.requests(), 0);
 }
 
@@ -435,9 +503,115 @@ async fn dropping_the_stream_stops_it() {
         .stream()
         .unwrap();
     assert!(s.next().await.unwrap().is_ok());
+    assert_eq!(server.bodies_dropped(), 0);
     drop(s);
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(server.bodies_dropped(), 1);
     assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn cancel_token_ends_the_stream_with_cancelled() {
+    let fixture = anthropic("stream_text_reasoning_chunked");
+    let server = Arc::new(Scripted::with_delay(&fixture, Duration::from_millis(30)));
+    let p = provider(&fixture, server.clone());
+    let req = request_of(&fixture);
+    let mut s = p
+        .chat(req.messages.clone())
+        .model(&req.model)
+        .stream()
+        .unwrap();
+    let token = s.cancel_token();
+    assert!(s.next().await.unwrap().is_ok());
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        token.cancel();
+    });
+    let mut last = None;
+    while let Some(ev) = s.next().await {
+        last = Some(ev);
+    }
+    assert!(last.unwrap().unwrap_err().is(ErrorKind::Cancelled));
+    assert_eq!(server.bodies_dropped(), 1);
+    assert!(s.response().is_none());
+    let s = p
+        .chat(req.messages.clone())
+        .model(&req.model)
+        .stream()
+        .unwrap();
+    s.cancel();
+    assert!(s.finish().await.unwrap_err().is(ErrorKind::Cancelled));
+}
+
+#[tokio::test]
+async fn cancel_token_ends_a_chat_with_cancelled() {
+    let fixture = anthropic("chat_text_reasoning");
+    let server = Arc::new(Scripted::with_delay(&fixture, Duration::from_millis(300)));
+    let p = provider(&fixture, server.clone());
+    let req = request_of(&fixture);
+    let token = CancelToken::new();
+    let stop = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        stop.cancel();
+    });
+    let e = p
+        .chat(req.messages.clone())
+        .model(&req.model)
+        .cancel_token(token)
+        .await
+        .unwrap_err();
+    assert!(e.is(ErrorKind::Cancelled), "{e}");
+    assert_eq!(server.bodies_dropped(), 1);
+}
+
+#[tokio::test]
+async fn dropping_the_call_during_the_resolver_sends_nothing() {
+    let fixture = anthropic("chat_text_reasoning");
+    let server = Scripted::new(&fixture);
+    let p = Provider::builder("anthropic")
+        .transport(server.clone())
+        .auth([Credential::resolver(|| async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            Ok::<_, String>("late".to_owned())
+        })])
+        .build()
+        .unwrap();
+    let req = request_of(&fixture);
+    let call = p.chat(req.messages.clone()).model(&req.model);
+    assert!(tokio::time::timeout(Duration::from_millis(50), call)
+        .await
+        .is_err());
+    assert_eq!(server.requests(), 0);
+    let token = CancelToken::new();
+    token.cancel();
+    let e = p
+        .chat(req.messages.clone())
+        .model(&req.model)
+        .cancel_token(token)
+        .await
+        .unwrap_err();
+    assert!(e.is(ErrorKind::Cancelled));
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn odd_timeouts_are_ignored() {
+    let fixture = anthropic("chat_text_reasoning");
+    let req = request_of(&fixture);
+    for total in [1e12, 1e30, f64::INFINITY, f64::NAN] {
+        let p = provider(&fixture, Scripted::new(&fixture));
+        let r = p
+            .chat(req.messages.clone())
+            .model(&req.model)
+            .timeout(Timeout {
+                read: Some(0.0),
+                connect: Some(-1.0),
+                total: Some(total),
+            })
+            .await
+            .unwrap();
+        assert!(!r.text().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -516,12 +690,16 @@ async fn profile_refreshes_and_writes_back() {
         server.header(1, "authorization").as_deref(),
         Some("Bearer sk-ant-oat01-new")
     );
-    let written: Value = serde_json::from_slice(
-        &std::fs::read(dir.join("credentials").join("default.json")).unwrap(),
-    )
-    .unwrap();
+    let creds = dir.join("credentials").join("default.json");
+    let written: Value = serde_json::from_slice(&std::fs::read(&creds).unwrap()).unwrap();
     assert_eq!(written["access_token"], "sk-ant-oat01-new");
     assert_eq!(written["extra"], "kept");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&creds).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
     assert_eq!(
         p.auth_status().await.unwrap().source.as_deref(),
         Some("session:anthropic_profile")
@@ -589,7 +767,8 @@ async fn expired_borrowed_session_names_the_owner() {
 
 #[tokio::test]
 async fn codex_keychain_write_back_uses_the_writer() {
-    std::env::set_var("CODEX_HOME", temp_dir());
+    let codex_home = temp_dir();
+    std::env::set_var("CODEX_HOME", &*codex_home);
     let mut fixture = openai("session_codex_keychain_write_back");
     let (key, stored) = fixture
         .keychain
@@ -609,17 +788,16 @@ async fn codex_keychain_write_back_uses_the_writer() {
     fixture.http[0].body = Some(fresh.to_string());
     let written: Arc<Mutex<Vec<(String, String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let doc_text = doc.to_string();
-    let reader: keychain::Reader =
-        Arc::new(move |s: &str, _a: &str| (s == service).then(|| doc_text.clone().into_bytes()));
+    let reader = move |s: &str, _a: &str| (s == service).then(|| doc_text.clone().into_bytes());
     let sink = written.clone();
-    let writer: keychain::Writer = Arc::new(move |s: &str, a: &str, v: &[u8]| {
+    let writer = move |s: &str, a: &str, v: &[u8]| {
         sink.lock().unwrap().push((
             s.to_owned(),
             a.to_owned(),
             String::from_utf8_lossy(v).into_owned(),
         ));
         true
-    });
+    };
     let req = request_of(&fixture);
     let server = Scripted::new(&fixture);
     let p = Provider::builder("openai")
@@ -663,6 +841,7 @@ async fn codex_keychain_write_back_uses_the_writer() {
 #[test]
 fn default_keychain_reader_never_panics() {
     assert!(keychain::read("ducktape-provider-test", "nobody").is_none());
+    assert!(!keychain::write("ducktape-provider-test\n", "nobody", b"x"));
 }
 
 #[tokio::test]
@@ -690,4 +869,78 @@ async fn observer_sees_hooks() {
         .await
         .unwrap();
     assert!(hooks.0.lock().unwrap().contains(&"request"));
+}
+
+#[cfg(feature = "reqwest")]
+mod reqwest_transport {
+    use super::*;
+    use ducktape_provider::transport::{Method, Purpose, ReqwestTransport};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn serve(reply: &'static [u8]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 65536];
+                let _ = socket.read(&mut buf).await;
+                let _ = socket.write_all(reply).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn get(url: String) -> HttpRequest {
+        HttpRequest {
+            method: Method::Get,
+            url,
+            headers: Headers::new(),
+            body: None,
+            stream: false,
+            timeout: None,
+            purpose: Purpose::Fetch,
+        }
+    }
+
+    #[tokio::test]
+    async fn redirects_are_not_followed_and_headers_are_joined() {
+        let url = serve(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/elsewhere\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\nContent-Length: 0\r\n\r\n").await;
+        let reply = ReqwestTransport::default().send(get(url)).await.unwrap();
+        assert_eq!(reply.status, 302);
+        assert_eq!(
+            reply.headers.get("set-cookie").map(String::as_str),
+            Some("a=1, b=2")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_truncated_body_is_a_reset() {
+        let url = serve(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort").await;
+        let mut reply = ReqwestTransport::default().send(get(url)).await.unwrap();
+        let error = loop {
+            match reply.body.next().await {
+                Ok(Some(_)) => continue,
+                Ok(None) => panic!("the truncated body did not fail"),
+                Err(e) => break e,
+            }
+        };
+        assert_eq!(error.kind, TransportErrorKind::Reset, "{}", error.message);
+        assert!(error.message.contains(':'), "{}", error.message);
+    }
+
+    #[tokio::test]
+    async fn a_refused_connection_is_a_connect_error() {
+        let e = ReqwestTransport::default()
+            .send(get("http://127.0.0.1:9/".to_owned()))
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind, TransportErrorKind::Connect, "{}", e.message);
+        assert!(
+            e.message.to_lowercase().contains("refused"),
+            "{}",
+            e.message
+        );
+    }
 }

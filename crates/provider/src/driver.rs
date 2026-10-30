@@ -1,7 +1,8 @@
 use crate::credential::Resolver;
 use crate::error::Error;
 use crate::keychain;
-use crate::transport::{Body, Transport, TransportError, TransportErrorKind};
+use crate::stream::CancelToken;
+use crate::transport::{HttpBody, HttpTransport, TransportError, TransportErrorKind};
 use ducktape_core::effects::{
     Clock, Effect, HttpRequest, Input, Locator, Notification, ObserverHook, OperationResult,
     Resume, Start, Step,
@@ -11,6 +12,7 @@ use ducktape_core::Operation;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -32,9 +34,26 @@ pub(crate) struct Host {
     pub resolvers: HashMap<String, Arc<dyn Resolver>>,
     pub keychain: Option<keychain::Reader>,
     pub keychain_write: Option<keychain::Writer>,
-    pub transport: Arc<dyn Transport>,
+    pub transport: Arc<dyn HttpTransport>,
     pub observer: Option<Arc<dyn Observer>>,
 }
+
+impl<T: Observer + ?Sized> Observer for Arc<T> {
+    fn on_request(&self, data: &Value) {
+        (**self).on_request(data)
+    }
+    fn on_response(&self, data: &Value) {
+        (**self).on_response(data)
+    }
+    fn on_event(&self, data: &Value) {
+        (**self).on_event(data)
+    }
+    fn on_retry(&self, data: &Value) {
+        (**self).on_retry(data)
+    }
+}
+
+const MAX_TIMEOUT_SECS: f64 = 4_294_967.0;
 
 pub(crate) fn clock() -> Clock {
     let mut entropy = vec![0u8; 32];
@@ -64,8 +83,19 @@ fn transport_error(kind: TransportErrorKind, message: &str) -> TransportError {
 
 fn seconds(value: Option<f64>) -> Option<Duration> {
     value
-        .filter(|v| v.is_finite() && *v >= 0.0)
-        .map(Duration::from_secs_f64)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|v| Duration::from_secs_f64(v.min(MAX_TIMEOUT_SECS)))
+}
+
+async fn until<F: Future>(cancel: &Option<CancelToken>, fut: F) -> Option<F::Output> {
+    match cancel {
+        Some(token) => tokio::select! {
+            biased;
+            _ = token.cancelled() => None,
+            out = fut => Some(out),
+        },
+        None => Some(fut.await),
+    }
 }
 
 fn shorter(a: Option<Duration>, b: Option<Duration>) -> Option<Duration> {
@@ -81,7 +111,8 @@ pub(crate) struct Driver {
     host: Arc<Host>,
     events: Option<UnboundedSender<Event>>,
     login: Option<LoginHandler>,
-    body: Option<Box<dyn Body>>,
+    cancel: Option<CancelToken>,
+    body: Option<Box<dyn HttpBody>>,
     deadline: Option<Instant>,
     read_timeout: Option<Duration>,
 }
@@ -91,15 +122,21 @@ impl Driver {
         host: Arc<Host>,
         events: Option<UnboundedSender<Event>>,
         login: Option<LoginHandler>,
+        cancel: Option<CancelToken>,
     ) -> Self {
         Driver {
             host,
             events,
             login,
+            cancel,
             body: None,
             deadline: None,
             read_timeout: None,
         }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(CancelToken::is_cancelled)
     }
 
     pub async fn run(mut self, start: Start) -> std::result::Result<OperationResult, Error> {
@@ -119,6 +156,10 @@ impl Driver {
             let input = match effect {
                 Effect::Done { result } => return Ok(result),
                 Effect::Failed { error } => return Err(Error::Provider(error)),
+                _ if self.is_cancelled() => {
+                    self.body = None;
+                    Input::Cancelled
+                }
                 Effect::NeedSecret { secret_ref, source } => {
                     self.secret(&mut op, secret_ref, source).await?
                 }
@@ -135,8 +176,10 @@ impl Driver {
                 },
                 Effect::NeedSleep { ms } => {
                     self.body = None;
-                    tokio::time::sleep(Duration::from_millis(ms)).await;
-                    Input::Slept
+                    match until(&self.cancel, tokio::time::sleep(Duration::from_millis(ms))).await {
+                        Some(()) => Input::Slept,
+                        None => Input::Cancelled,
+                    }
                 }
                 Effect::NeedRead { locator } => self.read(locator).await,
                 Effect::NeedWrite {
@@ -145,7 +188,7 @@ impl Driver {
                     expect,
                     private,
                 } => self.write(locator, bytes, expect, private).await,
-                Effect::NeedUserAction { action } => self.user_action(action)?,
+                Effect::NeedUserAction { action } => self.user_action(action).await?,
                 Effect::NeedCallback { .. } => {
                     return Err(Error::provider(
                         ErrorKind::Unsupported,
@@ -186,18 +229,20 @@ impl Driver {
                 .map(String::into_bytes),
             AuthSource::Resolver { resolver_id, .. } => match self.host.resolvers.get(&resolver_id)
             {
-                Some(r) => Some(
-                    r.resolve()
-                        .await
-                        .map_err(|m| {
-                            Error::provider(
-                                ErrorKind::Auth,
-                                Some("resolver_failed"),
-                                format!("the credential resolver failed: {m}"),
-                            )
-                        })?
-                        .into_bytes(),
-                ),
+                Some(r) => match until(&self.cancel, r.resolve()).await {
+                    None => return Ok(Input::Cancelled),
+                    Some(resolved) => Some(
+                        resolved
+                            .map_err(|m| {
+                                Error::provider(
+                                    ErrorKind::Auth,
+                                    Some("resolver_failed"),
+                                    format!("the credential resolver failed: {m}"),
+                                )
+                            })?
+                            .into_bytes(),
+                    ),
+                },
                 None => None,
             },
             _ => None,
@@ -214,21 +259,25 @@ impl Driver {
         let timeout = request.timeout.unwrap_or_default();
         let total = seconds(timeout.total);
         self.read_timeout = seconds(timeout.read);
-        self.deadline = total.map(|t| Instant::now() + t);
+        self.deadline = total.and_then(|t| Instant::now().checked_add(t));
+        let headers_wait = seconds(timeout.connect)
+            .map(|c| c.saturating_add(self.read_timeout.unwrap_or_default()));
         let send = self.host.transport.send(request);
-        let reply = match shorter(seconds(timeout.connect), total) {
-            Some(wait) => match tokio::time::timeout(wait, send).await {
-                Ok(reply) => reply,
-                Err(_) => {
-                    return Input::HttpError {
-                        error: transport_error(
-                            TransportErrorKind::Timeout,
-                            "no response headers within the connect timeout",
-                        ),
-                    }
+        let sent = match shorter(headers_wait, total) {
+            Some(wait) => until(&self.cancel, tokio::time::timeout(wait, send)).await,
+            None => until(&self.cancel, send).await.map(Ok),
+        };
+        let reply = match sent {
+            None => return Input::Cancelled,
+            Some(Err(_)) => {
+                return Input::HttpError {
+                    error: transport_error(
+                        TransportErrorKind::Timeout,
+                        "no response headers within the connect and read timeouts",
+                    ),
                 }
-            },
-            None => send.await,
+            }
+            Some(Ok(reply)) => reply,
         };
         match reply {
             Ok(reply) => {
@@ -245,21 +294,28 @@ impl Driver {
     async fn receive(&mut self, op: &mut Operation) -> std::result::Result<Step, Input> {
         let read_timeout = self.read_timeout;
         let deadline = self.deadline;
+        let cancel = self.cancel.clone();
         loop {
             let Some(body) = self.body.as_mut() else {
                 return Err(Input::HttpEnd);
             };
             let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
             let next = match shorter(read_timeout, left) {
-                Some(wait) => tokio::time::timeout(wait, body.next())
+                Some(wait) => until(&cancel, tokio::time::timeout(wait, body.next()))
                     .await
-                    .unwrap_or_else(|_| {
-                        Err(transport_error(
-                            TransportErrorKind::Timeout,
-                            "read timed out",
-                        ))
+                    .map(|timed| {
+                        timed.unwrap_or_else(|_| {
+                            Err(transport_error(
+                                TransportErrorKind::Timeout,
+                                "read timed out",
+                            ))
+                        })
                     }),
-                None => body.next().await,
+                None => until(&cancel, body.next()).await,
+            };
+            let Some(next) = next else {
+                self.body = None;
+                return Err(Input::Cancelled);
             };
             match next {
                 Ok(Some(bytes)) if bytes.is_empty() => continue,
@@ -359,21 +415,28 @@ impl Driver {
         }
     }
 
-    fn user_action(&mut self, action: LoginAction) -> std::result::Result<Input, Error> {
-        let Some(handler) = &self.login else {
+    async fn user_action(&mut self, action: LoginAction) -> std::result::Result<Input, Error> {
+        let Some(handler) = self.login.clone() else {
             return Err(Error::provider(
                 ErrorKind::Unsupported,
                 None,
                 "this call cannot ask the user for anything",
             ));
         };
-        let value = handler(action).map_err(|m| {
-            Error::provider(
-                ErrorKind::Auth,
-                Some("user_action_failed"),
-                format!("the login handler failed: {m}"),
-            )
-        })?;
+        let answered = tokio::task::spawn_blocking(move || handler(action));
+        let Some(joined) = until(&self.cancel, answered).await else {
+            return Ok(Input::Cancelled);
+        };
+        let value = joined
+            .map_err(|e| e.to_string())
+            .and_then(|r| r)
+            .map_err(|m| {
+                Error::provider(
+                    ErrorKind::Auth,
+                    Some("user_action_failed"),
+                    format!("the login handler failed: {m}"),
+                )
+            })?;
         Ok(Input::UserAction { value })
     }
 }
@@ -395,8 +458,11 @@ fn write_file(path: &Path, bytes: &[u8], private: bool) -> std::io::Result<()> {
         .unwrap_or_default();
     let tmp = dir.join(format!("{name}.tmp{}{nanos}", std::process::id()));
     let result = (|| {
-        std::fs::write(&tmp, bytes)?;
-        set_mode(&tmp, if private { 0o600 } else { 0o644 })?;
+        use std::io::Write;
+        let mut file = create_with_mode(&tmp, if private { 0o600 } else { 0o644 })?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
         std::fs::rename(&tmp, path)
     })();
     if result.is_err() {
@@ -420,12 +486,19 @@ fn create_private_dirs(dir: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+fn create_with_mode(path: &Path, mode: u32) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .open(path)
 }
 
 #[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) -> std::io::Result<()> {
-    Ok(())
+fn create_with_mode(path: &Path, _mode: u32) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }

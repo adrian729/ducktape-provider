@@ -4,28 +4,93 @@ use ducktape_core::effects::OperationResult;
 use ducktape_core::types::{Event, Response};
 use futures_core::Stream;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::Notify;
+
+#[derive(Default)]
+struct CancelInner {
+    flag: AtomicBool,
+    notify: Notify,
+}
+
+/// A cloneable handle that cancels a call from anywhere; the call then fails with `cancelled`.
+#[derive(Clone, Default)]
+pub struct CancelToken(Arc<CancelInner>);
+
+impl std::fmt::Debug for CancelToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CancelToken")
+            .field("cancelled", &self.is_cancelled())
+            .finish()
+    }
+}
+
+impl CancelToken {
+    /// A token nobody has cancelled yet.
+    pub fn new() -> Self {
+        CancelToken::default()
+    }
+
+    /// Cancels every call holding this token.
+    pub fn cancel(&self) {
+        self.0.flag.store(true, Ordering::SeqCst);
+        self.0.notify.notify_waiters();
+    }
+
+    /// Whether `cancel` was called.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.flag.load(Ordering::SeqCst)
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        let notified = self.0.notify.notified();
+        if self.is_cancelled() {
+            return;
+        }
+        notified.await;
+    }
+}
 
 /// A streamed chat reply: a stream of events, then the final response; dropping it cancels the call.
 pub struct ChatStream {
     driver: Option<BoxFuture<'static, std::result::Result<OperationResult, Error>>>,
     events: UnboundedReceiver<Event>,
+    cancel: CancelToken,
     response: Option<Response>,
     failure: Option<Error>,
+}
+
+impl std::fmt::Debug for ChatStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatStream")
+            .field("running", &self.driver.is_some())
+            .field("cancelled", &self.cancel.is_cancelled())
+            .field("finished", &self.response.is_some())
+            .finish()
+    }
 }
 
 impl ChatStream {
     pub(crate) fn new(
         driver: BoxFuture<'static, std::result::Result<OperationResult, Error>>,
         events: UnboundedReceiver<Event>,
+        cancel: CancelToken,
     ) -> Self {
         ChatStream {
             driver: Some(driver),
             events,
+            cancel,
             response: None,
             failure: None,
         }
+    }
+
+    /// A handle that cancels this stream from another task.
+    pub fn cancel_token(&self) -> CancelToken {
+        self.cancel.clone()
     }
 
     /// The next event, or none once the stream ended.
@@ -52,8 +117,10 @@ impl ChatStream {
         })
     }
 
-    /// Stops the stream and releases the connection.
-    pub fn cancel(self) {}
+    /// Stops the stream; the next event is a `cancelled` error, and dropping the stream releases the connection.
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+    }
 }
 
 impl futures_core::Stream for ChatStream {

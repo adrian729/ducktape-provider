@@ -328,14 +328,14 @@ if r.stop.reason == StopReason::ToolCall {
 | Refreshing another tool's login | `Credential::session("codex").refresh("memory")` or `.refresh("write_back")`, same meaning as in Python |
 | Login state | `p.auth_status().await?` gives `source`, `expires_at` and `session` |
 | Several sources in order | `.auth([Credential::session("claude_code"), Credential::env(["ANTHROPIC_API_KEY"])])` |
-| Your own keychain | `.keychain(reader)` and `.keychain_write(writer)`, a `keychain::Reader` and a `keychain::Writer` (`Arc` of a closure over service and account); the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
-| Cancel | drop the future or the stream, or `s.cancel()` |
+| Your own keychain | `.keychain(|service, account| ...)` returning `Option<Vec<u8>>` and `.keychain_write(|service, account, value| true)`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
+| Cancel | drop the future or the stream; or `s.cancel()`, or a shared `CancelToken` passed with `.cancel_token(token)` on any call, after which the call fails with `ErrorKind::Cancelled` |
 | Options and vendor fields | `p.chat(msgs).options(Options { reasoning: Some(ReasoningLevel::High), ..Default::default() }).vendor(vendor)` |
 | Images | `user([text("what is this?"), image(&png_bytes, "image/png")])` or `image_url("https://...")` |
 | Embeddings | `Provider::builder("openai").default_embedding_model("text-embedding-3-small").build()?.embed(["a", "b"]).await?.embeddings` |
 | Discovery | `p.models(false).await?`, `p.model_info("gpt-5").await?`, `p.capabilities("gpt-5").await?` |
-| Your own `reqwest` client | `.transport(Arc::new(ReqwestTransport::new(client)))` |
-| Your own transport | implement `transport::Transport` and `transport::Body`, then `.transport(Arc::new(mine))`; `default-features = false` drops `reqwest` |
+| Your own `reqwest` client | `.client(client)`; its redirect policy and timeouts are kept |
+| Your own transport | implement `transport::HttpTransport` and `transport::HttpBody`, then `.transport(mine)`; `default-features = false` drops `reqwest` |
 
 Every error is an `Error`: `Error::Argument(String)` for argument mistakes caught before any request, `Error::Provider(ProviderError)` for everything else, with `kind`, `status`, `code`, `retryable`, `retry_after`, `attempts`, `body`, `request_id` and `origin`; `e.is(ErrorKind::RateLimit)` matches by kind. Types are the core's own Rust types, re-exported at the crate root and documented by [`schema/provider.schema.json`](schema/provider.schema.json); open enums are enums with an `Other(String)` variant.
 

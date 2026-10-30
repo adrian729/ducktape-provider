@@ -27,6 +27,7 @@ pub struct Credential {
     pub(crate) source: AuthSource,
     pub(crate) secret: Option<Vec<u8>>,
     pub(crate) resolver: Option<Arc<dyn Resolver>>,
+    pub(crate) misuse: Option<String>,
 }
 
 impl std::fmt::Debug for Credential {
@@ -43,6 +44,13 @@ impl Credential {
             source,
             secret: None,
             resolver: None,
+            misuse: None,
+        }
+    }
+
+    fn session_only(&mut self, setter: &str) {
+        if !matches!(self.source, AuthSource::Session { .. }) {
+            self.misuse = Some(format!("{setter}() applies to session credentials only"));
         }
     }
 
@@ -96,6 +104,7 @@ impl Credential {
 
     /// The file or directory a session preset reads instead of its default location.
     pub fn store(mut self, store: impl Into<String>) -> Self {
+        self.session_only("store");
         if let AuthSource::Session { store: s, .. } = &mut self.source {
             *s = Some(store.into());
         }
@@ -104,6 +113,7 @@ impl Credential {
 
     /// The OAuth client id of a session preset.
     pub fn client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.session_only("client_id");
         if let AuthSource::Session { client_id: c, .. } = &mut self.source {
             *c = Some(client_id.into());
         }
@@ -112,6 +122,7 @@ impl Credential {
 
     /// The profile of a session preset.
     pub fn profile(mut self, profile: impl Into<String>) -> Self {
+        self.session_only("profile");
         if let AuthSource::Session { profile: p, .. } = &mut self.source {
             *p = Some(profile.into());
         }
@@ -120,6 +131,7 @@ impl Credential {
 
     /// What to do with a refreshed session token.
     pub fn refresh(mut self, refresh: impl Into<RefreshMode>) -> Self {
+        self.session_only("refresh");
         if let AuthSource::Session { refresh: r, .. } = &mut self.source {
             *r = Some(refresh.into());
         }
@@ -133,7 +145,10 @@ impl Credential {
             | AuthSource::Env { transport, .. }
             | AuthSource::Resolver { transport, .. }
             | AuthSource::Exchange { transport, .. } => transport,
-            AuthSource::Session { .. } => return self,
+            AuthSource::Session { .. } => {
+                self.misuse = Some("kind() does not apply to session credentials".to_owned());
+                return self;
+            }
         };
         transport.kind = Some(kind.into());
         if placement.is_some() {

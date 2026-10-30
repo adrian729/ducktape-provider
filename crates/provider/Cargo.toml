@@ -20,12 +20,12 @@ ducktape-core = { path = "../core", version = "0.1.0" }
 serde_json.workspace = true
 base64.workspace = true
 sha2.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 futures-core.workspace = true
 getrandom.workspace = true
 reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 ducktape-conformance = { path = "../conformance" }
-tokio = { version = "1.47", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "net", "io-util"] }
 base64.workspace = true

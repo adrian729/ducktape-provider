@@ -10,7 +10,7 @@ use std::pin::Pin;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// The body of a reply, pulled chunk by chunk; `None` at the end.
-pub trait Body: Send {
+pub trait HttpBody: Send {
     fn next(&mut self) -> BoxFuture<'_, std::result::Result<Option<Vec<u8>>, TransportError>>;
 }
 
@@ -18,15 +18,54 @@ pub trait Body: Send {
 pub struct Reply {
     pub status: u16,
     pub headers: Headers,
-    pub body: Box<dyn Body>,
+    pub body: Box<dyn HttpBody>,
+}
+
+impl std::fmt::Debug for Reply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reply")
+            .field("status", &self.status)
+            .field("headers", &self.headers)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Sends one request as the core built it; the loop applies the timeouts around it.
-pub trait Transport: Send + Sync {
+pub trait HttpTransport: Send + Sync {
     fn send(
         &self,
         request: HttpRequest,
     ) -> BoxFuture<'_, std::result::Result<Reply, TransportError>>;
+}
+
+impl<T: HttpTransport + ?Sized> HttpTransport for std::sync::Arc<T> {
+    fn send(
+        &self,
+        request: HttpRequest,
+    ) -> BoxFuture<'_, std::result::Result<Reply, TransportError>> {
+        (**self).send(request)
+    }
+}
+
+/// Rejects header names and values the wire would refuse.
+pub(crate) fn check_headers(headers: &Headers) -> std::result::Result<(), crate::error::Error> {
+    for (name, value) in headers {
+        let token = !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
+        if !token {
+            return Err(crate::error::Error::argument(format!(
+                "invalid header name {name:?}"
+            )));
+        }
+        if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+            return Err(crate::error::Error::argument(format!(
+                "invalid value for header {name}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "reqwest")]
@@ -35,7 +74,7 @@ pub use with_reqwest::ReqwestTransport;
 #[cfg(feature = "reqwest")]
 mod with_reqwest {
     use super::{
-        Body, BoxFuture, Headers, HttpRequest, Method, Reply, Transport, TransportError,
+        BoxFuture, Headers, HttpBody, HttpRequest, HttpTransport, Method, Reply, TransportError,
         TransportErrorKind,
     };
 
@@ -45,17 +84,17 @@ mod with_reqwest {
     }
 
     impl ReqwestTransport {
-        /// Wraps a client; redirects are not followed and no client-level timeout is set by default.
+        /// Wraps a client as configured by the caller, redirect policy and timeouts included.
         pub fn new(client: reqwest::Client) -> Self {
             ReqwestTransport { client }
         }
 
-        /// The default client.
+        /// The default client: no redirects, no client-level timeout.
         pub fn default_client() -> reqwest::Client {
             reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
-                .unwrap_or_default()
+                .expect("the default reqwest client builds")
         }
     }
 
@@ -67,7 +106,7 @@ mod with_reqwest {
 
     struct ReqwestBody(reqwest::Response);
 
-    impl Body for ReqwestBody {
+    impl HttpBody for ReqwestBody {
         fn next(&mut self) -> BoxFuture<'_, Result<Option<Vec<u8>>, TransportError>> {
             Box::pin(async move {
                 self.0
@@ -80,14 +119,17 @@ mod with_reqwest {
     }
 
     pub(crate) fn classify(e: reqwest::Error) -> TransportError {
-        let message = e.to_string();
-        let mut chain = String::new();
+        let mut parts = Vec::new();
         let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
         while let Some(s) = source {
-            chain.push_str(&s.to_string().to_lowercase());
-            chain.push(' ');
+            let text = s.to_string();
+            if parts.last() != Some(&text) {
+                parts.push(text);
+            }
             source = s.source();
         }
+        let message = parts.join(": ");
+        let chain = message.to_lowercase();
         let kind = if e.is_timeout() {
             TransportErrorKind::Timeout
         } else if chain.contains("dns")
@@ -103,10 +145,13 @@ mod with_reqwest {
             TransportErrorKind::Tls
         } else if e.is_connect() {
             TransportErrorKind::Connect
-        } else if chain.contains("reset")
+        } else if e.is_body()
+            || e.is_decode()
+            || chain.contains("reset")
             || chain.contains("broken pipe")
             || chain.contains("closed")
             || chain.contains("eof")
+            || chain.contains("end of file")
             || chain.contains("incomplete")
         {
             TransportErrorKind::Reset
@@ -116,7 +161,7 @@ mod with_reqwest {
         TransportError { kind, message }
     }
 
-    impl Transport for ReqwestTransport {
+    impl HttpTransport for ReqwestTransport {
         fn send(&self, request: HttpRequest) -> BoxFuture<'_, Result<Reply, TransportError>> {
             Box::pin(async move {
                 let method = match request.method {
@@ -135,7 +180,7 @@ mod with_reqwest {
                 let response = builder.send().await.map_err(classify)?;
                 let mut headers = Headers::new();
                 for (name, value) in response.headers() {
-                    let text = value.to_str().unwrap_or_default().to_owned();
+                    let text = String::from_utf8_lossy(value.as_bytes()).into_owned();
                     let key = name.as_str().to_lowercase();
                     match headers.get_mut(&key) {
                         Some(existing) => {

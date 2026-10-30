@@ -3,9 +3,9 @@ pub use crate::driver::Observer;
 use crate::driver::{clock, Driver, Host, LoginHandler};
 use crate::error::Error;
 use crate::keychain;
-use crate::stream::ChatStream;
+use crate::stream::{CancelToken, ChatStream};
 use crate::sugar::system_blocks;
-use crate::transport::{BoxFuture, Transport};
+use crate::transport::{check_headers, BoxFuture, HttpTransport};
 pub use ducktape_core::effects::Callback;
 use ducktape_core::effects::{OperationKind, OperationResult, Start};
 use ducktape_core::types::{
@@ -59,7 +59,7 @@ pub struct Builder {
     overrides: Option<Overrides>,
     strict: Option<bool>,
     observer: Option<Arc<dyn Observer>>,
-    transport: Option<Arc<dyn Transport>>,
+    transport: Option<Arc<dyn HttpTransport>>,
     keychain: Option<keychain::Reader>,
     keychain_write: Option<keychain::Writer>,
 }
@@ -131,14 +131,14 @@ impl Builder {
         self
     }
 
-    pub fn observer(mut self, v: Arc<dyn Observer>) -> Self {
-        self.observer = Some(v);
+    pub fn observer(mut self, v: impl Observer + 'static) -> Self {
+        self.observer = Some(Arc::new(v));
         self
     }
 
     /// The transport every request goes through.
-    pub fn transport(mut self, v: Arc<dyn Transport>) -> Self {
-        self.transport = Some(v);
+    pub fn transport(mut self, v: impl HttpTransport + 'static) -> Self {
+        self.transport = Some(Arc::new(v));
         self
     }
 
@@ -149,17 +149,25 @@ impl Builder {
         self
     }
 
-    pub fn keychain(mut self, v: keychain::Reader) -> Self {
-        self.keychain = Some(v);
+    /// Reads another tool's keychain entry by service and account.
+    pub fn keychain<F>(mut self, v: F) -> Self
+    where
+        F: Fn(&str, &str) -> Option<Vec<u8>> + Send + Sync + 'static,
+    {
+        self.keychain = Some(Arc::new(v));
         self
     }
 
-    pub fn keychain_write(mut self, v: keychain::Writer) -> Self {
-        self.keychain_write = Some(v);
+    /// Stores a refreshed token under a service and account.
+    pub fn keychain_write<F>(mut self, v: F) -> Self
+    where
+        F: Fn(&str, &str, &[u8]) -> bool + Send + Sync + 'static,
+    {
+        self.keychain_write = Some(Arc::new(v));
         self
     }
 
-    fn default_transport(&self) -> std::result::Result<Arc<dyn Transport>, Error> {
+    fn default_transport(&self) -> std::result::Result<Arc<dyn HttpTransport>, Error> {
         #[cfg(feature = "reqwest")]
         {
             Ok(Arc::new(crate::transport::ReqwestTransport::default()))
@@ -182,18 +190,26 @@ impl Builder {
                 "unknown namespace {other}; one of anthropic, openai, google, ollama"
             )));
         }
+        if let Some(headers) = &self.headers {
+            check_headers(headers)?;
+        }
         let mut secrets = HashMap::new();
         let mut resolvers: HashMap<String, Arc<dyn Resolver>> = HashMap::new();
         let mut sources = Vec::new();
         for (i, credential) in self.auth.iter().enumerate() {
+            if let Some(misuse) = &credential.misuse {
+                return Err(Error::argument(misuse.clone()));
+            }
             let mut source = credential.source.clone();
             match &mut source {
                 AuthSource::Inline { secret_ref, .. } => {
                     *secret_ref = format!("inline:{i}");
-                    secrets.insert(
-                        secret_ref.clone(),
-                        credential.secret.clone().unwrap_or_default(),
-                    );
+                    let secret = credential
+                        .secret
+                        .clone()
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| Error::argument("an inline credential needs a key"))?;
+                    secrets.insert(secret_ref.clone(), secret);
                 }
                 AuthSource::Resolver { resolver_id, .. } => {
                     *resolver_id = format!("resolver:{i}");
@@ -282,13 +298,14 @@ impl Provider {
         operation: OperationKind,
         events: Option<tokio::sync::mpsc::UnboundedSender<ducktape_core::types::Event>>,
         login: Option<LoginHandler>,
+        cancel: Option<CancelToken>,
     ) -> std::result::Result<OperationResult, Error> {
         let start = Start {
             clock: clock(),
             provider: self.inner.config.clone(),
             operation,
         };
-        Driver::new(self.inner.host.clone(), events, login)
+        Driver::new(self.inner.host.clone(), events, login, cancel)
             .run(start)
             .await
     }
@@ -307,6 +324,7 @@ impl Provider {
             headers: None,
             strict: None,
             include_raw: None,
+            cancel: None,
         }
     }
 
@@ -325,6 +343,7 @@ impl Provider {
             vendor: None,
             timeout: None,
             include_raw: None,
+            cancel: None,
         }
     }
 
@@ -342,7 +361,7 @@ impl Provider {
             }
         }
         match self
-            .run(OperationKind::Models { refresh }, None, None)
+            .run(OperationKind::Models { refresh }, None, None, None)
             .await?
         {
             OperationResult::Models { models } => {
@@ -369,6 +388,7 @@ impl Provider {
                 OperationKind::ModelInfo {
                     model: id.to_owned(),
                 },
+                None,
                 None,
                 None,
             )
@@ -407,6 +427,7 @@ impl Provider {
                 OperationKind::Capabilities {
                     model: model.to_owned(),
                 },
+                None,
                 None,
                 None,
             )
@@ -449,14 +470,17 @@ impl Provider {
 
     /// Forgets the provider's own session.
     pub async fn logout(&self) -> std::result::Result<(), Error> {
-        self.run(OperationKind::Logout, None, None)
+        self.run(OperationKind::Logout, None, None, None)
             .await
             .map(|_| ())
     }
 
     /// Reports which credential would be used and when it expires.
     pub async fn auth_status(&self) -> std::result::Result<AuthStatus, Error> {
-        match self.run(OperationKind::AuthStatus, None, None).await? {
+        match self
+            .run(OperationKind::AuthStatus, None, None, None)
+            .await?
+        {
             OperationResult::AuthStatus { status } => Ok(status),
             _ => Err(unexpected("auth_status")),
         }
@@ -472,6 +496,7 @@ fn unexpected(operation: &str) -> Error {
 }
 
 /// A chat call being configured.
+#[must_use = "a call does nothing until awaited or streamed"]
 pub struct ChatCall {
     provider: Provider,
     messages: Vec<Message>,
@@ -484,9 +509,26 @@ pub struct ChatCall {
     headers: Option<Headers>,
     strict: Option<bool>,
     include_raw: Option<bool>,
+    cancel: Option<CancelToken>,
+}
+
+impl std::fmt::Debug for ChatCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatCall")
+            .field("provider", &self.provider)
+            .field("messages", &self.messages.len())
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ChatCall {
+    /// A token that cancels this call from another task.
+    pub fn cancel_token(mut self, v: CancelToken) -> Self {
+        self.cancel = Some(v);
+        self
+    }
+
     pub fn model(mut self, v: impl Into<String>) -> Self {
         self.model = Some(v.into());
         self
@@ -537,7 +579,10 @@ impl ChatCall {
         self
     }
 
-    fn request(self) -> std::result::Result<(Provider, ChatRequest), Error> {
+    fn request(self) -> std::result::Result<(Provider, ChatRequest, Option<CancelToken>), Error> {
+        if let Some(headers) = &self.headers {
+            check_headers(headers)?;
+        }
         let model = self
             .model
             .or_else(|| self.provider.inner.config.default_model.clone())
@@ -559,20 +604,27 @@ impl ChatCall {
             strict: self.strict,
             include_raw: self.include_raw,
         };
-        Ok((self.provider, request))
+        Ok((self.provider, request, self.cancel))
     }
 
-    /// Sends the call and returns the events as they arrive.
+    /// Prepares the stream; the request goes out when the stream is first polled.
     pub fn stream(self) -> std::result::Result<ChatStream, Error> {
-        let (provider, request) = self.request()?;
+        let (provider, request, cancel) = self.request()?;
+        let cancel = cancel.unwrap_or_default();
         let (tx, rx) = unbounded_channel();
+        let token = cancel.clone();
         let driver: BoxFuture<'static, std::result::Result<OperationResult, Error>> =
             Box::pin(async move {
                 provider
-                    .run(OperationKind::Stream { request }, Some(tx), None)
+                    .run(
+                        OperationKind::Stream { request },
+                        Some(tx),
+                        None,
+                        Some(token),
+                    )
                     .await
             });
-        Ok(ChatStream::new(driver, rx))
+        Ok(ChatStream::new(driver, rx, cancel))
     }
 }
 
@@ -582,9 +634,9 @@ impl IntoFuture for ChatCall {
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (provider, request) = self.request()?;
+            let (provider, request, cancel) = self.request()?;
             match provider
-                .run(OperationKind::Chat { request }, None, None)
+                .run(OperationKind::Chat { request }, None, None, cancel)
                 .await?
             {
                 OperationResult::Response { response } => Ok(response),
@@ -595,6 +647,7 @@ impl IntoFuture for ChatCall {
 }
 
 /// An embed call being configured.
+#[must_use = "a call does nothing until awaited"]
 pub struct EmbedCall {
     provider: Provider,
     input: Vec<String>,
@@ -604,9 +657,26 @@ pub struct EmbedCall {
     vendor: Option<VendorMap>,
     timeout: Option<Timeout>,
     include_raw: Option<bool>,
+    cancel: Option<CancelToken>,
+}
+
+impl std::fmt::Debug for EmbedCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbedCall")
+            .field("provider", &self.provider)
+            .field("input", &self.input.len())
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 impl EmbedCall {
+    /// A token that cancels this call from another task.
+    pub fn cancel_token(mut self, v: CancelToken) -> Self {
+        self.cancel = Some(v);
+        self
+    }
+
     pub fn model(mut self, v: impl Into<String>) -> Self {
         self.model = Some(v.into());
         self
@@ -661,9 +731,10 @@ impl IntoFuture for EmbedCall {
                 timeout: self.timeout,
                 include_raw: self.include_raw,
             };
+            let cancel = self.cancel;
             match self
                 .provider
-                .run(OperationKind::Embed { request }, None, None)
+                .run(OperationKind::Embed { request }, None, None, cancel)
                 .await?
             {
                 OperationResult::Embed { response } => Ok(response),
@@ -674,6 +745,7 @@ impl IntoFuture for EmbedCall {
 }
 
 /// A login call being configured.
+#[must_use = "a call does nothing until awaited"]
 pub struct LoginCall {
     provider: Provider,
     handler: LoginHandler,
@@ -706,7 +778,7 @@ impl IntoFuture for LoginCall {
             };
             match self
                 .provider
-                .run(operation, None, Some(self.handler))
+                .run(operation, None, Some(self.handler), None)
                 .await?
             {
                 OperationResult::AuthStatus { status } => Ok(status),

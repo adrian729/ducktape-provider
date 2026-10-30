@@ -65,7 +65,10 @@ public static class DucktapeCredW {
   }
 }
 "@
-$value = [Console]::In.ReadToEnd()
+$stdin = [Console]::OpenStandardInput()
+$buffer = New-Object System.IO.MemoryStream
+$stdin.CopyTo($buffer)
+$value = [System.Text.Encoding]::UTF8.GetString($buffer.ToArray())
 if ([DucktapeCredW]::Write($env:DUCKTAPE_CRED_TARGET, $env:DUCKTAPE_CRED_USER, $value)) { exit 0 } else { exit 1 }"#;
 
 /// The default reader: macOS Keychain, Linux Secret Service or Windows Credential Manager.
@@ -119,6 +122,10 @@ pub fn read(service: &str, account: &str) -> Option<Vec<u8>> {
 
 /// The default writer for the same three stores.
 pub fn write(service: &str, account: &str, value: &[u8]) -> bool {
+    let line_break = |s: &[u8]| s.iter().any(|b| *b == b'\n' || *b == b'\r');
+    if line_break(service.as_bytes()) || line_break(account.as_bytes()) || line_break(value) {
+        return false;
+    }
     if cfg!(target_os = "macos") {
         let script = format!(
             "add-generic-password -U -s {} -a {} -w {}\n",
@@ -176,21 +183,28 @@ fn run(argv: &[&str], env: &[(&str, &str)], stdin: Option<&[u8]>) -> Option<Vec<
         command.env(k, v);
     }
     let mut child = command.spawn().ok()?;
-    if let Some(mut input) = child.stdin.take() {
-        if let Some(bytes) = stdin {
-            input.write_all(bytes).ok()?;
+    let input = child.stdin.take();
+    let bytes = stdin.map(<[u8]>::to_vec);
+    std::thread::spawn(move || {
+        if let (Some(mut input), Some(bytes)) = (input, bytes) {
+            let _ = input.write_all(&bytes);
         }
-    }
+    });
     let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut out = Vec::new();
-        stdout.read_to_end(&mut out).ok().map(|_| out)
+        let _ = tx.send(stdout.read_to_end(&mut out).ok().map(|_| out));
     });
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let out = reader.join().ok().flatten()?;
+                let left = deadline.saturating_duration_since(Instant::now());
+                let out = rx
+                    .recv_timeout(left.max(Duration::from_secs(1)))
+                    .ok()
+                    .flatten()?;
                 return status.success().then_some(out);
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),

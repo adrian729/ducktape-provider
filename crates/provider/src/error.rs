@@ -3,6 +3,7 @@ use std::fmt;
 
 /// Why a call failed: a mistake in the arguments, or an error from the provider or the host.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Error {
     Argument(String),
     Provider(ProviderError),
