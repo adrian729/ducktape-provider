@@ -80,7 +80,7 @@ auth_status() -> AuthStatus                                    # may read stores
 | `tools` | `default_tools` | Function tools and hosted tools, section 5 |
 | `options` | `default_options` | Portable set below |
 | `vendor` | `default_vendor` | `{anthropic: {...}}` raw body fields |
-| `timeout` | provider's | Seconds (= total), or `{connect, read, total}`; `read` = gap between bytes; `total` spans retries and sleeps; hosts that cannot time the TCP connect alone bound the wait for response headers by connect + read |
+| `timeout` | provider's | Seconds (= total), or `{connect, read, total}`; `read` = gap between bytes; `total` spans retries and sleeps, so each attempt is sent with the time still left; hosts that cannot time the TCP connect alone bound the wait for response headers by connect + read |
 | `headers` | none | Extra headers for this call |
 | `strict` | provider's | Warnings become errors |
 | `include_raw` | false | Attach the vendor's reply body as `response.raw`; on `stream`, also deliver `raw` events |

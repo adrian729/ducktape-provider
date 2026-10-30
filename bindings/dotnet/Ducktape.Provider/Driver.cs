@@ -116,10 +116,10 @@ internal sealed class Driver
                             input = await SleepAsync(effect!["ms"]?.GetValue<long>() ?? 0).ConfigureAwait(false);
                             break;
                         case "need_read":
-                            input = Read(effect!["locator"]);
+                            input = await ReadAsync(effect!["locator"], ct).ConfigureAwait(false);
                             break;
                         case "need_write":
-                            input = Write(effect!);
+                            input = await WriteAsync(effect!, ct).ConfigureAwait(false);
                             break;
                         case "need_user_action":
                             input = await UserActionAsync(effect!["action"]).ConfigureAwait(false);
@@ -388,7 +388,7 @@ internal sealed class Driver
         }
     }
 
-    private JsonObject Read(JsonNode? locator)
+    private async Task<JsonObject> ReadAsync(JsonNode? locator, CancellationToken ct)
     {
         var missing = new JsonObject { ["type"] = "read", ["found"] = false };
         if (locator is null)
@@ -426,7 +426,11 @@ internal sealed class Driver
                 byte[]? stored;
                 try
                 {
-                    stored = host.Keychain(Json.Str(locator["service"]) ?? "", Json.Str(locator["account"]) ?? "");
+                    stored = await host.Keychain(Json.Str(locator["service"]) ?? "", Json.Str(locator["account"]) ?? "", ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception)
                 {
@@ -449,7 +453,7 @@ internal sealed class Driver
         return input;
     }
 
-    private JsonObject Write(JsonNode effect)
+    private async Task<JsonObject> WriteAsync(JsonNode effect, CancellationToken ct)
     {
         var locator = effect["locator"];
         var failed = new JsonObject { ["type"] = "written", ["ok"] = false };
@@ -470,7 +474,11 @@ internal sealed class Driver
             {
                 try
                 {
-                    ok = host.KeychainWrite(Json.Str(locator!["service"]) ?? "", Json.Str(locator["account"]) ?? "", data);
+                    ok = await host.KeychainWrite(Json.Str(locator!["service"]) ?? "", Json.Str(locator["account"]) ?? "", data, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception)
                 {

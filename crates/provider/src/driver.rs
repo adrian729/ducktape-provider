@@ -339,13 +339,15 @@ impl Driver {
             etag: None,
         };
         let (bytes, etag) = match locator {
-            Locator::File { path } => match std::fs::read(&path) {
-                Ok(b) => {
-                    let tag = etag(&b);
-                    (b, Some(tag))
+            Locator::File { path } => {
+                match tokio::task::spawn_blocking(move || std::fs::read(&path)).await {
+                    Ok(Ok(b)) => {
+                        let tag = etag(&b);
+                        (b, Some(tag))
+                    }
+                    _ => return missing,
                 }
-                Err(_) => return missing,
-            },
+            }
             Locator::Env { name } => match std::env::var(&name) {
                 Ok(v) => (v.into_bytes(), None),
                 Err(_) => return missing,
@@ -396,20 +398,24 @@ impl Driver {
                 }
             }
             Locator::File { path } => {
-                let path = Path::new(&path);
-                if let Some(expect) = expect {
-                    let current = std::fs::read(path).ok().map(|b| etag(&b));
-                    if current.as_deref() != Some(expect.as_str()) {
-                        return Input::Written {
-                            ok: false,
-                            conflict: true,
-                        };
+                let written = tokio::task::spawn_blocking(move || {
+                    let path = Path::new(&path);
+                    if let Some(expect) = expect {
+                        let current = std::fs::read(path).ok().map(|b| etag(&b));
+                        if current.as_deref() != Some(expect.as_str()) {
+                            return Input::Written {
+                                ok: false,
+                                conflict: true,
+                            };
+                        }
                     }
-                }
-                Input::Written {
-                    ok: write_file(path, &bytes, private).is_ok(),
-                    conflict: false,
-                }
+                    Input::Written {
+                        ok: write_file(path, &bytes, private).is_ok(),
+                        conflict: false,
+                    }
+                })
+                .await;
+                written.unwrap_or(failed)
             }
             Locator::Env { .. } => failed,
         }

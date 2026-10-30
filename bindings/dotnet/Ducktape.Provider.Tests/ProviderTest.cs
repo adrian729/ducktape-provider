@@ -433,11 +433,11 @@ public class ProviderTest
         fresh["access_token"] = Jwt(now + 86400);
         fixture["http"]![0]!["body"] = fresh.ToJsonString();
         var written = new List<(string Service, string Account, string Value)>();
-        KeychainReader reader = (s, a) => s == service ? Encoding.UTF8.GetBytes(doc.ToJsonString()) : null;
-        KeychainWriter writer = (s, a, v) =>
+        KeychainReader reader = (s, a, ct) => Task.FromResult(s == service ? Encoding.UTF8.GetBytes(doc.ToJsonString()) : null);
+        KeychainWriter writer = (s, a, v, ct) =>
         {
             written.Add((s, a, Encoding.UTF8.GetString(v)));
-            return true;
+            return Task.FromResult(true);
         };
         var req = RequestOf(fixture);
         {
@@ -458,9 +458,9 @@ public class ProviderTest
     }
 
     [Fact]
-    public void DefaultKeychainReaderNeverThrows()
+    public async Task DefaultKeychainReaderNeverThrows()
     {
-        Assert.Null(Keychain.Read("ducktape-provider-test", "nobody"));
+        Assert.Null(await Keychain.ReadAsync("ducktape-provider-test", "nobody"));
     }
 
     [Fact]

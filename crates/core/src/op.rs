@@ -1017,7 +1017,22 @@ impl Operation {
     }
 
     fn send(&mut self) -> Step {
-        let request = self.pending.clone().expect("pending request");
+        let mut request = self.pending.clone().expect("pending request");
+        if let Some(total) = request.timeout.and_then(|t| t.total) {
+            let remaining = total - self.elapsed_ms() / 1000.0;
+            if remaining <= 0.0 {
+                self.state = State::Finished;
+                let mut e = self.error(
+                    ErrorKind::Timeout,
+                    "the total timeout elapsed before the request could be sent",
+                );
+                e.code = Some("total".to_owned());
+                return Step::failed(e);
+            }
+            if let Some(t) = request.timeout.as_mut() {
+                t.total = Some(remaining);
+            }
+        }
         self.attempt += 1;
         self.received_bytes = false;
         self.body.clear();

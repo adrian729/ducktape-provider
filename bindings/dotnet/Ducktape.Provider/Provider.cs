@@ -71,8 +71,8 @@ public sealed class Provider
             Overrides = options.Overrides,
             Strict = options.Strict,
         };
-        var reader = options.Keychain ?? Keychain.Read;
-        var writer = options.KeychainWrite ?? (options.Keychain is null ? Keychain.Write : null);
+        var reader = options.Keychain ?? Keychain.ReadAsync;
+        var writer = options.KeychainWrite ?? (options.Keychain is null ? Keychain.WriteAsync : null);
         host = new Driver.Host(secrets, resolvers, reader, writer, options.Client ?? SharedClient.Value, options.Observer);
     }
 

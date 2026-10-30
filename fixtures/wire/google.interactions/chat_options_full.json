@@ -161,7 +161,7 @@
             "timeout": {
               "connect": 10.0,
               "read": 60.0,
-              "total": 120.0
+              "total": 119.9
             },
             "purpose": "chat"
           }

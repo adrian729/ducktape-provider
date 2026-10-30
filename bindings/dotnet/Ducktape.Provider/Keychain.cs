@@ -5,20 +5,20 @@ using System.Text;
 namespace Ducktape;
 
 /// <summary>Returns the secret stored under a service and account, or null when absent.</summary>
-public delegate byte[]? KeychainReader(string service, string account);
+public delegate Task<byte[]?> KeychainReader(string service, string account, CancellationToken cancellationToken);
 
 /// <summary>Stores a secret under a service and account; false when the store is unavailable.</summary>
-public delegate bool KeychainWriter(string service, string account, byte[] value);
+public delegate Task<bool> KeychainWriter(string service, string account, byte[] value, CancellationToken cancellationToken);
 
 /// <summary>Reads and writes another tool's keychain entry through the platform's own store.</summary>
 public static class Keychain
 {
     /// <summary>The default reader: macOS Keychain, Linux Secret Service or Windows Credential Manager.</summary>
-    public static byte[]? Read(string service, string account)
+    public static async Task<byte[]?> ReadAsync(string service, string account, CancellationToken cancellationToken = default)
     {
         if (OperatingSystem.IsMacOS())
         {
-            var output = Run(["security", "find-generic-password", "-s", service, "-a", account, "-w"], null);
+            var output = await RunAsync(["security", "find-generic-password", "-s", service, "-a", account, "-w"], null, cancellationToken).ConfigureAwait(false);
             if (output is { Length: > 0 } && output[^1] == (byte)'\n')
             {
                 output = output[..^1];
@@ -27,7 +27,7 @@ public static class Keychain
         }
         if (OperatingSystem.IsLinux() || OperatingSystem.IsFreeBSD())
         {
-            return Present(Run(["secret-tool", "lookup", "service", service, "username", account], null));
+            return Present(await RunAsync(["secret-tool", "lookup", "service", service, "username", account], null, cancellationToken).ConfigureAwait(false));
         }
         if (OperatingSystem.IsWindows())
         {
@@ -37,7 +37,7 @@ public static class Keychain
     }
 
     /// <summary>The default writer for the same three stores.</summary>
-    public static bool Write(string service, string account, byte[] value)
+    public static async Task<bool> WriteAsync(string service, string account, byte[] value, CancellationToken cancellationToken = default)
     {
         if (HasLineBreak(service) || HasLineBreak(account) || value.Any(b => b is (byte)'\n' or (byte)'\r'))
         {
@@ -46,11 +46,11 @@ public static class Keychain
         if (OperatingSystem.IsMacOS())
         {
             var script = "add-generic-password -U -s " + Quote(service) + " -a " + Quote(account) + " -w " + Quote(Encoding.UTF8.GetString(value)) + "\n";
-            return Run(["security", "-i"], Encoding.UTF8.GetBytes(script)) is not null;
+            return await RunAsync(["security", "-i"], Encoding.UTF8.GetBytes(script), cancellationToken).ConfigureAwait(false) is not null;
         }
         if (OperatingSystem.IsLinux() || OperatingSystem.IsFreeBSD())
         {
-            return Run(["secret-tool", "store", "--label=" + service, "service", service, "username", account], value) is not null;
+            return await RunAsync(["secret-tool", "store", "--label=" + service, "service", service, "username", account], value, cancellationToken).ConfigureAwait(false) is not null;
         }
         if (OperatingSystem.IsWindows())
         {
@@ -74,7 +74,7 @@ public static class Keychain
         return output is { Length: > 0 } ? output : null;
     }
 
-    private static byte[]? Run(string[] argv, byte[]? stdin)
+    private static async Task<byte[]?> RunAsync(string[] argv, byte[]? stdin, CancellationToken cancellationToken)
     {
         try
         {
@@ -88,27 +88,35 @@ public static class Keychain
             {
                 return null;
             }
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(10_000);
             var collected = new MemoryStream();
-            var copy = process.StandardOutput.BaseStream.CopyToAsync(collected);
-            _ = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+            var copy = process.StandardOutput.BaseStream.CopyToAsync(collected, deadline.Token);
+            _ = process.StandardError.BaseStream.CopyToAsync(Stream.Null, deadline.Token);
             var feed = Task.Run(async () =>
             {
                 using var input = process.StandardInput.BaseStream;
                 if (stdin is not null)
                 {
-                    await input.WriteAsync(stdin);
+                    await input.WriteAsync(stdin, deadline.Token).ConfigureAwait(false);
                 }
-            });
-            if (!process.WaitForExit(10_000))
+            }, deadline.Token);
+            try
+            {
+                await process.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+                await Task.WhenAll(copy, feed).WaitAsync(TimeSpan.FromSeconds(1), deadline.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
             {
                 process.Kill(true);
+                cancellationToken.ThrowIfCancellationRequested();
                 return null;
             }
-            if (!Task.WaitAll([copy, feed], 1_000) || process.ExitCode != 0)
-            {
-                return null;
-            }
-            return collected.ToArray();
+            return process.ExitCode == 0 ? collected.ToArray() : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception)
         {
