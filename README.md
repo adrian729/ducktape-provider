@@ -119,7 +119,7 @@ if (reply.stop.reason === "tool_call") {
 | Your own transport | `new Provider("openai", { fetch: myFetch })` |
 | Your own `core.wasm` location | `new Provider("openai", { core: new URL("/static/core.wasm", location.href) })` |
 
-Data fields use the schema's names (`default_model`, `tool_call_id`); methods and views are camelCase (`modelInfo`, `toolCalls`). Errors are the same classes as in Python, with `kind` as the stable discriminator. Types: [`bindings/js/index.d.ts`](bindings/js/index.d.ts).
+Data fields use the schema's names (`default_model`, `tool_call_id`); methods and views are camelCase (`modelInfo`, `toolCalls`). Errors are the same classes as in Python, with `kind` as the stable discriminator. Types: [`bindings/js/index.d.ts`](bindings/js/index.d.ts) for the API and [`bindings/js/schema.d.ts`](bindings/js/schema.d.ts), generated from the JSON schema, for the data.
 
 ## Development
 
@@ -129,8 +129,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --profile wasm --target wasm32-unknown-unknown -p ducktape-abi
 pip install jsonschema referencing && python scripts/check_fixtures.py .
+python scripts/gen_dts.py . --check
 cd bindings/python && uvx maturin develop --uv && .venv/bin/python -m pytest
-cd bindings/js && npm run build:wasm && npm test && npm run test:browser
+cd bindings/js && npm ci && npm run check:types && npm run build:wasm && npm test && npm run test:browser
 ```
 
 `npm run test:browser` replays every fixture and runs a chat and a stream inside headless Chrome (`CHROME_BIN` picks the binary; `npm run serve:browser` serves the same page for any browser). `npm run build:wasm` runs `wasm-opt -O3` on `core.wasm` when [binaryen](https://github.com/WebAssembly/binaryen) is on the PATH. Wheels, the sdist and the npm tarball are built by the Package workflow on every push and uploaded as artifacts.

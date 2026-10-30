@@ -16,6 +16,7 @@
   "files": [
     "src/",
     "index.d.ts",
+    "schema.d.ts",
     "core.wasm"
   ],
   "engines": {
@@ -25,10 +26,15 @@
     "build:wasm": "node scripts/build-wasm.js",
     "test": "node --test \"test/**/*.test.js\"",
     "serve:browser": "node scripts/serve-browser.js",
-    "test:browser": "node scripts/test-browser.js"
+    "test:browser": "node scripts/test-browser.js",
+    "check:types": "tsc -p tsconfig.json",
+    "gen:types": "python3 ../../scripts/gen_dts.py ../.."
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/adrian729/ducktape-provider"
+  },
+  "devDependencies": {
+    "typescript": "5.7.3"
   }
 }

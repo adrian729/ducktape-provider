@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "skipLibCheck": false,
+    "paths": { "ducktape-provider": ["./index.d.ts"] },
+    "baseUrl": "."
+  },
+  "files": ["index.d.ts", "test/types.test-d.ts"]
+}

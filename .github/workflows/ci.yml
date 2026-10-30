@@ -40,6 +40,7 @@ jobs:
           python-version: "3.12"
       - run: pip install jsonschema referencing
       - run: python scripts/check_fixtures.py .
+      - run: python scripts/gen_dts.py . --check
 
   python:
     runs-on: ubuntu-latest
@@ -73,6 +74,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - run: npm ci
+        working-directory: bindings/js
+      - run: npm run check:types
+        working-directory: bindings/js
       - run: npm run build:wasm
         working-directory: bindings/js
       - run: npm test
