@@ -40,7 +40,7 @@
     "HOME": "/home/u"
   },
   "files": {
-    "/home/u/.config/ducktape/chatgpt_plan.json": "{\"version\": 1, \"client_id\": \"oaiapp_test\", \"ext_agent_host_id\": \"urn:uuid:00000000-0000-4000-8000-000000000000\", \"issuer\": \"https://auth.openai.com\", \"subject\": \"user_1\", \"email\": \"u@example.com\", \"id_token\": \"eyJhbGciOiAiUlMyNTYiLCAidHlwIjogIkpXVCJ9.eyJpc3MiOiAiaHR0cHM6Ly9hdXRoLm9wZW5haS5jb20iLCAiYXVkIjogIm9haWFwcF90ZXN0IiwgImV4cCI6IDE3NjE3ODI0MDAsICJpYXQiOiAxNzYxNjk2MDAwLCAic3ViIjogInVzZXJfMSIsICJlbWFpbCI6ICJ1QGV4YW1wbGUuY29tIiwgIm5vbmNlIjogIjM4YmJmYjdmN2UzZmZmNzdhYmVlYzAxY2U2MDUzNGE0In0.sig\", \"access_token\": \"at_0\", \"refresh_token\": \"rt_0\", \"token_type\": \"Bearer\", \"expires_in\": 3600, \"expires_at\": 1761782400, \"scopes\": [\"openid\", \"profile\"], \"saved_at\": \"2025-10-28T00:00:00Z\"}"
+    "/home/u/.config/ducktape/chatgpt_plan.json": "{\"version\": 1, \"client_id\": \"oaiapp_test\", \"ext_agent_host_id\": \"urn:uuid:00000000-0000-4000-8000-000000000000\", \"issuer\": \"https://auth.openai.com\", \"subject\": \"user_1\", \"email\": \"u@example.com\", \"id_token\": \"eyJhbGciOiAiUlMyNTYiLCAidHlwIjogIkpXVCJ9.eyJpc3MiOiAiaHR0cHM6Ly9hdXRoLm9wZW5haS5jb20iLCAiYXVkIjogWyJvYWlhcHBfdGVzdCJdLCAiZXhwIjogMTc2MTc4MjQwMCwgImlhdCI6IDE3NjE2OTYwMDAsICJzdWIiOiAidXNlcl8xIiwgImVtYWlsIjogInVAZXhhbXBsZS5jb20iLCAibm9uY2UiOiAiMzhiYmZiN2Y3ZTNmZmY3N2FiZWVjMDFjZTYwNTM0YTQifQ.sig\", \"access_token\": \"at_0\", \"refresh_token\": \"rt_0\", \"token_type\": \"Bearer\", \"expires_in\": 3600, \"expires_at\": 1761782400, \"scopes\": [\"openid\", \"profile\"], \"saved_at\": \"2025-10-28T00:00:00Z\"}"
   },
   "http": [],
   "exchange": [
@@ -118,8 +118,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJ2ZXJzaW9uIjogMSwgImNsaWVudF9pZCI6ICJvYWlhcHBfdGVzdCIsICJleHRfYWdlbnRfaG9zdF9pZCI6ICJ1cm46dXVpZDowMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDAiLCAiaXNzdWVyIjogImh0dHBzOi8vYXV0aC5vcGVuYWkuY29tIiwgInN1YmplY3QiOiAidXNlcl8xIiwgImVtYWlsIjogInVAZXhhbXBsZS5jb20iLCAiaWRfdG9rZW4iOiAiZXlKaGJHY2lPaUFpVWxNeU5UWWlMQ0FpZEhsd0lqb2dJa3BYVkNKOS5leUpwYzNNaU9pQWlhSFIwY0hNNkx5OWhkWFJvTG05d1pXNWhhUzVqYjIwaUxDQWlZWFZrSWpvZ0ltOWhhV0Z3Y0Y5MFpYTjBJaXdnSW1WNGNDSTZJREUzTmpFM09ESTBNREFzSUNKcFlYUWlPaUF4TnpZeE5qazJNREF3TENBaWMzVmlJam9nSW5WelpYSmZNU0lzSUNKbGJXRnBiQ0k2SUNKMVFHVjRZVzF3YkdVdVkyOXRJaXdnSW01dmJtTmxJam9nSWpNNFltSm1ZamRtTjJVelptWm1OemRoWW1WbFl6QXhZMlUyTURVek5HRTBJbjAuc2lnIiwgImFjY2Vzc190b2tlbiI6ICJhdF8wIiwgInJlZnJlc2hfdG9rZW4iOiAicnRfMCIsICJ0b2tlbl90eXBlIjogIkJlYXJlciIsICJleHBpcmVzX2luIjogMzYwMCwgImV4cGlyZXNfYXQiOiAxNzYxNzgyNDAwLCAic2NvcGVzIjogWyJvcGVuaWQiLCAicHJvZmlsZSJdLCAic2F2ZWRfYXQiOiAiMjAyNS0xMC0yOFQwMDowMDowMFoifQ==",
-        "etag": "1da84a0c16d08817218356f11c7afc925c86e33baa0847eb0b58cf5167191cb0"
+        "bytes": "eyJ2ZXJzaW9uIjogMSwgImNsaWVudF9pZCI6ICJvYWlhcHBfdGVzdCIsICJleHRfYWdlbnRfaG9zdF9pZCI6ICJ1cm46dXVpZDowMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDAiLCAiaXNzdWVyIjogImh0dHBzOi8vYXV0aC5vcGVuYWkuY29tIiwgInN1YmplY3QiOiAidXNlcl8xIiwgImVtYWlsIjogInVAZXhhbXBsZS5jb20iLCAiaWRfdG9rZW4iOiAiZXlKaGJHY2lPaUFpVWxNeU5UWWlMQ0FpZEhsd0lqb2dJa3BYVkNKOS5leUpwYzNNaU9pQWlhSFIwY0hNNkx5OWhkWFJvTG05d1pXNWhhUzVqYjIwaUxDQWlZWFZrSWpvZ1d5SnZZV2xoY0hCZmRHVnpkQ0pkTENBaVpYaHdJam9nTVRjMk1UYzRNalF3TUN3Z0ltbGhkQ0k2SURFM05qRTJPVFl3TURBc0lDSnpkV0lpT2lBaWRYTmxjbDh4SWl3Z0ltVnRZV2xzSWpvZ0luVkFaWGhoYlhCc1pTNWpiMjBpTENBaWJtOXVZMlVpT2lBaU16aGlZbVppTjJZM1pUTm1abVkzTjJGaVpXVmpNREZqWlRZd05UTTBZVFFpZlEuc2lnIiwgImFjY2Vzc190b2tlbiI6ICJhdF8wIiwgInJlZnJlc2hfdG9rZW4iOiAicnRfMCIsICJ0b2tlbl90eXBlIjogIkJlYXJlciIsICJleHBpcmVzX2luIjogMzYwMCwgImV4cGlyZXNfYXQiOiAxNzYxNzgyNDAwLCAic2NvcGVzIjogWyJvcGVuaWQiLCAicHJvZmlsZSJdLCAic2F2ZWRfYXQiOiAiMjAyNS0xMC0yOFQwMDowMDowMFoifQ==",
+        "etag": "3efab747605d6b12583e699cbcb521353ba844844cc58b1e21ceab03d00fdb1b"
       }
     },
     {
