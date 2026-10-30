@@ -1,0 +1,103 @@
+{
+  "name": "login_chatgpt_plan_no_home",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "vendor": "openai",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "chatgpt_plan"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "login",
+      "callback": "loopback"
+    }
+  },
+  "secrets": {},
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "XDG_CONFIG_HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "APPDATA"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "auth",
+            "message": "no home directory to keep the ChatGPT login in; pass `store=` on the session",
+            "code": "store_unavailable",
+            "retryable": false,
+            "attempts": 0
+          }
+        }
+      }
+    }
+  ]
+}

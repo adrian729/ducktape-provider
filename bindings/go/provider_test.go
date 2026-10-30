@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -676,4 +679,62 @@ func TestCodexKeychainWriteBack(t *testing.T) {
 	if err != nil || again.Text() != r.Text() {
 		t.Fatalf("reader-only chat: %v", err)
 	}
+}
+
+func TestLoginLoopbackCallback(t *testing.T) {
+	f := openaiFixture(t, "login_chatgpt_plan_new_registration")
+	realClock := clock
+	clock = func() clockDoc { return fixtureClock(0) }
+	t.Cleanup(func() { clock = realClock })
+	store := filepath.Join(t.TempDir(), "chatgpt.json")
+	p, _ := newProvider(t, f, Config{Auth: []Credential{Session("chatgpt_plan", SessionOptions{Store: store})}})
+	statuses := make(chan int, 1)
+	handler := func(a LoginAction) (string, error) {
+		if a.Type != "open_url" {
+			return "", nil
+		}
+		u, err := url.Parse(a.URL)
+		if err != nil {
+			return "", err
+		}
+		q := u.Query()
+		go func() {
+			resp, err := http.Get(q.Get("redirect_uri") + "?code=code_1&state=" + q.Get("state") + "&client_id=oaiapp_test")
+			if err != nil {
+				statuses <- 0
+				return
+			}
+			resp.Body.Close()
+			statuses <- resp.StatusCode
+		}()
+		return "", nil
+	}
+	status, err := p.Login(context.Background(), handler, &LoginOptions{AppName: "Example App"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Source == nil || *status.Source != "session:chatgpt_plan" || status.Session != "chatgpt_plan" {
+		t.Fatalf("status = %+v", status)
+	}
+	if code := <-statuses; code != 200 {
+		t.Fatalf("callback reply status = %d", code)
+	}
+	raw, err := os.ReadFile(store)
+	if err != nil || !strings.Contains(string(raw), "oaiapp_test") {
+		t.Fatalf("store = %q, %v", raw, err)
+	}
+	if info, err := os.Stat(store); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
+		t.Fatalf("store mode = %v, %v", info, err)
+	}
+
+	_, err = p.Login(context.Background(), func(LoginAction) (string, error) { return "", nil }, &LoginOptions{Timeout: 300 * time.Millisecond})
+	pe, ok := err.(*ProviderError)
+	if !ok || pe.Kind != ErrorKindTimeout || pe.Code != "login_timeout" {
+		t.Fatalf("err = %v", err)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:1455")
+	if err != nil {
+		t.Fatalf("port still busy: %v", err)
+	}
+	l.Close()
 }

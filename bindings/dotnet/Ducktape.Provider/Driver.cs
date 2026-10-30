@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -125,7 +126,8 @@ internal sealed class Driver
                             input = await UserActionAsync(effect!["action"]).ConfigureAwait(false);
                             break;
                         case "need_callback":
-                            throw ProviderException.Of("unsupported", null, "the loopback login callback is not implemented in the .NET binding yet");
+                            input = await CallbackAsync(effect!.AsObject()).ConfigureAwait(false);
+                            break;
                         default:
                             throw ProviderException.Of("unsupported", null, "the core asked for an unknown effect " + type);
                     }
@@ -581,5 +583,100 @@ internal sealed class Driver
             input["value"] = value;
         }
         return input;
+    }
+
+    private async Task<JsonObject> CallbackAsync(JsonObject effect)
+    {
+        var redirect = Json.Str(effect["redirect_uri"]);
+        if (redirect is null || !Uri.TryCreate(redirect, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttp || !IPAddress.TryParse(uri.Host.Trim('[', ']'), out var address) || !IPAddress.IsLoopback(address))
+        {
+            throw ProviderException.Of("unsupported", null, "the login callback must be a loopback address, got " + redirect);
+        }
+        var timeoutMs = effect["timeout_ms"]?.GetValue<long>() ?? 300000;
+        var listener = new TcpListener(address, uri.Port);
+        try
+        {
+            try
+            {
+                listener.Start();
+            }
+            catch (SocketException)
+            {
+                throw ProviderException.Of("connection", "callback_port_busy", uri.Host + ":" + uri.Port + " is in use; close the other login or use callback \"paste\"");
+            }
+            var shown = await UserActionAsync(effect["action"]).ConfigureAwait(false);
+            if (ct.IsCancellationRequested)
+            {
+                return shown;
+            }
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
+            var origin = uri.GetLeftPart(UriPartial.Authority);
+            try
+            {
+                while (true)
+                {
+                    using var client = await listener.AcceptTcpClientAsync(deadline.Token).ConfigureAwait(false);
+                    var target = await ServeCallbackAsync(client, uri.AbsolutePath, deadline.Token).ConfigureAwait(false);
+                    if (target is not null)
+                    {
+                        var input = Input("callback");
+                        input["url"] = origin + target;
+                        return input;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    return Input("cancelled");
+                }
+                throw ProviderException.Of("timeout", "login_timeout", "no sign-in callback arrived within " + (timeoutMs / 1000) + " seconds");
+            }
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private static async Task<string?> ServeCallbackAsync(TcpClient client, string path, CancellationToken token)
+    {
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
+            limit.CancelAfter(TimeSpan.FromSeconds(5));
+            var stream = client.GetStream();
+            var head = new byte[8192];
+            var length = 0;
+            while (length < head.Length)
+            {
+                var n = await stream.ReadAsync(head.AsMemory(length), limit.Token).ConfigureAwait(false);
+                if (n == 0)
+                {
+                    break;
+                }
+                length += n;
+                if (Encoding.ASCII.GetString(head, 0, length).Contains("\r\n\r\n", StringComparison.Ordinal))
+                {
+                    break;
+                }
+            }
+            var line = Encoding.ASCII.GetString(head, 0, length).Split("\r\n")[0].Split(' ');
+            var target = line.Length >= 2 && line[0] == "GET" ? line[1] : null;
+            var hit = target is not null && (target.Split('?')[0] == path);
+            var body = hit ? "<!doctype html><html><head><meta charset=\"utf-8\"><title>Signed in</title></head><body><p>Sign-in finished. You can close this window.</p></body></html>" : "<!doctype html><html><body>Not found</body></html>";
+            var bytes = Encoding.UTF8.GetBytes(body);
+            var header = Encoding.ASCII.GetBytes((hit ? "HTTP/1.1 200 OK" : "HTTP/1.1 404 Not Found") + "\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + bytes.Length + "\r\nConnection: close\r\n\r\n");
+            await stream.WriteAsync(header, limit.Token).ConfigureAwait(false);
+            await stream.WriteAsync(bytes, limit.Token).ConfigureAwait(false);
+            await stream.FlushAsync(limit.Token).ConfigureAwait(false);
+            return hit ? target : null;
+        }
+        catch (Exception e) when (e is IOException or SocketException or OperationCanceledException && !token.IsCancellationRequested)
+        {
+            return null;
+        }
     }
 }

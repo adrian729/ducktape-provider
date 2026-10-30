@@ -23,6 +23,7 @@ pub struct CallContext {
     pub strict: bool,
     pub include_raw: bool,
     pub overrides: Option<Overrides>,
+    pub dialect: Option<String>,
 }
 
 impl CallContext {

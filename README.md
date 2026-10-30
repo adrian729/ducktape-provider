@@ -64,6 +64,7 @@ if r.stop.reason == "tool_call":
 | An existing login | `Provider("openai", auth=session("codex"))`, `Provider("anthropic", auth=session("claude_code"))`, `session("anthropic_profile", profile="work")` |
 | Refreshing another tool's login | `session("codex", refresh="memory")` keeps the new token in process; `refresh="write_back"` updates the tool's store (file or keychain, only if it did not change meanwhile; the call still uses the new token when the write is refused) |
 | Login state | `p.auth_status()` gives `source`, `expires_at` and `session`; `source` is `None` when nothing is configured |
+| Sign in with ChatGPT | `p = Provider("openai", auth=session("chatgpt_plan"))` then `p.login(lambda a: webbrowser.open(a.url), app_name="My app")` opens the browser and waits for the redirect on `127.0.0.1:1455`; `callback="paste"` for headless apps (the handler returns the pasted redirect URL); `timeout` in seconds, default 300; `p.logout()` revokes and forgets the login; `session("chatgpt_plan", store=path)` keeps it out of the shared `~/.config/ducktape` store |
 | Several sources in order | `Provider("anthropic", auth=[session("claude_code"), env("ANTHROPIC_API_KEY")])` |
 | Your own keychain | `Provider("openai", auth=session("codex"), keychain=lambda service, account: keyring.get_password(service, account), keychain_write=lambda service, account, value: keyring.set_password(service, account, value.decode()))`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager; a reader without a writer makes `refresh="write_back"` keep the refreshed token in memory only |
 | Local Ollama | `Provider("ollama", default_model="llama3")` |
@@ -116,6 +117,7 @@ if (reply.stop.reason === "tool_call") {
 | An existing login | `new Provider("openai", { auth: session("codex") })`, `session("anthropic_profile", { profile: "work" })` |
 | Refreshing another tool's login | `session("codex", { refresh: "memory" })` or `{ refresh: "write_back" }`, same meaning as in Python |
 | Login state | `await p.authStatus()` gives `source`, `expires_at` and `session` |
+| Sign in with ChatGPT | `new Provider("openai", { auth: session("chatgpt_plan") })` then `await p.login(a => open(a.url), { app_name: "My app" })`; `callback: "paste"` for headless apps, `timeout` in seconds, `await p.logout()`; Node only, a browser page cannot log in |
 | Your own keychain | `new Provider("openai", { auth: session("codex"), keychain: async (service, account) => ..., keychain_write: async (service, account, bytes) => true })`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | In a browser | `resolver()` against your backend; an API key needs `dangerously_allow_browser: true` |
 | Cancel | `signal: controller.signal` on any call, or `stream.cancel()` |
@@ -167,6 +169,7 @@ if r.Stop.Reason == ducktape.StopReasonToolCall {
 | An existing login | `ducktape.Session("codex")`, `ducktape.Session("anthropic_profile", ducktape.SessionOptions{Profile: "work"})` |
 | Refreshing another tool's login | `ducktape.Session("codex", ducktape.SessionOptions{Refresh: ducktape.AuthSourceRefreshMemory})` or `AuthSourceRefreshWriteBack`, same meaning as in Python |
 | Login state | `p.AuthStatus(ctx)` gives `Source`, `ExpiresAt` and `Session` |
+| Sign in with ChatGPT | `Auth: []ducktape.Credential{ducktape.Session("chatgpt_plan")}` then `p.Login(ctx, func(a ducktape.LoginAction) (string, error) { return "", browser.OpenURL(a.URL) }, &ducktape.LoginOptions{AppName: "My app"})`; `Callback: "paste"` for headless apps, `Timeout` as a duration, `p.Logout(ctx)` |
 | Several sources in order | `Auth: []ducktape.Credential{ducktape.Session("claude_code"), ducktape.Env("ANTHROPIC_API_KEY")}` |
 | Your own keychain | `Keychain: func(ctx context.Context, service, account string) ([]byte, error) { ... }` and `KeychainWrite: func(ctx context.Context, service, account string, value []byte) (bool, error) { ... }`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | Cancel | cancel the `ctx` of any call, or `s.Close()` on a stream |
@@ -221,6 +224,7 @@ if (r.stop().reason().equals("tool_call")) {
 | An existing login | `Credential.session("codex")`, `Credential.session("anthropic_profile", null, null, "work", null)` (store, client id, profile, refresh) |
 | Refreshing another tool's login | `Credential.session("codex", null, null, null, "memory")` or `"write_back"`, same meaning as in Python |
 | Login state | `p.authStatus()` gives `source()`, `expiresAt()` and `session()` |
+| Sign in with ChatGPT | `.auth(Credential.session("chatgpt_plan"))` then `p.login(a -> { Desktop.getDesktop().browse(URI.create(a.url())); return null; }, null, null, "My app")` (handler, callback, timeout, app name); `"paste"` as the callback for headless apps, `p.logout()` |
 | Several sources in order | `.auth(Credential.session("claude_code"), Credential.env("ANTHROPIC_API_KEY"))` |
 | Your own keychain | `.keychain((service, account) -> ...)` and `.keychainWrite((service, account, value) -> true)`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | Cancel | `stream.close()`, or `p.chatAsync(msgs, options).cancel(true)` |
@@ -277,6 +281,7 @@ if (r.Stop?.Reason == StopReason.ToolCall)
 | An existing login | `Credential.Session("codex")`, `Credential.Session("anthropic_profile", profile: "work")` |
 | Refreshing another tool's login | `Credential.Session("codex", refresh: "memory")` or `refresh: "write_back"`, same meaning as in Python |
 | Login state | `await p.GetAuthStatusAsync()` gives `Source`, `ExpiresAt` and `Session` |
+| Sign in with ChatGPT | `Auth = [Credential.Session("chatgpt_plan")]` then `await p.LoginAsync((a, ct) => { Process.Start(new ProcessStartInfo(a.Url) { UseShellExecute = true }); return Task.FromResult<string?>(null); }, appName: "My app")`; `callback: "paste"` for headless apps, `timeout` as a `TimeSpan`, `await p.LogoutAsync()`, blocking `Login` and `Logout` twins |
 | Several sources in order | `Auth = [Credential.Session("claude_code"), Credential.Env("ANTHROPIC_API_KEY")]` |
 | Your own keychain | `Keychain = async (service, account, ct) => ...` and `KeychainWrite = async (service, account, value, ct) => true`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | Cancel | a `CancellationToken` on any call, `stream.Cancel()`, or leaving the `await foreach` early; all end in `OperationCanceledException` |
@@ -327,6 +332,7 @@ if r.stop.reason == StopReason::ToolCall {
 | An existing login | `Credential::session("codex")`, `Credential::session("anthropic_profile").profile("work")` |
 | Refreshing another tool's login | `Credential::session("codex").refresh("memory")` or `.refresh("write_back")`, same meaning as in Python |
 | Login state | `p.auth_status().await?` gives `source`, `expires_at` and `session` |
+| Sign in with ChatGPT | `.auth([Credential::session("chatgpt_plan")])` then `p.login(|a| { if let LoginAction::OpenUrl { url, .. } = a { open::that(url).map_err(|e| e.to_string())?; } Ok(None) }).app_name("My app").await?`; `.callback(Callback::Paste)` for headless apps, `.timeout(duration)`, `p.logout().await?` |
 | Several sources in order | `.auth([Credential::session("claude_code"), Credential::env(["ANTHROPIC_API_KEY"])])` |
 | Your own keychain | `.keychain(|service, account| ...)` returning `Option<Vec<u8>>` and `.keychain_write(|service, account, value| true)`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | Cancel | drop the future or the stream; or `s.cancel()`, or a shared `CancelToken` passed with `.cancel_token(token)` on any call, after which the call fails with `ErrorKind::Cancelled` |

@@ -1,6 +1,7 @@
 package ducktape
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,9 +11,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +28,7 @@ type clockDoc struct {
 	Entropy string `json:"entropy"`
 }
 
-func clock() clockDoc {
+var clock = func() clockDoc {
 	entropy := make([]byte, 32)
 	_, _ = rand.Read(entropy)
 	return clockDoc{NowMs: time.Now().UnixMilli(), Entropy: base64.StdEncoding.EncodeToString(entropy)}
@@ -45,18 +48,20 @@ type notification struct {
 }
 
 type effect struct {
-	Type      string         `json:"type"`
-	Request   *httpRequest   `json:"request,omitempty"`
-	Ms        int64          `json:"ms,omitempty"`
-	SecretRef string         `json:"secret_ref,omitempty"`
-	Source    *AuthSource    `json:"source,omitempty"`
-	Locator   *locator       `json:"locator,omitempty"`
-	Bytes     string         `json:"bytes,omitempty"`
-	Expect    string         `json:"expect,omitempty"`
-	Private   *bool          `json:"private,omitempty"`
-	Action    *LoginAction   `json:"action,omitempty"`
-	Result    *result        `json:"result,omitempty"`
-	Error     *ProviderError `json:"error,omitempty"`
+	Type        string         `json:"type"`
+	Request     *httpRequest   `json:"request,omitempty"`
+	Ms          int64          `json:"ms,omitempty"`
+	SecretRef   string         `json:"secret_ref,omitempty"`
+	Source      *AuthSource    `json:"source,omitempty"`
+	Locator     *locator       `json:"locator,omitempty"`
+	Bytes       string         `json:"bytes,omitempty"`
+	Expect      string         `json:"expect,omitempty"`
+	Private     *bool          `json:"private,omitempty"`
+	Action      *LoginAction   `json:"action,omitempty"`
+	RedirectURI string         `json:"redirect_uri,omitempty"`
+	TimeoutMs   int64          `json:"timeout_ms,omitempty"`
+	Result      *result        `json:"result,omitempty"`
+	Error       *ProviderError `json:"error,omitempty"`
 }
 
 type httpRequest struct {
@@ -238,7 +243,7 @@ func (r *runner) run(start any) (*result, error) {
 			}
 			in = input{Type: "user_action", Value: value}
 		case "need_callback":
-			return nil, unsupported("loopback callbacks are not supported by this binding; use callback paste")
+			in, err = r.callback(e)
 		default:
 			return nil, unsupported("unknown effect " + e.Type)
 		}
@@ -522,4 +527,83 @@ func (o Observer) call(hook string, data json.RawMessage) {
 			o.OnRetry(data)
 		}
 	}
+}
+
+func (r *runner) callback(e effect) (input, error) {
+	target, err := url.Parse(e.RedirectURI)
+	if err != nil || target.Hostname() == "" {
+		return input{}, unsupported("the login callback address is invalid")
+	}
+	host := target.Hostname()
+	if host != "127.0.0.1" && host != "::1" {
+		return input{}, unsupported("the login callback must be a loopback address")
+	}
+	addr := net.JoinHostPort(host, target.Port())
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return input{}, &ProviderError{Kind: ErrorKindConnection, Code: "callback_port_busy", Message: addr + " is in use; close the other login or use callback paste"}
+	}
+	defer listener.Close()
+	if r.handleAction == nil {
+		return input{}, unsupported("this call cannot ask the user for anything")
+	}
+	if e.Action == nil {
+		return input{}, &ProviderError{Kind: ErrorKindMalformedResponse, Message: "the core asked for a callback without an action"}
+	}
+	if _, actErr := r.handleAction(*e.Action); actErr != nil {
+		return input{}, authFailure("user_action_failed", "the login handler failed: "+actErr.Error())
+	}
+	timeout := time.Duration(e.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	deadline := time.Now().Add(timeout)
+	stop := context.AfterFunc(r.ctx, func() { listener.Close() })
+	defer stop()
+	origin := target.Scheme + "://" + target.Host
+	for {
+		if tcp, ok := listener.(*net.TCPListener); ok {
+			tcp.SetDeadline(deadline)
+		}
+		conn, err := listener.Accept()
+		if err != nil {
+			if r.ctx.Err() != nil {
+				return input{Type: "cancelled"}, nil
+			}
+			return input{}, &ProviderError{Kind: ErrorKindTimeout, Code: "login_timeout", Message: fmt.Sprintf("no sign-in callback arrived within %d seconds", int64(timeout/time.Second))}
+		}
+		requestTarget, matched := serveCallback(conn, target.Path)
+		if matched {
+			return input{Type: "callback", URL: origin + requestTarget}, nil
+		}
+	}
+}
+
+func serveCallback(conn net.Conn, path string) (string, bool) {
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	reader := bufio.NewReader(io.LimitReader(conn, 8<<10))
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", false
+	}
+	for {
+		header, err := reader.ReadString('\n')
+		if err != nil || strings.TrimRight(header, "\r\n") == "" {
+			break
+		}
+	}
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return "", false
+	}
+	requestTarget := parts[1]
+	requestPath, _, _ := strings.Cut(requestTarget, "?")
+	status, body := "404 Not Found", "Not found"
+	matched := requestPath == path
+	if matched {
+		status, body = "200 OK", "<!doctype html><html><body><p>Sign-in finished. You can close this window.</p></body></html>"
+	}
+	fmt.Fprintf(conn, "HTTP/1.1 %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", status, len(body), body)
+	return requestTarget, matched
 }

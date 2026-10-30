@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import os
+import select
+import socket
 import time
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Any, Callable, Generator, Optional
 
 from . import _core
-from ._errors import AuthError, ProviderError, UnsupportedError, error_from_dict
+from ._errors import AuthError, NetworkError, ProviderError, TimeoutError, UnsupportedError, error_from_dict
 from ._keychain import read_keychain, write_keychain
 
 
@@ -36,6 +39,7 @@ class Call:
 
     fn: Callable[..., Any]
     args: tuple[Any, ...] = ()
+    blocking: bool = False
 
 
 @dataclass
@@ -178,6 +182,78 @@ def _write(effect: dict[str, Any], host: Host) -> dict[str, Any]:
         return {"type": "written", "ok": False}
 
 
+_PAGE = b"<!doctype html><title>Signed in</title><p>Sign-in finished. You can close this window.</p>"
+_MAX_REQUEST = 8192
+
+
+def _reply(conn: socket.socket, status: str, body: bytes) -> None:
+    head = f"HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n"
+    try:
+        conn.sendall(head.encode() + body)
+    except OSError:
+        pass
+
+
+def _request_target(conn: socket.socket) -> Optional[str]:
+    conn.settimeout(3)
+    data = b""
+    try:
+        while b"\r\n\r\n" not in data and len(data) < _MAX_REQUEST:
+            chunk = conn.recv(1024)
+            if not chunk:
+                break
+            data += chunk
+    except OSError:
+        return None
+    parts = data.split(b"\r\n", 1)[0].decode("latin-1").split(" ")
+    return parts[1] if len(parts) >= 2 else None
+
+
+def _bind_callback(redirect_uri: str) -> tuple[socket.socket, str, str]:
+    url = urlsplit(redirect_uri)
+    host = url.hostname
+    if host not in ("127.0.0.1", "::1"):
+        raise UnsupportedError("the login callback must be a loopback address")
+    port = url.port or 80
+    shown = f"[{host}]" if ":" in host else host
+    listener = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if os.name == "posix":
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((host, port))
+        listener.listen(8)
+    except OSError as e:
+        listener.close()
+        raise NetworkError(
+            f"{shown}:{port} is in use; close the other login or use callback='paste'", code="callback_port_busy"
+        ) from e
+    return listener, f"{url.scheme}://{shown}:{port}", url.path or "/"
+
+
+def _await_callback(listener: socket.socket, origin: str, path: str, timeout_ms: int, cancel: Cancel) -> Optional[str]:
+    deadline = time.monotonic() + timeout_ms / 1000
+    try:
+        while not cancel.flag:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError(f"no sign-in callback arrived within {max(1, round(timeout_ms / 1000))} seconds", code="login_timeout")
+            if not select.select([listener], [], [], min(left, 0.1))[0]:
+                continue
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                continue
+            with conn:
+                target = _request_target(conn)
+                if target is not None and urlsplit(target).path == path:
+                    _reply(conn, "200 OK", _PAGE)
+                    return origin + target
+                _reply(conn, "404 Not Found", b"not found")
+        return None
+    finally:
+        listener.close()
+
+
 def drive(
     start: dict[str, Any],
     host: Host,
@@ -251,7 +327,23 @@ def drive(
                 raise ProviderError("the login handler failed", kind="auth", code="user_action_failed") from reply.error
             data = {"type": "user_action", "value": reply if isinstance(reply, str) else None}
         elif kind == "need_callback":
-            raise UnsupportedError("the loopback login callback is not implemented in the Python binding yet")
+            listener, origin, path = _bind_callback(effect["redirect_uri"])
+            try:
+                if handle_action is None:
+                    raise UnsupportedError("this call cannot ask the user for anything")
+                reply = yield Call(handle_action, (effect["action"],))
+                if isinstance(reply, Failed):
+                    raise ProviderError("the login handler failed", kind="auth", code="user_action_failed") from reply.error
+            except BaseException:
+                listener.close()
+                raise
+            url = yield Call(_await_callback, (listener, origin, path, int(effect.get("timeout_ms") or 300000), cancel), blocking=True)
+            if isinstance(url, Failed):
+                raise url.error
+            if url is None:
+                step = op.resume({"clock": clock(), "input": {"type": "cancelled"}})
+                continue
+            data = {"type": "callback", "url": url}
         else:
             raise UnsupportedError(f"the core asked for an unknown effect {kind!r}")
         step = op.resume({"clock": clock(), "input": data})

@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod effects;
+pub mod login;
 pub mod op;
 pub mod retry;
 pub mod secret;

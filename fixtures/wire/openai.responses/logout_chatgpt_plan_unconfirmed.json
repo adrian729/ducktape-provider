@@ -1,0 +1,296 @@
+{
+  "name": "logout_chatgpt_plan_unconfirmed",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "vendor": "openai",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "chatgpt_plan"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "logout"
+    }
+  },
+  "secrets": {},
+  "env": {
+    "HOME": "/home/u"
+  },
+  "files": {
+    "/home/u/.config/ducktape/chatgpt_plan.json": "{\"version\": 1, \"client_id\": \"oaiapp_test\", \"ext_agent_host_id\": \"urn:uuid:00000000-0000-4000-8000-000000000000\", \"issuer\": \"https://auth.openai.com\", \"subject\": \"user_1\", \"email\": \"u@example.com\", \"id_token\": \"eyJhbGciOiAiUlMyNTYiLCAidHlwIjogIkpXVCJ9.eyJpc3MiOiAiaHR0cHM6Ly9hdXRoLm9wZW5haS5jb20iLCAiYXVkIjogIm9haWFwcF90ZXN0IiwgImV4cCI6IDE3NjE3ODI0MDAsICJpYXQiOiAxNzYxNjk2MDAwLCAic3ViIjogInVzZXJfMSIsICJlbWFpbCI6ICJ1QGV4YW1wbGUuY29tIiwgIm5vbmNlIjogIjM4YmJmYjdmN2UzZmZmNzdhYmVlYzAxY2U2MDUzNGE0In0.sig\", \"access_token\": \"at_0\", \"refresh_token\": \"rt_0\", \"token_type\": \"Bearer\", \"expires_in\": 3600, \"expires_at\": 1761782400, \"scopes\": [\"openid\", \"profile\", \"email\", \"offline_access\", \"resource.invoke\", \"chatgpt.tokens.use.direct\"], \"saved_at\": \"2025-10-28T00:00:00Z\"}"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"revocation_endpoint\": \"https://auth.openai.com/oauth/revoke\"}"
+    },
+    {
+      "status": 503,
+      "headers": {}
+    },
+    {
+      "status": 503,
+      "headers": {}
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "XDG_CONFIG_HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "L2hvbWUvdQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "APPDATA"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.config/ducktape/chatgpt_plan.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "eyJ2ZXJzaW9uIjogMSwgImNsaWVudF9pZCI6ICJvYWlhcHBfdGVzdCIsICJleHRfYWdlbnRfaG9zdF9pZCI6ICJ1cm46dXVpZDowMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDAiLCAiaXNzdWVyIjogImh0dHBzOi8vYXV0aC5vcGVuYWkuY29tIiwgInN1YmplY3QiOiAidXNlcl8xIiwgImVtYWlsIjogInVAZXhhbXBsZS5jb20iLCAiaWRfdG9rZW4iOiAiZXlKaGJHY2lPaUFpVWxNeU5UWWlMQ0FpZEhsd0lqb2dJa3BYVkNKOS5leUpwYzNNaU9pQWlhSFIwY0hNNkx5OWhkWFJvTG05d1pXNWhhUzVqYjIwaUxDQWlZWFZrSWpvZ0ltOWhhV0Z3Y0Y5MFpYTjBJaXdnSW1WNGNDSTZJREUzTmpFM09ESTBNREFzSUNKcFlYUWlPaUF4TnpZeE5qazJNREF3TENBaWMzVmlJam9nSW5WelpYSmZNU0lzSUNKbGJXRnBiQ0k2SUNKMVFHVjRZVzF3YkdVdVkyOXRJaXdnSW01dmJtTmxJam9nSWpNNFltSm1ZamRtTjJVelptWm1OemRoWW1WbFl6QXhZMlUyTURVek5HRTBJbjAuc2lnIiwgImFjY2Vzc190b2tlbiI6ICJhdF8wIiwgInJlZnJlc2hfdG9rZW4iOiAicnRfMCIsICJ0b2tlbl90eXBlIjogIkJlYXJlciIsICJleHBpcmVzX2luIjogMzYwMCwgImV4cGlyZXNfYXQiOiAxNzYxNzgyNDAwLCAic2NvcGVzIjogWyJvcGVuaWQiLCAicHJvZmlsZSIsICJlbWFpbCIsICJvZmZsaW5lX2FjY2VzcyIsICJyZXNvdXJjZS5pbnZva2UiLCAiY2hhdGdwdC50b2tlbnMudXNlLmRpcmVjdCJdLCAic2F2ZWRfYXQiOiAiMjAyNS0xMC0yOFQwMDowMDowMFoifQ==",
+        "etag": "1942f39d9a8ad10110bbca3c23498643d5e47493a7a937c79c4d274d53abeefb"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "https://auth.openai.com/.well-known/openid-configuration",
+            "headers": {
+              "accept": "application/json"
+            },
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 30.0,
+              "total": 30.0
+            },
+            "purpose": "auth"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        }
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJyZXZvY2F0aW9uX2VuZHBvaW50IjogImh0dHBzOi8vYXV0aC5vcGVuYWkuY29tL29hdXRoL3Jldm9rZSJ9"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://auth.openai.com/oauth/revoke",
+            "headers": {
+              "accept": "application/json",
+              "content-type": "application/x-www-form-urlencoded"
+            },
+            "body": "token=rt_0&token_type_hint=refresh_token&client_id=oaiapp_test",
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 30.0,
+              "total": 30.0
+            },
+            "purpose": "auth"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 503,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_sleep",
+          "ms": 5000
+        }
+      },
+      "input": {
+        "type": "slept"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://auth.openai.com/oauth/revoke",
+            "headers": {
+              "accept": "application/json",
+              "content-type": "application/x-www-form-urlencoded"
+            },
+            "body": "token=rt_0&token_type_hint=refresh_token&client_id=oaiapp_test",
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 30.0,
+              "total": 30.0
+            },
+            "purpose": "auth"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 503,
+        "headers": {}
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_write",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.config/ducktape/chatgpt_plan.json"
+          },
+          "bytes": "ewogICJjbGllbnRfaWQiOiAib2FpYXBwX3Rlc3QiLAogICJlbWFpbCI6ICJ1QGV4YW1wbGUuY29tIiwKICAiZXh0X2FnZW50X2hvc3RfaWQiOiAidXJuOnV1aWQ6MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwIiwKICAiaXNzdWVyIjogImh0dHBzOi8vYXV0aC5vcGVuYWkuY29tIiwKICAic2F2ZWRfYXQiOiAiMjAyNS0xMC0yOFQwMDowMDowMFoiLAogICJzdWJqZWN0IjogInVzZXJfMSIsCiAgInZlcnNpb24iOiAxCn0K",
+          "private": true
+        }
+      },
+      "input": {
+        "type": "written",
+        "ok": true,
+        "conflict": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "connection",
+            "message": "the ChatGPT session could not be revoked remotely: HTTP 503",
+            "code": "revoke_unconfirmed",
+            "retryable": false,
+            "attempts": 0
+          }
+        }
+      }
+    }
+  ]
+}

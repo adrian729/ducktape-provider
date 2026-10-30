@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -27,6 +28,12 @@ public class ProviderTest
     {
         var config = fixture["start"]!["provider"]!;
         return new Provider(config["vendor"]!.GetValue<string>(), new ProviderOptions { BaseUrl = config["base_url"]?.GetValue<string>(), Client = server.Client(), Auth = [Credential.Key("sk-ant-test-key")] });
+    }
+
+    private static string Jwt(JsonObject claims)
+    {
+        static string B64(string s) => Convert.ToBase64String(Encoding.UTF8.GetBytes(s)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        return B64("{\"alg\":\"RS256\"}") + "." + B64(claims.ToJsonString()) + ".sig";
     }
 
     private static string Jwt(long expSeconds)
@@ -455,6 +462,51 @@ public class ProviderTest
             var readerOnly = new Provider("openai", new ProviderOptions { Client = server.Client(), Auth = [Credential.Session("codex", refresh: "write_back")], Keychain = reader });
             Assert.Equal(LastText(fixture), (await readerOnly.ChatAsync(req.Messages!, new ChatOptions { Model = req.Model })).Text());
         }
+    }
+
+    [Fact]
+    public async Task LoopbackLoginStoresTheSessionAndTimesOut()
+    {
+        var fixture = OpenAi("login_chatgpt_plan_new_registration");
+        var dir = TempDir();
+        var store = Path.Combine(dir, "auth.json");
+        var server = new Scripted(fixture);
+        var p = new Provider("openai", new ProviderOptions { Client = server.Client(), Auth = [Credential.Session("chatgpt_plan", store: store)] });
+        Task<HttpStatusCode>? visit = null;
+        var status = await p.LoginAsync((action, _) =>
+        {
+            if (action.Type == "open_url")
+            {
+                var query = System.Web.HttpUtility.ParseQueryString(new Uri(action.Url!).Query);
+                var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                var claims = new JsonObject { ["iss"] = "https://auth.openai.com", ["aud"] = "oaiapp_test", ["exp"] = now + 3600, ["iat"] = now, ["sub"] = "user_1", ["email"] = "u@example.com", ["nonce"] = query["nonce"] };
+                var reply = JsonNode.Parse(fixture["http"]![0]!["body"]!.GetValue<string>())!;
+                reply["id_token"] = Jwt(claims);
+                fixture["http"]![0]!["body"] = reply.ToJsonString();
+                var target = query["redirect_uri"] + "?code=code_1&state=" + query["state"] + "&client_id=oaiapp_test";
+                visit = Task.Run(async () =>
+                {
+                    using var http = new HttpClient();
+                    using var answer = await http.GetAsync(target);
+                    return answer.StatusCode;
+                });
+            }
+            return Task.FromResult<string?>(null);
+        }, appName: "Example App");
+        Assert.Equal("session:chatgpt_plan", status.Source);
+        Assert.Equal("chatgpt_plan", status.Session);
+        Assert.Equal(HttpStatusCode.OK, await visit!);
+        Assert.Contains("oaiapp_test", File.ReadAllText(store));
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(store));
+        }
+        var e = await Assert.ThrowsAsync<ProviderException>(() => p.LoginAsync((_, _) => Task.FromResult<string?>(null), timeout: TimeSpan.FromMilliseconds(300)));
+        Assert.Equal("timeout", e.Kind);
+        Assert.Equal("login_timeout", e.Code);
+        var probe = new TcpListener(IPAddress.Loopback, 1455);
+        probe.Start();
+        probe.Stop();
     }
 
     [Fact]

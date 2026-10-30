@@ -74,6 +74,8 @@ internal static class Fixtures
             }
             var http = 0;
             var writes = 0;
+            var userActions = 0;
+            var callbacks = 0;
             var queue = new List<JsonObject>();
             for (long tick = 1; tick < 10_000; tick++)
             {
@@ -157,6 +159,18 @@ internal static class Fixtures
                     case "need_write":
                         var w = (fixture["writes"] as JsonArray)?.ElementAtOrDefault(writes++);
                         input = new JsonObject { ["type"] = "written", ["ok"] = w?["ok"]?.GetValue<bool>() ?? true, ["conflict"] = w?["conflict"]?.GetValue<bool>() ?? false };
+                        break;
+                    case "need_user_action":
+                        var v = (fixture["user_actions"] as JsonArray)?.ElementAtOrDefault(userActions++);
+                        input = new JsonObject { ["type"] = "user_action" };
+                        if (v is not null)
+                        {
+                            input["value"] = v.GetValue<string>();
+                        }
+                        break;
+                    case "need_callback":
+                        var url = (fixture["callbacks"] as JsonArray)?.ElementAtOrDefault(callbacks++) ?? throw new InvalidOperationException(name + ": script has no callback for the login");
+                        input = new JsonObject { ["type"] = "callback", ["url"] = url.GetValue<string>() };
                         break;
                     default:
                         throw new InvalidOperationException(name + ": unsupported effect in replay: " + type);

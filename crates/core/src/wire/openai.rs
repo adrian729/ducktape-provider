@@ -401,6 +401,24 @@ fn get(ctx: &CallContext, path: &str, purpose: Purpose) -> HttpRequest {
     }
 }
 
+const PLAN_UNSUPPORTED: &[&str] = &[
+    "max_output_tokens",
+    "metadata",
+    "safety_identifier",
+    "temperature",
+    "top_p",
+    "top_logprobs",
+    "truncation",
+    "user",
+    "previous_response_id",
+    "prompt_cache_retention",
+    "service_tier",
+    "background",
+    "conversation",
+    "max_tool_calls",
+    "prompt",
+];
+
 fn model_kind(id: &str) -> ModelKind {
     if id.contains("embedding") {
         ModelKind::Embedding
@@ -523,6 +541,17 @@ impl Wire for OpenaiResponses {
         }
         body.warnings.append(&mut enc.warnings);
         body.merge_vendor(vendor_for(req.vendor.as_ref(), &ctx.vendor))?;
+        if ctx.dialect.as_deref() == Some("chatgpt_plan") {
+            for key in PLAN_UNSUPPORTED {
+                if body.map.remove(*key).is_some() {
+                    body.warn(
+                        WarningKind::Unsupported,
+                        key,
+                        "not available with ChatGPT plan usage",
+                    );
+                }
+            }
+        }
         body.enforce_strict(ctx.strict)?;
         let mut headers = base_headers(ctx);
         for (k, v) in req.headers.iter().flatten() {
@@ -627,6 +656,23 @@ impl Wire for OpenaiResponses {
         body: &[u8],
     ) -> Result<(Vec<ModelInfo>, Option<HttpRequest>), ProviderError> {
         let v = parse_json(body)?;
+        if let Some(listed) = v.get("models").and_then(Value::as_array) {
+            let models = listed
+                .iter()
+                .filter(|m| str_field(m, "visibility").is_none_or(|v| v == "list"))
+                .filter_map(|m| {
+                    str_field(m, "slug").map(|id| ModelInfo {
+                        id: id.to_owned(),
+                        kind: model_kind(id),
+                        context_window: None,
+                        max_output_tokens: None,
+                        capabilities: None,
+                        raw: Some(m.clone()),
+                    })
+                })
+                .collect();
+            return Ok((models, None));
+        }
         let data = v
             .get("data")
             .and_then(Value::as_array)

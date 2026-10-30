@@ -341,10 +341,11 @@ export class Provider {
   }
 
   /** Logs into the provider's session source; `handleAction` shows what the user must do. */
-  async login(handleAction, { callback = "loopback", timeout, signal } = {}) {
+  async login(handleAction, { callback = "loopback", timeout, app_name, signal } = {}) {
     if (!CALLBACKS.includes(callback)) throw new TypeError(`callback must be one of ${CALLBACKS.join(", ")}`);
     const operation = { type: "login", callback };
     if (timeout !== undefined) operation.timeout_ms = Math.round(timeout * 1000);
+    if (app_name !== undefined) operation.app_name = app_name;
     const result = await this.run({ provider: this.config, operation }, { signal, handleAction });
     return result.status;
   }

@@ -32,6 +32,8 @@ def replay(fixture):
     op, step = _core.start(start)
     http = iter(fixture["http"])
     writes = list(fixture.get("writes", []))
+    user_actions = list(fixture.get("user_actions", []))
+    callbacks = list(fixture.get("callbacks", []))
     queue = []
     out = []
     tick = 0
@@ -77,6 +79,13 @@ def replay(fixture):
         elif kind == "need_write":
             w = writes.pop(0) if writes else {"ok": True}
             data = {"type": "written", "ok": w["ok"], "conflict": w.get("conflict", False)}
+        elif kind == "need_user_action":
+            value = user_actions.pop(0) if user_actions else None
+            data = {"type": "user_action"}
+            if value is not None:
+                data["value"] = value
+        elif kind == "need_callback":
+            data = {"type": "callback", "url": callbacks.pop(0)}
         else:
             raise AssertionError(f"unsupported effect in replay: {kind}")
         out.append({"step": step, "input": data})

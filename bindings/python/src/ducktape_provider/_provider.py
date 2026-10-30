@@ -334,12 +334,14 @@ class _Base:
     def _start(self, operation: dict[str, Any]) -> dict[str, Any]:
         return {"provider": self._config, "operation": operation}
 
-    def _login_start(self, callback: str, timeout: Optional[float]) -> dict[str, Any]:
+    def _login_start(self, callback: str, timeout: Optional[float], app_name: Optional[str] = None) -> dict[str, Any]:
         if callback not in _CALLBACKS:
             raise ValueError(f"callback must be one of {', '.join(_CALLBACKS)}")
         operation: dict[str, Any] = {"type": "login", "callback": callback}
         if timeout is not None:
             operation["timeout_ms"] = int(timeout * 1000)
+        if app_name is not None:
+            operation["app_name"] = app_name
         return self._start(operation)
 
     @staticmethod
@@ -566,11 +568,12 @@ class Provider(_Base):
         *,
         callback: str = "loopback",
         timeout: Optional[float] = None,
+        app_name: Optional[str] = None,
     ) -> AuthStatus:
         def handler(action: dict[str, Any]) -> Optional[str]:
             return handle_action(decode(LoginAction, action))
 
-        return AuthStatus.from_dict(self._run(self._login_start(callback, timeout), handler)["status"])
+        return AuthStatus.from_dict(self._run(self._login_start(callback, timeout, app_name), handler)["status"])
 
     def logout(self) -> None:
         self._run(self._start({"type": "logout"}))
@@ -723,11 +726,12 @@ class AsyncProvider(_Base):
         *,
         callback: str = "loopback",
         timeout: Optional[float] = None,
+        app_name: Optional[str] = None,
     ) -> AuthStatus:
         def handler(action: dict[str, Any]) -> Any:
             return handle_action(decode(LoginAction, action))
 
-        return AuthStatus.from_dict((await self._run(self._login_start(callback, timeout), handler))["status"])
+        return AuthStatus.from_dict((await self._run(self._login_start(callback, timeout, app_name), handler))["status"])
 
     async def logout(self) -> None:
         await self._run(self._start({"type": "logout"}))

@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.adrian729.ducktape.types.AuthStatus;
 import io.github.adrian729.ducktape.types.Block;
 import io.github.adrian729.ducktape.types.ChatRequest;
 import io.github.adrian729.ducktape.types.Event;
@@ -400,6 +401,63 @@ class ProviderTest {
             Provider readerOnly = Provider.builder("openai").transport(server).auth(Credential.session("codex", null, null, null, "write_back")).keychain(reader).build();
             ChatRequest req = requestOf(fixture);
             assertEquals(lastText(fixture), textOf(readerOnly.chat(req.messages(), ChatOptions.builder().model(req.model()).build())));
+        }
+    }
+
+    @Test
+    void loopbackLoginStoresTheSessionAndTimesOut(@TempDir Path dir) throws Exception {
+        JsonNode fixture = openai("login_chatgpt_plan_new_registration").deepCopy();
+        Path store = dir.resolve("auth.json");
+        Provider p = Provider.builder("openai").transport(new Scripted(fixture)).auth(Credential.session("chatgpt_plan", store.toString(), null, null, null)).build();
+        List<Integer> statuses = new ArrayList<>();
+        List<Throwable> failures = new ArrayList<>();
+        AuthStatus status = p.login(action -> {
+            if ("open_url".equals(action.type())) {
+                Map<String, String> query = new java.util.HashMap<>();
+                for (String pair : java.net.URI.create(action.url()).getRawQuery().split("&")) {
+                    String[] kv = pair.split("=", 2);
+                    query.put(kv[0], java.net.URLDecoder.decode(kv[1], StandardCharsets.UTF_8));
+                }
+                ObjectNode tokens;
+                try {
+                    tokens = (ObjectNode) Json.MAPPER.readTree(fixture.path("http").get(0).path("body").asText());
+                } catch (java.io.IOException e) {
+                    throw new IllegalStateException(e);
+                }
+                var enc = Base64.getUrlEncoder().withoutPadding();
+                String claims = "{\"iss\":\"https://auth.openai.com\",\"aud\":\"oaiapp_test\",\"exp\":" + (System.currentTimeMillis() / 1000 + 3600) + ",\"sub\":\"user_1\",\"nonce\":\"" + query.get("nonce") + "\"}";
+                tokens.put("id_token", enc.encodeToString("{\"alg\":\"RS256\"}".getBytes(StandardCharsets.UTF_8)) + "." + enc.encodeToString(claims.getBytes(StandardCharsets.UTF_8)) + ".sig");
+                ((ObjectNode) fixture.path("http").get(0)).put("body", tokens.toString());
+                String target = query.get("redirect_uri") + "?code=code_1&state=" + query.get("state") + "&client_id=oaiapp_test";
+                new Thread(() -> {
+                    try {
+                        statuses.add(java.net.http.HttpClient.newHttpClient().send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(target)).build(), java.net.http.HttpResponse.BodyHandlers.discarding()).statusCode());
+                    } catch (Exception e) {
+                        failures.add(e);
+                    }
+                }).start();
+            }
+            return null;
+        }, null, null, "Example App");
+        assertEquals("session:chatgpt_plan", status.source());
+        assertEquals("chatgpt_plan", status.session());
+        assertTrue(Files.readString(store).contains("oaiapp_test"));
+        if (Files.getFileStore(store).supportsFileAttributeView("posix")) {
+            assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(store)));
+        }
+        long deadline = System.currentTimeMillis() + 5000;
+        while (statuses.isEmpty() && failures.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20);
+        }
+        assertTrue(failures.isEmpty());
+        assertEquals(List.of(200), statuses);
+
+        Provider again = Provider.builder("openai").transport(new Scripted(fixture)).auth(Credential.session("chatgpt_plan", dir.resolve("other.json").toString(), null, null, null)).build();
+        ProviderException e = assertThrows(ProviderException.class, () -> again.login(action -> null, null, java.time.Duration.ofMillis(300), "Example App"));
+        assertEquals("timeout", e.kind());
+        assertEquals("login_timeout", e.code());
+        try (java.net.ServerSocket probe = new java.net.ServerSocket()) {
+            probe.bind(new java.net.InetSocketAddress("127.0.0.1", 1455));
         }
     }
 

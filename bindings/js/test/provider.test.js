@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -320,6 +321,49 @@ test("codex keychain write-back goes through the keychain writer", async () => {
     assert.throws(() => new Provider("openai", { keychain_write: "nope" }), TypeError);
   } finally {
     delete process.env.CODEX_HOME;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("login waits for the loopback callback and frees the port", async () => {
+  const fixture = load(join(fixtures, "wire", "openai.responses", "login_chatgpt_plan_new_registration.json"));
+  const dir = mkdtempSync(join(tmpdir(), "ducktape-login-"));
+  const store = join(dir, "auth.json");
+  const getRandomValues = globalThis.crypto.getRandomValues;
+  const now = Date.now;
+  globalThis.crypto.getRandomValues = (array) => array.fill(0x80);
+  Date.now = () => 1_761_696_000_000;
+  try {
+    const replay = scripted(fixture);
+    const tokenFetch = (url, init) => replay(url, { ...init, body: undefined });
+    const p = new Provider("openai", { fetch: tokenFetch, auth: dp.session("chatgpt_plan", { store }) });
+    let reply;
+    const handler = (action) => {
+      if (action.type !== "open_url") return;
+      const url = new URL(action.url);
+      const state = url.searchParams.get("state");
+      const redirect = url.searchParams.get("redirect_uri");
+      reply = globalThis.fetch(`${redirect}?code=code_1&state=${state}&client_id=oaiapp_test`);
+    };
+    const status = await p.login(handler, { app_name: "Example App" });
+    assert.equal((await reply).status, 200);
+    assert.equal(status.source, "session:chatgpt_plan");
+    assert.equal(status.session, "chatgpt_plan");
+    assert.match(readFileSync(store, "utf8"), /oaiapp_test/);
+    if (process.platform !== "win32") assert.equal(statSync(store).mode & 0o777, 0o600);
+    await assert.rejects(
+      p.login(() => {}, { timeout: 0.3 }),
+      (e) => e instanceof dp.TimeoutError && e.code === "login_timeout",
+    );
+    const probe = net.createServer();
+    await new Promise((resolve, reject) => {
+      probe.once("error", reject);
+      probe.listen(1455, "127.0.0.1", resolve);
+    });
+    await new Promise((resolve) => probe.close(resolve));
+  } finally {
+    globalThis.crypto.getRandomValues = getRandomValues;
+    Date.now = now;
     rmSync(dir, { recursive: true, force: true });
   }
 });

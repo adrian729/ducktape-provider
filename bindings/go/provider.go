@@ -37,7 +37,7 @@ type Config struct {
 
 // Provider is one endpoint of one vendor.
 type Provider struct {
-	vendor     string
+	vendor string
 	config ProviderConfig
 	host   *host
 	core   *Core
@@ -67,11 +67,11 @@ func New(vendor string, cfg Config) (*Provider, error) {
 		return nil, fmt.Errorf("ducktape: unknown vendor %q; one of %s", vendor, strings.Join(vendors, ", "))
 	}
 	p := &Provider{
-		vendor:    vendor,
-		host:  &host{secrets: map[string]string{}, resolvers: map[string]func(context.Context) (string, error){}, keychain: cfg.Keychain, keychainWrite: cfg.KeychainWrite, client: cfg.Client, observer: cfg.Observer},
-		core:  cfg.Core,
-		infos: map[string]*ModelInfo{},
-		caps:  map[string]*Capabilities{},
+		vendor: vendor,
+		host:   &host{secrets: map[string]string{}, resolvers: map[string]func(context.Context) (string, error){}, keychain: cfg.Keychain, keychainWrite: cfg.KeychainWrite, client: cfg.Client, observer: cfg.Observer},
+		core:   cfg.Core,
+		infos:  map[string]*ModelInfo{},
+		caps:   map[string]*Capabilities{},
 	}
 	if p.host.client == nil {
 		p.host.client = defaultClient
@@ -385,6 +385,7 @@ func (p *Provider) Capabilities(ctx context.Context, model string) (*Capabilitie
 // LoginOptions tune a login.
 type LoginOptions struct {
 	Callback string
+	AppName  string
 	Timeout  time.Duration
 }
 
@@ -394,6 +395,9 @@ func (p *Provider) Login(ctx context.Context, handle func(LoginAction) (string, 
 	if options != nil {
 		if options.Callback != "" {
 			op["callback"] = options.Callback
+		}
+		if options.AppName != "" {
+			op["app_name"] = options.AppName
 		}
 		if options.Timeout > 0 {
 			op["timeout_ms"] = options.Timeout.Milliseconds()

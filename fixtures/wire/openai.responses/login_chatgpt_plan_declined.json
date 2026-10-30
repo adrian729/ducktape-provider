@@ -1,0 +1,143 @@
+{
+  "name": "login_chatgpt_plan_declined",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "vendor": "openai",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "chatgpt_plan"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "login",
+      "callback": "loopback"
+    }
+  },
+  "secrets": {},
+  "env": {
+    "HOME": "/home/u"
+  },
+  "http": [],
+  "callbacks": [
+    "http://127.0.0.1:1455/auth/callback?error=access_denied&state=6ce8e6dc9f187d4329b70820bce9b798"
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "XDG_CONFIG_HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "L2hvbWUvdQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "APPDATA"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.config/ducktape/chatgpt_plan.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_callback",
+          "redirect_uri": "http://127.0.0.1:1455/auth/callback",
+          "timeout_ms": 300000,
+          "action": {
+            "type": "open_url",
+            "url": "https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&agent_name_hint=ducktape-provider&ext_agent_host_id=urn%3Auuid%3A0842c991-3b3c-47ac-a05c-80c3ff4261a5&response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&scope=openid%20profile%20email%20offline_access%20resource.invoke%20chatgpt.tokens.use.direct&resource=https%3A%2F%2Fapi.openai.com%2Fv1&state=6ce8e6dc9f187d4329b70820bce9b798&nonce=38bbfb7f7e3fff77abeec01ce60534a4&code_challenge_method=S256&code_challenge=PyuUVirByaTePaMPP6OqPf1oqtEWqxuuk7YkXnzvLW8",
+            "instructions": "Open this link in your browser and sign in with ChatGPT"
+          }
+        }
+      },
+      "input": {
+        "type": "callback",
+        "url": "http://127.0.0.1:1455/auth/callback?error=access_denied&state=6ce8e6dc9f187d4329b70820bce9b798"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "auth",
+            "message": "the ChatGPT sign-in was declined",
+            "code": "login_declined",
+            "retryable": false,
+            "attempts": 0
+          }
+        }
+      }
+    }
+  ]
+}

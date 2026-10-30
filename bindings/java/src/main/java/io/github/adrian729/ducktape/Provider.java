@@ -364,12 +364,20 @@ public final class Provider {
 
     /** Logs into the provider's session source; the handler shows the user what to do and returns any pasted value. */
     public AuthStatus login(Function<LoginAction, String> handler, String callback, Duration timeout) {
+        return login(handler, callback, timeout, null);
+    }
+
+    /** Logs in as the named application. */
+    public AuthStatus login(Function<LoginAction, String> handler, String callback, Duration timeout, String appName) {
         ObjectNode op = operation("login", null);
         if (callback != null) {
             op.put("callback", callback);
         }
         if (timeout != null) {
             op.put("timeout_ms", timeout.toMillis());
+        }
+        if (appName != null) {
+            op.put("app_name", appName);
         }
         return Json.as(run(op, null, handler, null).get("status"), AuthStatus.class);
     }

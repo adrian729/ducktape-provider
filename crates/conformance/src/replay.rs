@@ -38,6 +38,10 @@ pub struct WireFixture {
     pub http: Vec<ScriptedHttp>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub writes: Vec<ScriptedWrite>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_actions: Vec<Option<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub callbacks: Vec<String>,
     #[serde(default)]
     pub exchange: Vec<Exchange>,
 }
@@ -80,6 +84,8 @@ pub fn run(fixture: &WireFixture) -> Vec<Exchange> {
     let mut out = Vec::new();
     let mut http = fixture.http.iter();
     let mut writes = fixture.writes.iter();
+    let mut user_actions = fixture.user_actions.iter();
+    let mut callbacks = fixture.callbacks.iter();
     let mut tick = 0;
     let mut queue: Vec<Input> = Vec::new();
     for _ in 0..10_000 {
@@ -155,7 +161,13 @@ pub fn run(fixture: &WireFixture) -> Vec<Exchange> {
                     conflict: false,
                 },
             },
-            other => panic!("{}: unsupported effect in replay: {other:?}", fixture.name),
+            Effect::NeedUserAction { .. } => Input::UserAction {
+                value: user_actions.next().cloned().flatten(),
+            },
+            Effect::NeedCallback { .. } => match callbacks.next() {
+                Some(url) => Input::Callback { url: url.clone() },
+                None => panic!("{}: script has no callback for the login", fixture.name),
+            },
         };
         out.push(Exchange {
             step,

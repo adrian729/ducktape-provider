@@ -53,7 +53,7 @@ models(refresh?) -> [ModelInfo]
 model_info(id) -> ModelInfo
 capabilities(model) -> Capabilities
 
-login(handle_action, *, callback?, timeout?) -> AuthStatus     # logs into the provider's own session source; section 10
+login(handle_action, *, callback?, timeout?, app_name?) -> AuthStatus     # logs into the provider's own session source; section 10
 logout()
 auth_status() -> AuthStatus                                    # may read stores and call resolvers; has an async twin
 ```
@@ -289,20 +289,21 @@ capabilities(model) -> Capabilities            # every value yes | no | unknown
 ## 10. Auth and observer (2026-10-29)
 
 ```
-login(handle_action, *, callback?, timeout?) -> AuthStatus
-  logs into the provider's session source (its preset, store and client_id); library-owned presets only: chatgpt_plan, anthropic_profile
+login(handle_action, *, callback?, timeout?, app_name?) -> AuthStatus
+  logs into the provider's session source (its preset, store and client_id); library-owned presets only: chatgpt_plan (anthropic_profile still unsupported)
   handle_action(action) -> string?               # the app shows it; returns the pasted value for paste
     action: open_url {url, instructions} | show_code {url, code, instructions} | paste {prompt}
   callback: loopback (default) | paste            # paste for headless apps; the browser build has no login
-  timeout: default 5 minutes
+  timeout: default 5 minutes; expiry fails with timeout{login_timeout}
+  app_name: the name the vendor shows the user at first registration; default ducktape-provider
 logout()                                          # library-owned sessions only; codex / claude_code: unsupported, message names the CLI command
 auth_status() -> AuthStatus { source, expires_at?, session? }
 
 observer: { on_request(req), on_response(res), on_event(ev), on_retry(err, attempt) }   # all optional; redacted data only
 ```
 
-- The flow (PKCE, state, loopback listener on `127.0.0.1`, token exchange, store) runs in the core and the binding's effect loop; the app never sees a token.
-- `chatgpt_plan` tokens go to the library's own store, shared on the machine (`~/.config/ducktape/` or the OS equivalent, keychain when available), so one login serves every app using the library; `session(preset, store=path)` isolates an app. `anthropic_profile` writes a profile in Anthropic's documented shared location (`~/.config/anthropic`), readable by the `ant` CLI; how a third party obtains the OAuth client id is unverified, so this preset ships only once a fixture proves the flow.
+- The flow (PKCE, state, nonce, loopback listener on `127.0.0.1:1455`, token exchange, id token checks, store) runs in the core and the binding's effect loop; the app never sees a token. A busy port fails with `connection{callback_port_busy}`; the handler's return value is ignored with the loopback callback and is the pasted redirect URL with `paste`. ChatGPT plan calls drop the request fields the plan endpoint rejects (`max_output_tokens`, `temperature`, `top_p`, `metadata`, `safety_identifier`, `user`, `service_tier`, `previous_response_id`, `truncation`) with an `unsupported` warning each, and `models()` lists the plan's models.
+- `chatgpt_plan` tokens go to the library's own store, shared on the machine (`$XDG_CONFIG_HOME/ducktape/chatgpt_plan.json`, `~/.config/ducktape/chatgpt_plan.json` or `%APPDATA%\ducktape\chatgpt_plan.json`, a 0600 file; the keychain variant is not built), so one login serves every app using the library; `session(preset, store=path)` isolates an app. `anthropic_profile` writes a profile in Anthropic's documented shared location (`~/.config/anthropic`), readable by the `ant` CLI; how a third party obtains the OAuth client id is unverified, so this preset ships only once a fixture proves the flow.
 - `session(preset, client_id=...)` for vendors that issue ids per app.
 - Not logged in: the first call raises `auth{no_credential}` with the hint to call `login`. Apps check `auth_status()` first or catch that.
 - `auth_status().source` is the same label every response carries in `origin.auth_source`: `env:OPENAI_API_KEY`, `session:codex`, `resolver`, `inline`.

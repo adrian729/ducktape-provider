@@ -277,7 +277,7 @@ public sealed class Provider
     }
 
     /// <summary>Logs into the provider's session source; the handler shows the user what to do and returns any pasted value.</summary>
-    public async Task<AuthStatus> LoginAsync(Func<LoginAction, CancellationToken, Task<string?>> handler, string? callback = null, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public async Task<AuthStatus> LoginAsync(Func<LoginAction, CancellationToken, Task<string?>> handler, string? callback = null, TimeSpan? timeout = null, string? appName = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(handler);
         var op = Operation("login");
@@ -289,15 +289,19 @@ public sealed class Provider
         {
             op["timeout_ms"] = (long)t.TotalMilliseconds;
         }
+        if (appName is not null)
+        {
+            op["app_name"] = appName;
+        }
         var result = await RunAsync(op, null, handler, cancellationToken).ConfigureAwait(false);
         return Json.As<AuthStatus>(result?["status"]);
     }
 
     /// <summary>Logs in, blocking; the handler shows the user what to do and returns any pasted value.</summary>
-    public AuthStatus Login(Func<LoginAction, string?> handler, string? callback = null, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public AuthStatus Login(Func<LoginAction, string?> handler, string? callback = null, TimeSpan? timeout = null, string? appName = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(handler);
-        return Task.Run(() => LoginAsync((action, _) => Task.FromResult(handler(action)), callback, timeout, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
+        return Task.Run(() => LoginAsync((action, _) => Task.FromResult(handler(action)), callback, timeout, appName, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>Forgets the provider's own session.</summary>

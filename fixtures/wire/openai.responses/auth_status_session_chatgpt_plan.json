@@ -1,0 +1,127 @@
+{
+  "name": "auth_status_session_chatgpt_plan",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "vendor": "openai",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "chatgpt_plan"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "auth_status"
+    }
+  },
+  "secrets": {},
+  "env": {
+    "HOME": "/home/u"
+  },
+  "files": {
+    "/home/u/.config/ducktape/chatgpt_plan.json": "{\"version\": 1, \"client_id\": \"oaiapp_test\", \"ext_agent_host_id\": \"urn:uuid:00000000-0000-4000-8000-000000000000\", \"issuer\": \"https://auth.openai.com\", \"subject\": \"user_1\", \"email\": \"u@example.com\", \"id_token\": \"eyJhbGciOiAiUlMyNTYiLCAidHlwIjogIkpXVCJ9.eyJpc3MiOiAiaHR0cHM6Ly9hdXRoLm9wZW5haS5jb20iLCAiYXVkIjogIm9haWFwcF90ZXN0IiwgImV4cCI6IDE3NjE3ODI0MDAsICJpYXQiOiAxNzYxNjk2MDAwLCAic3ViIjogInVzZXJfMSIsICJlbWFpbCI6ICJ1QGV4YW1wbGUuY29tIiwgIm5vbmNlIjogIjM4YmJmYjdmN2UzZmZmNzdhYmVlYzAxY2U2MDUzNGE0In0.sig\", \"access_token\": \"at_0\", \"refresh_token\": \"rt_0\", \"token_type\": \"Bearer\", \"expires_in\": 3600, \"expires_at\": 1761782400, \"scopes\": [\"openid\", \"profile\", \"email\", \"offline_access\", \"resource.invoke\", \"chatgpt.tokens.use.direct\"], \"saved_at\": \"2025-10-28T00:00:00Z\"}"
+  },
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "XDG_CONFIG_HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "L2hvbWUvdQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "APPDATA"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.config/ducktape/chatgpt_plan.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "eyJ2ZXJzaW9uIjogMSwgImNsaWVudF9pZCI6ICJvYWlhcHBfdGVzdCIsICJleHRfYWdlbnRfaG9zdF9pZCI6ICJ1cm46dXVpZDowMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDAiLCAiaXNzdWVyIjogImh0dHBzOi8vYXV0aC5vcGVuYWkuY29tIiwgInN1YmplY3QiOiAidXNlcl8xIiwgImVtYWlsIjogInVAZXhhbXBsZS5jb20iLCAiaWRfdG9rZW4iOiAiZXlKaGJHY2lPaUFpVWxNeU5UWWlMQ0FpZEhsd0lqb2dJa3BYVkNKOS5leUpwYzNNaU9pQWlhSFIwY0hNNkx5OWhkWFJvTG05d1pXNWhhUzVqYjIwaUxDQWlZWFZrSWpvZ0ltOWhhV0Z3Y0Y5MFpYTjBJaXdnSW1WNGNDSTZJREUzTmpFM09ESTBNREFzSUNKcFlYUWlPaUF4TnpZeE5qazJNREF3TENBaWMzVmlJam9nSW5WelpYSmZNU0lzSUNKbGJXRnBiQ0k2SUNKMVFHVjRZVzF3YkdVdVkyOXRJaXdnSW01dmJtTmxJam9nSWpNNFltSm1ZamRtTjJVelptWm1OemRoWW1WbFl6QXhZMlUyTURVek5HRTBJbjAuc2lnIiwgImFjY2Vzc190b2tlbiI6ICJhdF8wIiwgInJlZnJlc2hfdG9rZW4iOiAicnRfMCIsICJ0b2tlbl90eXBlIjogIkJlYXJlciIsICJleHBpcmVzX2luIjogMzYwMCwgImV4cGlyZXNfYXQiOiAxNzYxNzgyNDAwLCAic2NvcGVzIjogWyJvcGVuaWQiLCAicHJvZmlsZSIsICJlbWFpbCIsICJvZmZsaW5lX2FjY2VzcyIsICJyZXNvdXJjZS5pbnZva2UiLCAiY2hhdGdwdC50b2tlbnMudXNlLmRpcmVjdCJdLCAic2F2ZWRfYXQiOiAiMjAyNS0xMC0yOFQwMDowMDowMFoifQ==",
+        "etag": "1942f39d9a8ad10110bbca3c23498643d5e47493a7a937c79c4d274d53abeefb"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "auth_status",
+            "status": {
+              "source": "session:chatgpt_plan",
+              "expires_at": "2025-10-30T00:00:00Z",
+              "session": "chatgpt_plan"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

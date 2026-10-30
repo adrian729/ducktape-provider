@@ -4,6 +4,7 @@ use crate::effects::{
     Clock, Effect, HttpRequest, Input, Method, Notification, ObserverHook, OperationKind,
     OperationResult, Purpose, Resume, Start, Step, TransportErrorKind,
 };
+use crate::login::{self, LoginFlow};
 use crate::retry;
 use crate::secret::SecretStore;
 use crate::session::{self, Action, SessionFlow};
@@ -123,6 +124,11 @@ enum State {
         status: Option<u16>,
         body: Vec<u8>,
     },
+    Login,
+    LoginHttp {
+        status: Option<u16>,
+        body: Vec<u8>,
+    },
     Finished,
 }
 
@@ -150,6 +156,7 @@ pub struct Operation {
     fetch_queue: Vec<(usize, usize)>,
     fetching: Option<(usize, usize)>,
     session: Option<SessionFlow>,
+    login: Option<LoginFlow>,
     session_headers: Headers,
     auth_sources: Vec<AuthSource>,
     auth_index: usize,
@@ -165,41 +172,11 @@ impl std::fmt::Debug for Operation {
     }
 }
 
-fn login_or_logout(login: bool, config: &ProviderConfig) -> ProviderError {
-    let preset = config.auth.as_ref().and_then(|a| {
-        a.sources.iter().find_map(|s| match s {
-            AuthSource::Session { preset, .. } => Some(preset.clone()),
-            _ => None,
-        })
-    });
-    let mut e = match (login, preset) {
-        (_, None) => ProviderError::new(
-            ErrorKind::Unsupported,
-            "no session source configured: pass `auth=session(...)`",
-        ),
-        (true, Some(p)) => ProviderError::new(
-            ErrorKind::Unsupported,
-            format!(
-                "login for {} is not available yet; it ships once a recorded fixture proves the flow",
-                p.as_str()
-            ),
-        ),
-        (false, Some(p)) => match session::logout_hint(&p) {
-            Some(hint) => ProviderError::new(
-                ErrorKind::Unsupported,
-                format!(
-                    "{} is owned by another tool; log out with `{hint}`",
-                    p.as_str()
-                ),
-            ),
-            None => ProviderError::new(
-                ErrorKind::Unsupported,
-                format!("logout for {} is not available yet", p.as_str()),
-            ),
-        },
-    };
-    e.code = Some("auth_source".to_owned());
-    e
+fn no_login() -> login::Action {
+    login::Action::Failed(ProviderError::new(
+        ErrorKind::Unsupported,
+        "no login in progress",
+    ))
 }
 
 fn step_done(result: OperationResult) -> Step {
@@ -247,15 +224,32 @@ impl Operation {
             OperationKind::ModelInfo { model } => Job::ModelInfo { model },
             OperationKind::Capabilities { model } => Job::Capabilities { model },
             OperationKind::AuthStatus => Job::AuthStatus,
-            OperationKind::Login { .. } | OperationKind::Logout => {
-                let login = matches!(start.operation, OperationKind::Login { .. });
-                let endpoint = Endpoint {
-                    wire: "",
-                    base_url: String::new(),
-                };
-                let step = Step::failed(login_or_logout(login, &start.provider));
-                let op = Operation::new(start.provider, endpoint, Job::AuthStatus, &start.clock);
-                return (op, step);
+            OperationKind::Login {
+                callback,
+                timeout_ms,
+                app_name,
+            } => {
+                let paste = matches!(callback, crate::effects::Callback::Paste);
+                let flow = LoginFlow::new(
+                    &start.provider,
+                    true,
+                    paste,
+                    timeout_ms,
+                    app_name,
+                    &start.clock.entropy,
+                );
+                return Operation::login_start(start.provider, start.clock, flow);
+            }
+            OperationKind::Logout => {
+                let flow = LoginFlow::new(
+                    &start.provider,
+                    false,
+                    false,
+                    None,
+                    None,
+                    &start.clock.entropy,
+                );
+                return Operation::login_start(start.provider, start.clock, flow);
             }
         };
         let endpoint = match Endpoint::resolve(&start.provider) {
@@ -273,6 +267,27 @@ impl Operation {
         op.wire = wire::for_vendor(&op.config.vendor);
         let step = op.begin();
         (op, step)
+    }
+
+    fn login_start(
+        config: ProviderConfig,
+        clock: Clock,
+        flow: Result<LoginFlow, ProviderError>,
+    ) -> (Operation, Step) {
+        let endpoint = Endpoint {
+            wire: "",
+            base_url: String::new(),
+        };
+        let mut op = Operation::new(config, endpoint, Job::AuthStatus, &clock);
+        match flow {
+            Ok(mut flow) => {
+                let action = flow.start();
+                op.login = Some(flow);
+                let step = op.login_act(action);
+                (op, step)
+            }
+            Err(e) => (op, Step::failed(e)),
+        }
     }
 
     fn new(config: ProviderConfig, endpoint: Endpoint, job: Job, clock: &Clock) -> Self {
@@ -299,6 +314,7 @@ impl Operation {
             fetch_queue: Vec::new(),
             fetching: None,
             session: None,
+            login: None,
             session_headers: Headers::new(),
             auth_sources: Vec::new(),
             auth_index: 0,
@@ -409,6 +425,71 @@ impl Operation {
                 self.fail_or_retry(e)
             }
             (State::Sleeping, Input::Slept) => self.send(),
+            (State::Login, Input::Read { found, bytes, .. }) => {
+                let now = self.now_ms;
+                let action = match &mut self.login {
+                    Some(flow) => flow.on_read(found, bytes, now),
+                    None => no_login(),
+                };
+                self.login_act(action)
+            }
+            (State::Login, Input::Callback { url }) => {
+                let now = self.now_ms;
+                let action = match &mut self.login {
+                    Some(flow) => flow.on_callback(&url, now),
+                    None => no_login(),
+                };
+                self.login_act(action)
+            }
+            (State::Login, Input::UserAction { value }) => {
+                let now = self.now_ms;
+                let action = match &mut self.login {
+                    Some(flow) => flow.on_user_action(value, now),
+                    None => no_login(),
+                };
+                self.login_act(action)
+            }
+            (State::Login, Input::Written { ok, .. }) => {
+                let action = match &mut self.login {
+                    Some(flow) => flow.on_written(ok),
+                    None => no_login(),
+                };
+                self.login_act(action)
+            }
+            (State::Login, Input::Slept) => {
+                let action = match &mut self.login {
+                    Some(flow) => flow.on_slept(),
+                    None => no_login(),
+                };
+                self.login_act(action)
+            }
+            (State::LoginHttp { status: None, body }, Input::HttpResponse { status, .. }) => {
+                self.state = State::LoginHttp {
+                    status: Some(status),
+                    body,
+                };
+                Step::effect(Effect::Receive)
+            }
+            (State::LoginHttp { status, mut body }, Input::HttpChunk { bytes }) => {
+                body.extend_from_slice(&bytes);
+                self.state = State::LoginHttp { status, body };
+                Step::effect(Effect::Receive)
+            }
+            (State::LoginHttp { status, body }, Input::HttpEnd) => {
+                let now = self.now_ms;
+                let action = match &mut self.login {
+                    Some(flow) => flow.on_http(status.unwrap_or(0), &body, now),
+                    None => no_login(),
+                };
+                self.login_act(action)
+            }
+            (State::LoginHttp { .. }, Input::HttpError { error }) => {
+                let action = match &mut self.login {
+                    Some(flow) => flow.on_http_error(error.message),
+                    None => no_login(),
+                };
+                self.login_act(action)
+            }
             (State::Session, Input::Read { found, bytes, etag }) => {
                 let now = self.now_ms;
                 let action = match &mut self.session {
@@ -660,6 +741,7 @@ impl Operation {
             strict,
             include_raw,
             overrides: self.config.overrides.clone(),
+            dialect: None,
         });
         Ok(())
     }
@@ -884,6 +966,9 @@ impl Operation {
                 if let (Some(v), Some(ctx)) = (cred.api_version, &mut self.ctx) {
                     ctx.api_version = Some(v);
                 }
+                if let (Some(d), Some(ctx)) = (cred.dialect, &mut self.ctx) {
+                    ctx.dialect = Some(d);
+                }
                 if let Job::AuthStatus = self.job {
                     return step_done(OperationResult::AuthStatus {
                         status: AuthStatus {
@@ -903,6 +988,63 @@ impl Operation {
                     ctx.auth_source = Some(cred.label);
                 }
                 self.first_request()
+            }
+        }
+    }
+
+    fn login_act(&mut self, action: login::Action) -> Step {
+        match action {
+            login::Action::Read(locator) => {
+                self.state = State::Login;
+                Step::effect(Effect::NeedRead { locator })
+            }
+            login::Action::Http(request) => {
+                self.state = State::LoginHttp {
+                    status: None,
+                    body: Vec::new(),
+                };
+                Step::effect(Effect::NeedHttp { request })
+            }
+            login::Action::Sleep(ms) => {
+                self.state = State::Login;
+                Step::effect(Effect::NeedSleep { ms })
+            }
+            login::Action::Write { locator, bytes } => {
+                self.state = State::Login;
+                Step::effect(Effect::NeedWrite {
+                    locator,
+                    bytes,
+                    expect: None,
+                    private: true,
+                })
+            }
+            login::Action::UserAction(action) => {
+                self.state = State::Login;
+                Step::effect(Effect::NeedUserAction { action })
+            }
+            login::Action::Callback {
+                redirect_uri,
+                timeout_ms,
+                action,
+            } => {
+                self.state = State::Login;
+                Step::effect(Effect::NeedCallback {
+                    redirect_uri,
+                    timeout_ms: Some(timeout_ms),
+                    action,
+                })
+            }
+            login::Action::Done(status) => {
+                self.state = State::Finished;
+                if self.login.as_ref().is_some_and(LoginFlow::is_login) {
+                    step_done(OperationResult::AuthStatus { status })
+                } else {
+                    step_done(OperationResult::None)
+                }
+            }
+            login::Action::Failed(e) => {
+                self.state = State::Finished;
+                Step::failed(e)
             }
         }
     }

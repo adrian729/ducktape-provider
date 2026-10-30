@@ -207,7 +207,10 @@ async def run_async(
                 await asyncio.sleep(action.ms / 1000)
             elif isinstance(action, Call):
                 try:
-                    reply = action.fn(*action.args)
+                    if action.blocking:
+                        reply = await asyncio.to_thread(action.fn, *action.args)
+                    else:
+                        reply = action.fn(*action.args)
                     if inspect.isawaitable(reply):
                         reply = await reply
                 except Exception as e:

@@ -31,7 +31,7 @@
           "type": "failed",
           "error": {
             "kind": "unsupported",
-            "message": "login for anthropic_profile is not available yet; it ships once a recorded fixture proves the flow",
+            "message": "anthropic_profile is owned by another tool; run `ant auth login`",
             "code": "auth_source",
             "retryable": false,
             "attempts": 0

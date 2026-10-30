@@ -5,8 +5,17 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.adrian729.ducktape.types.Event;
 import io.github.adrian729.ducktape.types.LoginAction;
 import io.github.adrian729.ducktape.types.ProviderError;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.ConnectException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.net.URI;
 import java.net.UnknownHostException;
 import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpTimeoutException;
@@ -136,7 +145,7 @@ final class Driver {
                         case "need_read" -> input = read(effect.get("locator"));
                         case "need_write" -> input = write(effect);
                         case "need_user_action" -> input = userAction(effect.get("action"));
-                        case "need_callback" -> throw ProviderException.of("unsupported", null, "the loopback login callback is not implemented in the Java binding yet");
+                        case "need_callback" -> input = callback(effect);
                         default -> throw ProviderException.of("unsupported", null, "the core asked for an unknown effect " + type);
                     }
                 }
@@ -446,6 +455,99 @@ final class Driver {
             Files.createDirectory(dir);
         } catch (java.nio.file.FileAlreadyExistsException ignored) {
         }
+    }
+
+    private ObjectNode callback(JsonNode effect) {
+        URI uri;
+        try {
+            uri = new URI(effect.path("redirect_uri").asText());
+        } catch (java.net.URISyntaxException e) {
+            throw ProviderException.of("unsupported", null, "the login redirect address is not valid: " + e.getMessage());
+        }
+        String host = uri.getHost();
+        if (!"127.0.0.1".equals(host) && !"[::1]".equals(host) && !"::1".equals(host)) {
+            throw ProviderException.of("unsupported", null, "the login callback must be on a loopback address, not " + host);
+        }
+        String bare = host.startsWith("[") ? host.substring(1, host.length() - 1) : host;
+        int port = uri.getPort() < 0 ? 80 : uri.getPort();
+        String path = uri.getRawPath() == null || uri.getRawPath().isEmpty() ? "/" : uri.getRawPath();
+        long timeoutMs = effect.hasNonNull("timeout_ms") ? effect.get("timeout_ms").asLong() : 300000L;
+        String origin = uri.getScheme() + "://" + host + ":" + port;
+        ServerSocket server;
+        try {
+            server = new ServerSocket();
+            try {
+                server.bind(new InetSocketAddress(InetAddress.getByName(bare), port));
+                server.setSoTimeout(50);
+            } catch (IOException e) {
+                server.close();
+                throw e;
+            }
+        } catch (IOException e) {
+            throw ProviderException.of("connection", "callback_port_busy", bare + ":" + port + " is in use; close the other login or use callback paste");
+        }
+        try {
+            userAction(effect.get("action"));
+            long end = System.currentTimeMillis() + timeoutMs;
+            while (true) {
+                if (cancel.flag) {
+                    return Json.object().put("type", "cancelled");
+                }
+                if (System.currentTimeMillis() >= end) {
+                    throw ProviderException.of("timeout", "login_timeout", "no sign-in callback arrived within " + timeoutMs / 1000 + " seconds");
+                }
+                Socket client;
+                try {
+                    client = server.accept();
+                } catch (SocketTimeoutException e) {
+                    continue;
+                } catch (IOException e) {
+                    if (cancel.flag) {
+                        return Json.object().put("type", "cancelled");
+                    }
+                    throw ProviderException.of("connection", null, "the login callback listener failed: " + e.getMessage());
+                }
+                try (client) {
+                    String target = serveCallback(client, path);
+                    if (target != null) {
+                        return Json.object().put("type", "callback").put("url", origin + target);
+                    }
+                } catch (IOException ignored) {
+                }
+            }
+        } finally {
+            try {
+                server.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    private static boolean endsHead(byte[] data) {
+        int n = data.length;
+        return n >= 4 && data[n - 4] == '\r' && data[n - 3] == '\n' && data[n - 2] == '\r' && data[n - 1] == '\n' || n >= 2 && data[n - 2] == '\n' && data[n - 1] == '\n';
+    }
+
+    private static String serveCallback(Socket client, String path) throws IOException {
+        client.setSoTimeout(3000);
+        InputStream in = client.getInputStream();
+        ByteArrayOutputStream head = new ByteArrayOutputStream();
+        int b;
+        while (head.size() < 8192 && !endsHead(head.toByteArray()) && (b = in.read()) >= 0) {
+            head.write(b);
+        }
+        String line = head.toString(StandardCharsets.ISO_8859_1).split("\r?\n", 2)[0];
+        String[] parts = line.split(" ");
+        String target = parts.length >= 2 && "GET".equals(parts[0]) ? parts[1] : null;
+        int cut = target == null ? -1 : target.indexOf('?');
+        boolean hit = target != null && path.equals(cut < 0 ? target : target.substring(0, cut));
+        byte[] body = (hit ? "<!doctype html><title>Signed in</title><p>The sign-in finished. You can close this window.</p>" : "<!doctype html><title>Not found</title><p>Not found.</p>").getBytes(StandardCharsets.UTF_8);
+        String status = hit ? "200 OK" : "404 Not Found";
+        OutputStream out = client.getOutputStream();
+        out.write(("HTTP/1.1 " + status + "\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1));
+        out.write(body);
+        out.flush();
+        return hit ? target : null;
     }
 
     private ObjectNode userAction(JsonNode action) {

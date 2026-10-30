@@ -73,6 +73,8 @@ final class Fixtures {
             JsonNode step = op.start(start);
             int http = 0;
             int writes = 0;
+            int userActions = 0;
+            int callbacks = 0;
             List<ObjectNode> queue = new ArrayList<>();
             for (long tick = 1; tick < 10_000; tick++) {
                 JsonNode effect = step.path("effect");
@@ -137,6 +139,20 @@ final class Fixtures {
                     case "need_write" -> {
                         JsonNode w = fixture.path("writes").get(writes++);
                         input = Json.object().put("type", "written").put("ok", w == null || w.path("ok").asBoolean(true)).put("conflict", w != null && w.path("conflict").asBoolean(false));
+                    }
+                    case "need_user_action" -> {
+                        JsonNode v = fixture.path("user_actions").get(userActions++);
+                        input = Json.object().put("type", "user_action");
+                        if (v != null && v.isTextual()) {
+                            input.put("value", v.asText());
+                        }
+                    }
+                    case "need_callback" -> {
+                        JsonNode url = fixture.path("callbacks").get(callbacks++);
+                        if (url == null) {
+                            throw new AssertionError(fixture.path("name").asText() + ": script has no callback for the login");
+                        }
+                        input = Json.object().put("type", "callback").put("url", url.asText());
                     }
                     default -> throw new AssertionError(fixture.path("name").asText() + ": unsupported effect in replay: " + type);
                 }

@@ -944,3 +944,110 @@ mod reqwest_transport {
         );
     }
 }
+
+fn query_param(url: &str, name: &str) -> String {
+    url.split_once('?')
+        .map(|(_, q)| q)
+        .unwrap_or("")
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| v.replace("%3A", ":").replace("%2F", "/"))
+        .unwrap_or_default()
+}
+
+fn id_token(nonce: &str, exp: i64) -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    let claims = serde_json::json!({
+        "iss": "https://auth.openai.com",
+        "aud": "oaiapp_test",
+        "exp": exp,
+        "sub": "user_1",
+        "nonce": nonce,
+    });
+    format!(
+        "{}.{}.sig",
+        URL_SAFE_NO_PAD.encode(b"{\"alg\":\"RS256\"}"),
+        URL_SAFE_NO_PAD.encode(claims.to_string())
+    )
+}
+
+fn http_get(url: &str) -> String {
+    use std::io::{Read, Write};
+    let rest = url.strip_prefix("http://").unwrap();
+    let (authority, target) = rest.split_at(rest.find('/').unwrap());
+    let mut stream = std::net::TcpStream::connect(authority).unwrap();
+    write!(
+        stream,
+        "GET {target} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut reply = String::new();
+    let _ = stream.read_to_string(&mut reply);
+    reply
+}
+
+#[tokio::test]
+async fn login_waits_for_the_loopback_callback_and_frees_the_port() {
+    let fixture = openai("login_chatgpt_plan_new_registration");
+    let store_dir = temp_dir();
+    let store = store_dir.join("chatgpt.json");
+    let server = Scripted::new(&fixture);
+    let replies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let script = server.clone();
+    let sink = replies.clone();
+    let handler = move |action: LoginAction| {
+        let LoginAction::OpenUrl { url, .. } = action else {
+            return Err("unexpected action".to_owned());
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let mut queue = script.script.lock().unwrap();
+        let mut body: Value = serde_json::from_str(queue[0].body.as_deref().unwrap()).unwrap();
+        body["id_token"] = Value::String(id_token(&query_param(&url, "nonce"), now + 3600));
+        queue[0].body = Some(body.to_string());
+        drop(queue);
+        let callback = format!(
+            "{}?code=code_1&state={}&client_id=oaiapp_test",
+            query_param(&url, "redirect_uri"),
+            query_param(&url, "state")
+        );
+        let sink = sink.clone();
+        std::thread::spawn(move || sink.lock().unwrap().push(http_get(&callback)));
+        Ok(None)
+    };
+    let p = Provider::builder("openai")
+        .transport(server.clone())
+        .auth([Credential::session("chatgpt_plan").store(store.to_str().unwrap())])
+        .build()
+        .unwrap();
+    let status = p.login(handler).app_name("Example App").await.unwrap();
+    assert_eq!(status.source.as_deref(), Some("session:chatgpt_plan"));
+    assert_eq!(status.session.as_deref(), Some("chatgpt_plan"));
+    let replies = replies.lock().unwrap().clone();
+    assert_eq!(replies.len(), 1);
+    assert!(replies[0].starts_with("HTTP/1.1 200 OK"));
+    let saved = std::fs::read_to_string(&store).unwrap();
+    assert!(saved.contains("oaiapp_test"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&store).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+    let err = p
+        .login(|_| Ok(None))
+        .timeout(Duration::from_millis(300))
+        .await
+        .unwrap_err();
+    let Error::Provider(e) = err else {
+        panic!("expected a provider error")
+    };
+    assert_eq!(e.kind, ErrorKind::Timeout);
+    assert_eq!(e.code.as_deref(), Some("login_timeout"));
+    let free = std::net::TcpListener::bind("127.0.0.1:1455").unwrap();
+    drop(free);
+}

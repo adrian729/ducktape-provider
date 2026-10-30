@@ -30,6 +30,7 @@ pub struct SessionCredential {
     pub expires_at_ms: Option<i64>,
     pub label: String,
     pub session: String,
+    pub dialect: Option<String>,
 }
 
 /// What the operation must do next for a session.
@@ -92,7 +93,7 @@ pub fn logout_hint(preset: &SessionPreset) -> Option<&'static str> {
     }
 }
 
-fn login_hint(preset: &SessionPreset) -> &'static str {
+pub(crate) fn login_hint(preset: &SessionPreset) -> &'static str {
     match preset {
         SessionPreset::AnthropicProfile => "run `ant auth login`",
         SessionPreset::ClaudeCode => "run `claude` and log in",
@@ -100,6 +101,7 @@ fn login_hint(preset: &SessionPreset) -> &'static str {
             "run `claude setup-token` and export CLAUDE_CODE_OAUTH_TOKEN"
         }
         SessionPreset::Codex => "run `codex login`",
+        SessionPreset::ChatgptPlan => "call `login()` to sign in with ChatGPT",
         _ => "log in again",
     }
 }
@@ -122,11 +124,12 @@ fn env_candidates(preset: &SessionPreset) -> Vec<&'static str> {
         SessionPreset::ClaudeCode => vec!["CLAUDE_CONFIG_DIR", "HOME", "USERPROFILE"],
         SessionPreset::ClaudeCodeTokenEnv => vec!["CLAUDE_CODE_OAUTH_TOKEN"],
         SessionPreset::Codex => vec!["CODEX_HOME", "HOME", "USERPROFILE"],
+        SessionPreset::ChatgptPlan => crate::login::env_candidates(),
         _ => Vec::new(),
     }
 }
 
-fn join(dir: &str, parts: &[&str]) -> String {
+pub(crate) fn join(dir: &str, parts: &[&str]) -> String {
     let sep = if dir.contains('\\') && !dir.contains('/') {
         '\\'
     } else {
@@ -150,21 +153,21 @@ fn plain_name(name: &str) -> bool {
     !name.is_empty() && !name.contains(['/', '\\']) && !name.starts_with('.')
 }
 
-fn parse_object(bytes: &[u8]) -> Option<Map<String, Value>> {
+pub(crate) fn parse_object(bytes: &[u8]) -> Option<Map<String, Value>> {
     match serde_json::from_slice::<Value>(bytes) {
         Ok(Value::Object(m)) => Some(m),
         _ => None,
     }
 }
 
-fn str_of(map: &Map<String, Value>, key: &str) -> Option<String> {
+pub(crate) fn str_of(map: &Map<String, Value>, key: &str) -> Option<String> {
     map.get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
 }
 
-fn jwt_claims(token: &str) -> Option<Map<String, Value>> {
+pub(crate) fn jwt_claims(token: &str) -> Option<Map<String, Value>> {
     let payload = token.split('.').nth(1)?;
     let bytes = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
     parse_object(&bytes)
@@ -228,14 +231,19 @@ impl SessionFlow {
         refresh: Option<RefreshMode>,
     ) -> Result<Self, ProviderError> {
         let default_refresh = match preset {
-            SessionPreset::AnthropicProfile => RefreshMode::WriteBack,
+            SessionPreset::AnthropicProfile | SessionPreset::ChatgptPlan => RefreshMode::WriteBack,
             _ => RefreshMode::Never,
+        };
+        let refresh = match preset {
+            SessionPreset::ChatgptPlan => Some(RefreshMode::WriteBack),
+            _ => refresh,
         };
         match preset {
             SessionPreset::AnthropicProfile
             | SessionPreset::ClaudeCode
             | SessionPreset::ClaudeCodeTokenEnv
-            | SessionPreset::Codex => {}
+            | SessionPreset::Codex
+            | SessionPreset::ChatgptPlan => {}
             other => {
                 return Err(auth_error(
                     "auth_source",
@@ -308,6 +316,7 @@ impl SessionFlow {
             SessionPreset::ClaudeCode => self.claude_code_locate(),
             SessionPreset::AnthropicProfile => self.profile_locate(),
             SessionPreset::Codex => self.codex_locate(),
+            SessionPreset::ChatgptPlan => self.plan_locate(),
             _ => Action::NotFound,
         }
     }
@@ -355,6 +364,7 @@ impl SessionFlow {
                     None if self.store.is_some() || self.forced => Action::NotFound,
                     None => self.codex_keychain(),
                 },
+                SessionPreset::ChatgptPlan => self.plan_parse(bytes, now_ms),
                 _ => Action::NotFound,
             },
             Stage::Keychain => match bytes {
@@ -611,9 +621,78 @@ impl SessionFlow {
                 cred.api_version = Some(String::new());
                 cred
             }
+            SessionPreset::ChatgptPlan => {
+                let mut cred = self.credential(token, expires_ms, None, None);
+                cred.dialect = Some("chatgpt_plan".to_owned());
+                cred
+            }
             _ => self.credential(token, expires_ms, None, None),
         };
         Action::Ready(cred)
+    }
+
+    fn plan_locate(&mut self) -> Action {
+        let path = {
+            let env = |name: &str| self.env_value(name).map(str::to_owned);
+            crate::login::store_path(self.store.as_deref(), &env, &self.preset)
+        };
+        let Some(path) = path else {
+            return Action::NotFound;
+        };
+        self.source = Some(Locator::File { path: path.clone() });
+        self.stage = Stage::Credentials;
+        file(&path)
+    }
+
+    fn plan_parse(&mut self, bytes: Option<Vec<u8>>, now_ms: i64) -> Action {
+        let Some(bytes) = bytes else {
+            return Action::NotFound;
+        };
+        let Some(record) = parse_object(&bytes) else {
+            return Action::Failed(auth_error(
+                "store_malformed",
+                "the ChatGPT login store is not a JSON object",
+            ));
+        };
+        let Some(token) = str_of(&record, "access_token") else {
+            return Action::NotFound;
+        };
+        let granted = record
+            .get("scopes")
+            .and_then(Value::as_array)
+            .is_some_and(|s| {
+                s.iter()
+                    .any(|v| v.as_str() == Some(crate::login::PLAN_SCOPE))
+            });
+        if !granted {
+            self.stage = Stage::Done;
+            return Action::Failed(auth_error(
+                "plan_unavailable",
+                "the ChatGPT sign-in has no plan usage; log in again and allow it",
+            ));
+        }
+        let expires_ms = record
+            .get("expires_at")
+            .and_then(Value::as_i64)
+            .map(|s| s * 1000);
+        let refresh_token = str_of(&record, "refresh_token");
+        let client_id = str_of(&record, "client_id");
+        self.creds = Some(record);
+        let stale = self.forced || expires_ms.is_some_and(|e| e <= now_ms + ADVISORY_MS);
+        if stale {
+            if let (Some(client_id), Some(refresh_token)) = (client_id, refresh_token) {
+                return self.refresh_with(crate::login::post_form(
+                    crate::login::TOKEN_URL,
+                    &[
+                        ("grant_type", "refresh_token"),
+                        ("client_id", &client_id),
+                        ("refresh_token", &refresh_token),
+                        ("resource", crate::login::RESOURCE),
+                    ],
+                ));
+            }
+        }
+        self.finish_with(token, expires_ms, now_ms)
     }
 
     fn credential(
@@ -637,6 +716,7 @@ impl SessionFlow {
             expires_at_ms,
             label: format!("session:{}", self.preset.as_str()),
             session: self.preset.as_str().to_owned(),
+            dialect: None,
         }
     }
 
@@ -736,6 +816,8 @@ impl SessionFlow {
                 || matches!(
                     code.as_str(),
                     "invalid_grant"
+                        | "invalid_refresh_token"
+                        | "token_expired"
                         | "refresh_token_expired"
                         | "refresh_token_reused"
                         | "refresh_token_invalidated"
@@ -825,6 +907,30 @@ impl SessionFlow {
                 self.creds = Some(creds.clone());
                 let expires = jwt_exp_ms(&access);
                 self.after_refresh(creds, access, expires, now_ms)
+            }
+            SessionPreset::ChatgptPlan => {
+                let expires_in = payload
+                    .get("expires_in")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(3600);
+                let expires_s = now_ms.div_euclid(1000) + expires_in;
+                let mut creds = self.creds.clone().unwrap_or_default();
+                creds.insert("access_token".to_owned(), json!(access));
+                if let Some(r) = str_of(&payload, "refresh_token") {
+                    creds.insert("refresh_token".to_owned(), json!(r));
+                }
+                if let Some(id) = str_of(&payload, "id_token") {
+                    creds.insert("id_token".to_owned(), json!(id));
+                }
+                if let Some(scope) = str_of(&payload, "scope") {
+                    let scopes: Vec<&str> = scope.split_whitespace().collect();
+                    creds.insert("scopes".to_owned(), json!(scopes));
+                }
+                creds.insert("expires_in".to_owned(), json!(expires_in));
+                creds.insert("expires_at".to_owned(), json!(expires_s));
+                creds.insert("saved_at".to_owned(), json!(rfc3339(now_ms)));
+                self.creds = Some(creds.clone());
+                self.after_refresh(creds, access, Some(expires_s * 1000), now_ms)
             }
             _ => Action::NotFound,
         }

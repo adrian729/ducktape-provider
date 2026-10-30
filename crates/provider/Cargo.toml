@@ -20,7 +20,7 @@ ducktape-core = { path = "../core", version = "0.1.0" }
 serde_json.workspace = true
 base64.workspace = true
 sha2.workspace = true
-tokio = { workspace = true, features = ["macros"] }
+tokio = { workspace = true, features = ["macros", "net", "io-util"] }
 futures-core.workspace = true
 getrandom.workspace = true
 reqwest = { workspace = true, optional = true }

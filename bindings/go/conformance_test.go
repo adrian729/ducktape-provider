@@ -30,15 +30,17 @@ type scriptedWrite struct {
 }
 
 type wireFixture struct {
-	Name     string            `json:"name"`
-	Start    json.RawMessage   `json:"start"`
-	Secrets  map[string]string `json:"secrets"`
-	Env      map[string]string `json:"env"`
-	Files    map[string]string `json:"files"`
-	Keychain map[string]string `json:"keychain"`
-	HTTP     []scriptedHTTP    `json:"http"`
-	Writes   []scriptedWrite   `json:"writes"`
-	Exchange []exchange        `json:"exchange"`
+	Name        string            `json:"name"`
+	Start       json.RawMessage   `json:"start"`
+	Secrets     map[string]string `json:"secrets"`
+	Env         map[string]string `json:"env"`
+	Files       map[string]string `json:"files"`
+	Keychain    map[string]string `json:"keychain"`
+	HTTP        []scriptedHTTP    `json:"http"`
+	Writes      []scriptedWrite   `json:"writes"`
+	UserActions []*string         `json:"user_actions"`
+	Callbacks   []string          `json:"callbacks"`
+	Exchange    []exchange        `json:"exchange"`
 }
 
 var entropy = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{128}, 32))
@@ -108,6 +110,8 @@ func replay(t *testing.T, core *Core, f wireFixture) []actual {
 	var queue []input
 	http := f.HTTP
 	writes := f.Writes
+	userActions := f.UserActions
+	callbacks := f.Callbacks
 	var tick int64
 	for i := 0; i < 10_000; i++ {
 		e := s.Effect
@@ -184,6 +188,20 @@ func replay(t *testing.T, core *Core, f wireFixture) []actual {
 				w, writes = writes[0], writes[1:]
 			}
 			next = input{Type: "written", Ok: boolPtr(w.Ok), Conflict: boolPtr(w.Conflict)}
+		case "need_user_action":
+			next = input{Type: "user_action"}
+			if len(userActions) > 0 {
+				if userActions[0] != nil {
+					next.Value = *userActions[0]
+				}
+				userActions = userActions[1:]
+			}
+		case "need_callback":
+			if len(callbacks) == 0 {
+				t.Fatalf("%s: script has no callback for the login", f.Name)
+			}
+			next = input{Type: "callback", URL: callbacks[0]}
+			callbacks = callbacks[1:]
 		default:
 			t.Fatalf("%s: unsupported effect in replay: %s", f.Name, e.Type)
 		}

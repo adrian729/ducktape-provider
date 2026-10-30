@@ -125,7 +125,7 @@ export declare class Provider {
   capabilities(model: string, options?: { signal?: AbortSignal }): Promise<Capabilities>;
   login(
     handleAction: (action: LoginAction) => string | undefined | void | Promise<string | undefined | void>,
-    options?: { callback?: "loopback" | "paste"; timeout?: number; signal?: AbortSignal },
+    options?: { callback?: "loopback" | "paste"; timeout?: number; app_name?: string; signal?: AbortSignal },
   ): Promise<AuthStatus>;
   logout(options?: { signal?: AbortSignal }): Promise<void>;
   authStatus(options?: { signal?: AbortSignal }): Promise<AuthStatus>;

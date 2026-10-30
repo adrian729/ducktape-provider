@@ -16,6 +16,8 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// Receives request, response, event and retry notifications as redacted JSON.
@@ -189,13 +191,11 @@ impl Driver {
                     private,
                 } => self.write(locator, bytes, expect, private).await,
                 Effect::NeedUserAction { action } => self.user_action(action).await?,
-                Effect::NeedCallback { .. } => {
-                    return Err(Error::provider(
-                        ErrorKind::Unsupported,
-                        None,
-                        "the loopback login callback is not implemented in the Rust crate yet",
-                    ))
-                }
+                Effect::NeedCallback {
+                    redirect_uri,
+                    timeout_ms,
+                    action,
+                } => self.callback(redirect_uri, timeout_ms, action).await?,
             };
             step = op.resume(Resume {
                 clock: clock(),
@@ -445,6 +445,124 @@ impl Driver {
             })?;
         Ok(Input::UserAction { value })
     }
+
+    async fn callback(
+        &mut self,
+        redirect_uri: String,
+        timeout_ms: Option<u64>,
+        action: LoginAction,
+    ) -> std::result::Result<Input, Error> {
+        let (origin, path, addr) = loopback_target(&redirect_uri)?;
+        let listener = TcpListener::bind(&addr).await.map_err(|_| {
+            Error::provider(
+                ErrorKind::Connection,
+                Some("callback_port_busy"),
+                format!("{addr} is in use; close the other login or use Callback::Paste"),
+            )
+        })?;
+        if let Input::Cancelled = self.user_action(action).await? {
+            return Ok(Input::Cancelled);
+        }
+        let wait = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_LOGIN_TIMEOUT_MS));
+        let waited = until(
+            &self.cancel,
+            tokio::time::timeout(wait, accept_callback(&listener, &path)),
+        )
+        .await;
+        drop(listener);
+        match waited {
+            None => Ok(Input::Cancelled),
+            Some(Err(_)) => Err(Error::provider(
+                ErrorKind::Timeout,
+                Some("login_timeout"),
+                format!(
+                    "no sign-in callback arrived within {} seconds",
+                    wait.as_secs().max(1)
+                ),
+            )),
+            Some(Ok(target)) => Ok(Input::Callback {
+                url: format!("{origin}{target}"),
+            }),
+        }
+    }
+}
+
+const DEFAULT_LOGIN_TIMEOUT_MS: u64 = 300_000;
+const CALLBACK_PAGE: &str =
+    "<!doctype html><title>Signed in</title><p>The sign-in finished. You can close this window.</p>";
+
+fn loopback_target(redirect_uri: &str) -> std::result::Result<(String, String, String), Error> {
+    let (scheme, rest) = redirect_uri.split_once("://").unwrap_or(("", redirect_uri));
+    let (authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    let host = authority
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(authority);
+    if scheme != "http" || (host != "127.0.0.1" && host != "[::1]") {
+        return Err(Error::provider(
+            ErrorKind::Unsupported,
+            None,
+            format!("the login callback must be a loopback address, not {redirect_uri}"),
+        ));
+    }
+    let path = path.split(['?', '#']).next().unwrap_or("/").to_owned();
+    Ok((
+        format!("{scheme}://{authority}"),
+        path,
+        authority.to_owned(),
+    ))
+}
+
+async fn accept_callback(listener: &TcpListener, path: &str) -> String {
+    loop {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
+        let served =
+            tokio::time::timeout(Duration::from_secs(5), serve_callback(&mut stream, path)).await;
+        if let Ok(Ok(Some(target))) = served {
+            return target;
+        }
+    }
+}
+
+async fn serve_callback(stream: &mut TcpStream, path: &str) -> std::io::Result<Option<String>> {
+    let mut head = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        head.extend_from_slice(&chunk[..n]);
+        if head.windows(4).any(|w| w == b"\r\n\r\n") || head.len() >= 8192 {
+            break;
+        }
+    }
+    let text = String::from_utf8_lossy(&head);
+    let target = text
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("")
+        .to_owned();
+    let hit = target.split('?').next() == Some(path);
+    let (status, body) = if hit {
+        ("200 OK", CALLBACK_PAGE)
+    } else {
+        ("404 Not Found", "")
+    };
+    let reply = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(reply.as_bytes()).await?;
+    let _ = stream.shutdown().await;
+    Ok(hit.then_some(target))
 }
 
 fn write_file(path: &Path, bytes: &[u8], private: bool) -> std::io::Result<()> {

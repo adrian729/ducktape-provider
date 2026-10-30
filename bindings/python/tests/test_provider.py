@@ -2,12 +2,19 @@
 import asyncio
 import base64
 import json
+import os
+import socket
+import stat
+import threading
+import urllib.request
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 from conftest import FIXTURES, load
 
 import ducktape_provider as dp
+from ducktape_provider import _driver
 from ducktape_provider import AsyncProvider, Provider, assistant, tool, tool_result, user
 
 ANTHROPIC = FIXTURES / "wire" / "anthropic.messages"
@@ -382,3 +389,56 @@ def test_codex_keychain_write_back_uses_the_writer(monkeypatch, tmp_path):
     assert reader_only.chat(req["messages"], model=req["model"]).text == r.text
     with pytest.raises(TypeError):
         Provider("openai", keychain_write="nope")
+
+
+def test_login_loopback_callback_completes_and_times_out(monkeypatch, tmp_path):
+    monkeypatch.setattr(_driver, "clock", lambda: {"now_ms": 0, "entropy": b"\x80" * 32})
+    fixture = load(FIXTURES / "wire" / "openai.responses" / "login_chatgpt_plan_new_registration.json")
+    store = tmp_path / "chatgpt_plan.json"
+    p = Provider(
+        "openai",
+        client=httpx.Client(transport=httpx.MockTransport(scripted(fixture))),
+        auth=dp.session("chatgpt_plan", store=str(store)),
+    )
+    statuses = []
+
+    def visit(url):
+        query = parse_qs(urlsplit(url).query)
+        redirect = query["redirect_uri"][0]
+        target = f"{redirect}?code=code_1&state={query['state'][0]}&client_id=oaiapp_test"
+
+        def get():
+            with urllib.request.urlopen(target, timeout=5) as reply:
+                statuses.append(reply.status)
+
+        thread = threading.Thread(target=get)
+        thread.start()
+        return thread
+
+    threads = []
+
+    def handler(action):
+        if action.type == "open_url":
+            threads.append(visit(action.url))
+
+    status = p.login(handler, app_name="Example App")
+    for t in threads:
+        t.join()
+    assert statuses == [200]
+    assert status.source == "session:chatgpt_plan" and status.session == "chatgpt_plan"
+    assert "oaiapp_test" in store.read_text()
+    if os.name == "posix":
+        assert stat.S_IMODE(store.stat().st_mode) == 0o600
+
+    other = Provider(
+        "openai",
+        client=httpx.Client(transport=httpx.MockTransport(scripted(fixture))),
+        auth=dp.session("chatgpt_plan", store=str(tmp_path / "other.json")),
+    )
+    with pytest.raises(dp.TimeoutError) as info:
+        other.login(lambda action: None, timeout=0.3)
+    assert info.value.code == "login_timeout"
+    free = socket.socket()
+    free.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    free.bind(("127.0.0.1", 1455))
+    free.close()

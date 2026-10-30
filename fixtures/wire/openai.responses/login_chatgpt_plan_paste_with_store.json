@@ -1,0 +1,232 @@
+{
+  "name": "login_chatgpt_plan_paste_with_store",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "vendor": "openai",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "chatgpt_plan",
+            "store": "/srv/app/chatgpt.json"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "login",
+      "callback": "paste",
+      "app_name": "Example App"
+    }
+  },
+  "secrets": {},
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"access_token\": \"at_1\", \"refresh_token\": \"rt_1\", \"id_token\": \"eyJhbGciOiAiUlMyNTYiLCAidHlwIjogIkpXVCJ9.eyJpc3MiOiAiaHR0cHM6Ly9hdXRoLm9wZW5haS5jb20iLCAiYXVkIjogIm9haWFwcF90ZXN0IiwgImV4cCI6IDE3NjE3ODI0MDAsICJpYXQiOiAxNzYxNjk2MDAwLCAic3ViIjogInVzZXJfMSIsICJlbWFpbCI6ICJ1QGV4YW1wbGUuY29tIiwgIm5vbmNlIjogIjM4YmJmYjdmN2UzZmZmNzdhYmVlYzAxY2U2MDUzNGE0In0.sig\", \"token_type\": \"Bearer\", \"expires_in\": 3600, \"scope\": \"openid profile email offline_access resource.invoke chatgpt.tokens.use.direct\"}"
+    }
+  ],
+  "user_actions": [
+    null,
+    "http://127.0.0.1:1455/auth/callback?code=code_1&state=6ce8e6dc9f187d4329b70820bce9b798&client_id=oaiapp_test"
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "XDG_CONFIG_HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "APPDATA"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/srv/app/chatgpt.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_user_action",
+          "action": {
+            "type": "open_url",
+            "url": "https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&agent_name_hint=Example%20App&ext_agent_host_id=urn%3Auuid%3A0842c991-3b3c-47ac-a05c-80c3ff4261a5&response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&scope=openid%20profile%20email%20offline_access%20resource.invoke%20chatgpt.tokens.use.direct&resource=https%3A%2F%2Fapi.openai.com%2Fv1&state=6ce8e6dc9f187d4329b70820bce9b798&nonce=38bbfb7f7e3fff77abeec01ce60534a4&code_challenge_method=S256&code_challenge=PyuUVirByaTePaMPP6OqPf1oqtEWqxuuk7YkXnzvLW8",
+            "instructions": "Open this link in your browser and sign in with ChatGPT"
+          }
+        }
+      },
+      "input": {
+        "type": "user_action"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_user_action",
+          "action": {
+            "type": "paste",
+            "prompt": "Paste the full address the browser was sent to after signing in"
+          }
+        }
+      },
+      "input": {
+        "type": "user_action",
+        "value": "http://127.0.0.1:1455/auth/callback?code=code_1&state=6ce8e6dc9f187d4329b70820bce9b798&client_id=oaiapp_test"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "POST",
+            "url": "https://auth.openai.com/api/accounts/oauth/token",
+            "headers": {
+              "accept": "application/json",
+              "content-type": "application/x-www-form-urlencoded"
+            },
+            "body": "grant_type=authorization_code&client_id=oaiapp_test&code=code_1&code_verifier=oHMfNEzpaed7pbppbzeC4b_MvSDatSEClABq758iZJc&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&resource=https%3A%2F%2Fapi.openai.com%2Fv1",
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 30.0,
+              "total": 30.0
+            },
+            "purpose": "auth"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        }
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJhY2Nlc3NfdG9rZW4iOiAiYXRfMSIsICJyZWZyZXNoX3Rva2VuIjogInJ0XzEiLCAiaWRfdG9rZW4iOiAiZXlKaGJHY2lPaUFpVWxNeU5UWWlMQ0FpZEhsd0lqb2dJa3BYVkNKOS5leUpwYzNNaU9pQWlhSFIwY0hNNkx5OWhkWFJvTG05d1pXNWhhUzVqYjIwaUxDQWlZWFZrSWpvZ0ltOWhhV0Z3Y0Y5MFpYTjBJaXdnSW1WNGNDSTZJREUzTmpFM09ESTBNREFzSUNKcFlYUWlPaUF4TnpZeE5qazJNREF3TENBaWMzVmlJam9nSW5WelpYSmZNU0lzSUNKbGJXRnBiQ0k2SUNKMVFHVjRZVzF3YkdVdVkyOXRJaXdnSW01dmJtTmxJam9nSWpNNFltSm1ZamRtTjJVelptWm1OemRoWW1WbFl6QXhZMlUyTURVek5HRTBJbjAuc2lnIiwgInRva2VuX3R5cGUiOiAiQmVhcmVyIiwgImV4cGlyZXNfaW4iOiAzNjAwLCAic2NvcGUiOiAib3BlbmlkIHByb2ZpbGUgZW1haWwgb2ZmbGluZV9hY2Nlc3MgcmVzb3VyY2UuaW52b2tlIGNoYXRncHQudG9rZW5zLnVzZS5kaXJlY3QifQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_write",
+          "locator": {
+            "type": "file",
+            "path": "/srv/app/chatgpt.json"
+          },
+          "bytes": "ewogICJhY2Nlc3NfdG9rZW4iOiAiYXRfMSIsCiAgImNsaWVudF9pZCI6ICJvYWlhcHBfdGVzdCIsCiAgImVtYWlsIjogInVAZXhhbXBsZS5jb20iLAogICJleHBpcmVzX2F0IjogMTc2MTY5OTYwMSwKICAiZXhwaXJlc19pbiI6IDM2MDAsCiAgImV4dF9hZ2VudF9ob3N0X2lkIjogInVybjp1dWlkOjA4NDJjOTkxLTNiM2MtNDdhYy1hMDVjLTgwYzNmZjQyNjFhNSIsCiAgImlkX3Rva2VuIjogImV5SmhiR2NpT2lBaVVsTXlOVFlpTENBaWRIbHdJam9nSWtwWFZDSjkuZXlKcGMzTWlPaUFpYUhSMGNITTZMeTloZFhSb0xtOXdaVzVoYVM1amIyMGlMQ0FpWVhWa0lqb2dJbTloYVdGd2NGOTBaWE4wSWl3Z0ltVjRjQ0k2SURFM05qRTNPREkwTURBc0lDSnBZWFFpT2lBeE56WXhOamsyTURBd0xDQWljM1ZpSWpvZ0luVnpaWEpmTVNJc0lDSmxiV0ZwYkNJNklDSjFRR1Y0WVcxd2JHVXVZMjl0SWl3Z0ltNXZibU5sSWpvZ0lqTTRZbUptWWpkbU4yVXpabVptTnpkaFltVmxZekF4WTJVMk1EVXpOR0UwSW4wLnNpZyIsCiAgImlzc3VlciI6ICJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsCiAgInJlZnJlc2hfdG9rZW4iOiAicnRfMSIsCiAgInNhdmVkX2F0IjogIjIwMjUtMTAtMjlUMDA6MDA6MDFaIiwKICAic2NvcGVzIjogWwogICAgIm9wZW5pZCIsCiAgICAicHJvZmlsZSIsCiAgICAiZW1haWwiLAogICAgIm9mZmxpbmVfYWNjZXNzIiwKICAgICJyZXNvdXJjZS5pbnZva2UiLAogICAgImNoYXRncHQudG9rZW5zLnVzZS5kaXJlY3QiCiAgXSwKICAic3ViamVjdCI6ICJ1c2VyXzEiLAogICJ0b2tlbl90eXBlIjogIkJlYXJlciIsCiAgInZlcnNpb24iOiAxCn0K",
+          "private": true
+        }
+      },
+      "input": {
+        "type": "written",
+        "ok": true,
+        "conflict": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "auth_status",
+            "status": {
+              "source": "session:chatgpt_plan",
+              "expires_at": "2025-10-29T01:00:01Z",
+              "session": "chatgpt_plan"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

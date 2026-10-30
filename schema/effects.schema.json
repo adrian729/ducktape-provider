@@ -153,6 +153,10 @@
             "timeout_ms": {
               "type": "integer",
               "default": 300000
+            },
+            "app_name": {
+              "type": "string",
+              "description": "The app's name, shown to the user when the client first registers"
             }
           },
           "required": [
@@ -592,11 +596,16 @@
             },
             "timeout_ms": {
               "type": "integer"
+            },
+            "action": {
+              "$ref": "provider.schema.json#/$defs/LoginAction",
+              "description": "What to show the user once the listener is up"
             }
           },
           "required": [
             "type",
-            "redirect_uri"
+            "redirect_uri",
+            "action"
           ]
         },
         {

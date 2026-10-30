@@ -1,5 +1,5 @@
 /** The effect loop: runs one operation of the core over fetch. */
-import { errorFromData, UnsupportedError, AuthError, CancelledError } from "./errors.js";
+import { errorFromData, UnsupportedError, AuthError, CancelledError, NetworkError, TimeoutError } from "./errors.js";
 import { fromBase64, getEnv, randomBytes, etagOf, readFile, toBase64, writeFile } from "./platform.js";
 
 /** The current time and fresh entropy. */
@@ -39,6 +39,90 @@ function sleep(ms, signal) {
   });
 }
 
+const CALLBACK_HEADER_LIMIT = 8192;
+const CALLBACK_CONNECTION_MS = 5000;
+const CALLBACK_PAGE = "<!doctype html><meta charset=utf-8><title>Signed in</title><p>The sign-in finished. You can close this window.</p>";
+
+function callbackReply(status, reason, body) {
+  const length = Buffer.byteLength(body);
+  return `HTTP/1.1 ${status} ${reason}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${length}\r\nConnection: close\r\n\r\n${body}`;
+}
+
+/** Waits on a loopback listener for the sign-in redirect and returns its request target. */
+async function awaitLoopbackCallback(effect, signal, showAction) {
+  let net;
+  try {
+    net = await import("node:net");
+  } catch {
+    net = null;
+  }
+  if (!net?.createServer) {
+    throw new UnsupportedError('the loopback login callback needs Node; headless apps can use callback "paste"');
+  }
+  const redirect = new URL(effect.redirect_uri);
+  const host = redirect.hostname === "[::1]" ? "::1" : redirect.hostname;
+  if (host !== "127.0.0.1" && host !== "::1") {
+    throw new UnsupportedError(`the login callback host ${redirect.hostname} is not a loopback address`);
+  }
+  const port = Number(redirect.port);
+  const timeoutMs = effect.timeout_ms ?? 300000;
+  const server = net.createServer();
+  const sockets = new Set();
+  let finish;
+  const outcome = new Promise((resolve) => {
+    finish = resolve;
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => socket.destroy());
+    socket.setTimeout(CALLBACK_CONNECTION_MS, () => socket.destroy());
+    let received = Buffer.alloc(0);
+    const onData = (chunk) => {
+      received = Buffer.concat([received, chunk]);
+      const end = received.indexOf("\r\n\r\n");
+      if (end < 0 && received.length <= CALLBACK_HEADER_LIMIT) return;
+      socket.off("data", onData);
+      const line = received.toString("latin1", 0, end < 0 ? received.length : end).split("\r\n")[0];
+      const [method, target] = line.split(" ");
+      const path = target?.split("?")[0];
+      if (method === "GET" && path === redirect.pathname) {
+        socket.end(callbackReply(200, "OK", CALLBACK_PAGE));
+        finish({ target });
+      } else {
+        socket.end(callbackReply(404, "Not Found", "not found"));
+      }
+    };
+    socket.on("data", onData);
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen({ host, port }, resolve);
+    });
+  } catch (error) {
+    throw new NetworkError(`${redirect.host} is in use; close the other login or use callback: 'paste'`, { code: "callback_port_busy", cause: error });
+  }
+  let timer;
+  const onAbort = () => finish({ cancelled: true });
+  try {
+    if (signal?.aborted) return { cancelled: true };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeout(() => finish({ timedOut: true }), timeoutMs);
+    await showAction();
+    const result = await outcome;
+    if (result.timedOut) {
+      throw new TimeoutError(`no sign-in callback arrived within ${Math.round(timeoutMs / 1000)} seconds`, { code: "login_timeout" });
+    }
+    return result;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 class Timer {
   constructor(seconds, onFire) {
     this.ms = seconds ? seconds * 1000 : 0;
@@ -71,6 +155,15 @@ export async function* drive(core, start, host, { fetch: doFetch, signal, cancel
   };
   let reader = null;
   let controller = null;
+  let lastValue;
+  const showAction = async (action) => {
+    if (!handleAction) throw new UnsupportedError("this call cannot ask the user for anything");
+    try {
+      lastValue = await handleAction(action);
+    } catch (error) {
+      throw new AuthError("the login handler failed", { code: "user_action_failed", cause: error });
+    }
+  };
   const closeBody = () => {
     if (reader) {
       reader.cancel().catch(() => {});
@@ -241,19 +334,19 @@ export async function* drive(core, start, host, { fetch: doFetch, signal, cancel
           input = { type: "written", ok: await writeFile(locator.path, bytes, effect.private ?? true) };
           break;
         }
-        case "need_user_action": {
-          if (!handleAction) throw new UnsupportedError("this call cannot ask the user for anything");
-          let value;
-          try {
-            value = await handleAction(effect.action);
-          } catch (error) {
-            throw new AuthError("the login handler failed", { code: "user_action_failed", cause: error });
+        case "need_user_action":
+          await showAction(effect.action);
+          input = { type: "user_action", value: typeof lastValue === "string" ? lastValue : undefined };
+          break;
+        case "need_callback": {
+          const result = await awaitLoopbackCallback(effect, signal, () => showAction(effect.action));
+          if (result.cancelled) {
+            input = { type: "cancelled" };
+            break;
           }
-          input = { type: "user_action", value: typeof value === "string" ? value : undefined };
+          input = { type: "callback", url: new URL(effect.redirect_uri).origin + result.target };
           break;
         }
-        case "need_callback":
-          throw new UnsupportedError("the loopback login callback is not implemented in the JS binding yet");
         default:
           throw new UnsupportedError(`the core asked for an unknown effect ${effect.type}`);
       }

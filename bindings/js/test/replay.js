@@ -28,6 +28,8 @@ export async function replay(core, fixture) {
   let step = first;
   const http = fixture.http[Symbol.iterator]();
   const writes = (fixture.writes ?? [])[Symbol.iterator]();
+  const userActions = (fixture.user_actions ?? [])[Symbol.iterator]();
+  const callbacks = (fixture.callbacks ?? [])[Symbol.iterator]();
   let queue = [];
   const out = [];
   let tick = 0;
@@ -79,6 +81,17 @@ export async function replay(core, fixture) {
         case "need_write": {
           const w = writes.next().value ?? { ok: true };
           input = { type: "written", ok: w.ok, conflict: w.conflict ?? false };
+          break;
+        }
+        case "need_user_action": {
+          const value = userActions.next().value;
+          input = value == null ? { type: "user_action" } : { type: "user_action", value };
+          break;
+        }
+        case "need_callback": {
+          const url = callbacks.next().value;
+          if (url === undefined) throw new Error("script has no callback for the login");
+          input = { type: "callback", url };
           break;
         }
         default:

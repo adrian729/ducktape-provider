@@ -89,6 +89,8 @@ pub enum OperationKind {
         callback: Callback,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_name: Option<String>,
     },
     Logout,
     AuthStatus,
@@ -228,6 +230,7 @@ pub enum Effect {
         redirect_uri: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
+        action: LoginAction,
     },
     Done {
         result: OperationResult,

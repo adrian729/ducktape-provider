@@ -465,6 +465,7 @@ impl Provider {
             handler: Arc::new(handler),
             callback: Callback::default(),
             timeout: None,
+            app_name: None,
         }
     }
 
@@ -751,6 +752,7 @@ pub struct LoginCall {
     handler: LoginHandler,
     callback: Callback,
     timeout: Option<Duration>,
+    app_name: Option<String>,
 }
 
 impl LoginCall {
@@ -764,6 +766,12 @@ impl LoginCall {
         self.timeout = Some(v);
         self
     }
+
+    /// The name the vendor shows the user for this app.
+    pub fn app_name(mut self, v: impl Into<String>) -> Self {
+        self.app_name = Some(v.into());
+        self
+    }
 }
 
 impl IntoFuture for LoginCall {
@@ -775,6 +783,7 @@ impl IntoFuture for LoginCall {
             let operation = OperationKind::Login {
                 callback: self.callback,
                 timeout_ms: self.timeout.map(|t| t.as_millis() as u64),
+                app_name: self.app_name,
             };
             match self
                 .provider

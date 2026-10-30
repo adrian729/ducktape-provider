@@ -1,0 +1,43 @@
+{
+  "name": "login_codex_is_borrowed",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "vendor": "openai",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "codex"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "login",
+      "callback": "loopback"
+    }
+  },
+  "secrets": {},
+  "http": [],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "failed",
+          "error": {
+            "kind": "unsupported",
+            "message": "codex is owned by another tool; run `codex login`",
+            "code": "auth_source",
+            "retryable": false,
+            "attempts": 0
+          }
+        }
+      }
+    }
+  ]
+}
