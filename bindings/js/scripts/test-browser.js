@@ -85,6 +85,8 @@ try {
     await exited;
   }
   server.close();
-  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  try {
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {}
 }
 process.exit(failed);

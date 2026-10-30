@@ -256,7 +256,8 @@ def test_session_profile_refreshes_and_writes_back(monkeypatch, tmp_path):
     creds = tmp_path / "credentials" / "default.json"
     written = json.loads(creds.read_text())
     assert written["access_token"] == "sk-ant-oat01-new" and written["extra"] == "kept"
-    assert oct(creds.stat().st_mode & 0o777) == "0o600"
+    if os.name == "posix":
+        assert oct(creds.stat().st_mode & 0o777) == "0o600"
     assert dp.session("codex", refresh="memory").refresh == "memory"
     with pytest.raises(ValueError):
         dp.session("codex", refresh="sometimes")

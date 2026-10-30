@@ -118,7 +118,7 @@ jobs:
           workspace=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "ducktape-core") | .version')
           package=$(node -p "require('./bindings/js/package.json').version")
           test "$workspace" = "$package" || { echo "package.json $package != workspace $workspace"; exit 1; }
-      - run: npm pack --pack-destination dist
+      - run: mkdir -p dist && npm pack --pack-destination dist
         working-directory: bindings/js
       - uses: actions/upload-artifact@v4
         with:
@@ -196,7 +196,7 @@ jobs:
           cmake=$(grep -oP '(?<=project\(ducktape VERSION )[^ )]+' bindings/c/CMakeLists.txt)
           test "$workspace" = "$nupkg" || { echo "csproj $nupkg != workspace $workspace"; exit 1; }
           test "$workspace" = "$cmake" || { echo "CMakeLists $cmake != workspace $workspace"; exit 1; }
-      - run: dotnet pack Ducktape.Provider -c Release -o dist
+      - run: dotnet pack Ducktape.Provider/Ducktape.Provider.csproj -c Release -o dist
         working-directory: bindings/dotnet
       - name: Check every runtime is in the package
         run: |

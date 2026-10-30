@@ -16,7 +16,7 @@ def type_fixtures():
 
 
 def load(path):
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 @pytest.fixture
