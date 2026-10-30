@@ -647,7 +647,11 @@ impl Wire for OpenaiResponses {
     }
 
     fn build_models(&self, ctx: &CallContext) -> Option<HttpRequest> {
-        Some(get(ctx, &path(ctx, "models"), Purpose::Models))
+        let mut request = get(ctx, &path(ctx, "models"), Purpose::Models);
+        if let Some(version) = &ctx.client_version {
+            request.url = format!("{}?client_version={version}", request.url);
+        }
+        Some(request)
     }
 
     fn decode_models(
@@ -788,7 +792,10 @@ impl Wire for OpenaiResponses {
         let err = parsed.as_ref().and_then(|v| v.get("error"));
         let vendor_type = err.and_then(|e| str_field(e, "type")).unwrap_or("");
         let code = err.and_then(|e| str_field(e, "code")).unwrap_or("");
-        let vendor_message = err.and_then(|e| str_field(e, "message")).unwrap_or("");
+        let vendor_message = err
+            .and_then(|e| str_field(e, "message"))
+            .or_else(|| parsed.as_ref().and_then(|v| str_field(v, "detail")))
+            .unwrap_or("");
         let retry_after = headers
             .get("retry-after")
             .and_then(|v| parse_retry_after(v));

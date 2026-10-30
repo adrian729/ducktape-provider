@@ -742,6 +742,7 @@ impl Operation {
             include_raw,
             overrides: self.config.overrides.clone(),
             dialect: None,
+            client_version: None,
         });
         Ok(())
     }
@@ -808,6 +809,10 @@ impl Operation {
                     profile.clone(),
                     refresh.clone(),
                 );
+                let flow = flow.map(|f| match self.job {
+                    Job::Models { .. } => f.with_client_version(),
+                    _ => f,
+                });
                 match flow {
                     Ok(mut flow) => {
                         let action = flow.start();
@@ -968,6 +973,9 @@ impl Operation {
                 }
                 if let (Some(d), Some(ctx)) = (cred.dialect, &mut self.ctx) {
                     ctx.dialect = Some(d);
+                }
+                if let (Some(v), Some(ctx)) = (cred.client_version, &mut self.ctx) {
+                    ctx.client_version = Some(v);
                 }
                 if let Job::AuthStatus = self.job {
                     return step_done(OperationResult::AuthStatus {

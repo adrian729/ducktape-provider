@@ -61,7 +61,7 @@ def sync_body(response: httpx.Response) -> Iterator[bytes]:
     """The body chunks, also for responses whose content was given upfront."""
     if response.is_stream_consumed:
         return iter([response.content] if response.content else [])
-    return response.iter_raw()
+    return response.iter_bytes()
 
 
 async def _once(content: bytes) -> AsyncIterator[bytes]:
@@ -73,7 +73,7 @@ def async_body(response: httpx.Response) -> AsyncIterator[bytes]:
     """The body chunks, also for responses whose content was given upfront."""
     if response.is_stream_consumed:
         return _once(response.content)
-    return response.aiter_raw()
+    return response.aiter_bytes()
 
 
 class Run:

@@ -1,6 +1,7 @@
 """Runs the Provider end to end over httpx mock transports built from the wire fixtures."""
 import asyncio
 import base64
+import gzip
 import json
 import os
 import socket
@@ -183,6 +184,26 @@ def test_models_are_cached():
     second = p.models()
     assert [m.id for m in first] == [m.id for m in second]
     assert len(seen) == len(fixture["http"])
+
+
+def test_compressed_replies_are_decoded():
+    listing = json.dumps({"data": [{"id": "claude-haiku-5-5", "type": "model"}], "has_more": False}).encode()
+
+    def reply(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json", "content-encoding": "gzip"},
+            stream=httpx.ByteStream(gzip.compress(listing)),
+        )
+
+    p = Provider("anthropic", auth="k", client=httpx.Client(transport=httpx.MockTransport(reply)))
+    assert [m.id for m in p.models()] == ["claude-haiku-5-5"]
+
+    async def go():
+        async with AsyncProvider("anthropic", auth="k", client=httpx.AsyncClient(transport=httpx.MockTransport(reply))) as ap:
+            return [m.id for m in await ap.models()]
+
+    assert asyncio.run(go()) == ["claude-haiku-5-5"]
 
 
 def test_capabilities_shipped():

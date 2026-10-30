@@ -5,6 +5,8 @@ use crate::retry::parse_retry_after;
 use crate::sse::SseParser;
 use serde_json::json;
 
+const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
 /// Default API version sent as `anthropic-version`.
 pub const API_VERSION: &str = "2026-10-21";
 
@@ -483,10 +485,16 @@ impl Wire for AnthropicMessages {
         body.user("model", json!(ctx.model));
         body.lib("stream", json!(true));
         body.lib("messages", Value::Array(enc.messages(&req.messages)?));
-        if let Some(system) = &req.system {
-            if !system.is_empty() {
-                body.user("system", Value::Array(enc.system(system)));
+        let identity = (ctx.dialect.as_deref() == Some("claude_code"))
+            .then(|| json!({"type": "text", "text": CLAUDE_CODE_IDENTITY}));
+        match (&req.system, identity) {
+            (Some(system), identity) if !system.is_empty() => {
+                let mut blocks: Vec<Value> = identity.into_iter().collect();
+                blocks.extend(enc.system(system));
+                body.user("system", Value::Array(blocks));
             }
+            (_, Some(identity)) => body.lib("system", Value::Array(vec![identity])),
+            _ => {}
         }
         if let Some(tools) = &req.tools {
             if !tools.is_empty() {

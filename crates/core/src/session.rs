@@ -13,6 +13,8 @@ const ANTHROPIC_DEFAULT_BASE: &str = "https://api.anthropic.com";
 const CODEX_BASE: &str = "https://chatgpt.com/backend-api/codex";
 const CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const CODEX_CLIENT_VERSION: &str = "0.166.0";
+const CLAUDE_CODE_IDENTITY_DIALECT: &str = "claude_code";
 const ADVISORY_MS: i64 = 120_000;
 const MANDATORY_MS: i64 = 30_000;
 const TOKEN_TIMEOUT_S: f64 = 30.0;
@@ -31,6 +33,7 @@ pub struct SessionCredential {
     pub label: String,
     pub session: String,
     pub dialect: Option<String>,
+    pub client_version: Option<String>,
 }
 
 /// What the operation must do next for a session.
@@ -58,6 +61,7 @@ enum Stage {
     Keychain,
     Refreshing,
     Writing,
+    Version(Vec<String>),
     Done,
 }
 
@@ -81,6 +85,8 @@ pub struct SessionFlow {
     retried: bool,
     forced: bool,
     expired_ms: Option<i64>,
+    want_version: bool,
+    held: Option<SessionCredential>,
 }
 
 /// The CLI command that logs out of a borrowed session.
@@ -272,7 +278,15 @@ impl SessionFlow {
             retried: false,
             forced: false,
             expired_ms: None,
+            want_version: false,
+            held: None,
         })
+    }
+
+    /// Also finds the client version the Codex backend asks for when listing models.
+    pub fn with_client_version(mut self) -> Self {
+        self.want_version = true;
+        self
     }
 
     /// The preset name.
@@ -292,7 +306,8 @@ impl SessionFlow {
 
     /// Begins resolving the session.
     pub fn start(&mut self) -> Action {
-        self.advance()
+        let action = self.advance();
+        self.deliver(action)
     }
 
     fn env_value(&self, name: &str) -> Option<&str> {
@@ -322,7 +337,7 @@ impl SessionFlow {
     }
 
     /// Continues after the host answered a read.
-    pub fn on_read(
+    fn on_read_step(
         &mut self,
         found: bool,
         bytes: Option<Vec<u8>>,
@@ -372,6 +387,108 @@ impl SessionFlow {
                 None => Action::NotFound,
             },
             _ => Action::Failed(auth_error("auth_source", "unexpected read for a session")),
+        }
+    }
+
+    /// Continues after the host answered a read.
+    pub fn on_read(
+        &mut self,
+        found: bool,
+        bytes: Option<Vec<u8>>,
+        etag: Option<String>,
+        now_ms: i64,
+    ) -> Action {
+        if let Stage::Version(pending) = self.stage.clone() {
+            return self.on_version(pending, if found { bytes } else { None });
+        }
+        let action = self.on_read_step(found, bytes, etag, now_ms);
+        self.deliver(action)
+    }
+
+    /// Continues after the token endpoint replied.
+    pub fn on_http(&mut self, status: u16, body: &[u8], now_ms: i64) -> Action {
+        let action = self.on_http_step(status, body, now_ms);
+        self.deliver(action)
+    }
+
+    /// Continues after the backoff before a second token request.
+    pub fn on_slept(&mut self) -> Action {
+        let action = self.on_slept_step();
+        self.deliver(action)
+    }
+
+    /// Continues after the host answered the write; the refreshed token is used either way.
+    pub fn on_written(&mut self) -> Action {
+        let action = self.on_written_step();
+        self.deliver(action)
+    }
+
+    /// Re-reads the store after the vendor rejected the token; refreshes when allowed.
+    pub fn force_refresh(&mut self) -> Action {
+        self.held = None;
+        let action = self.force_refresh_step();
+        self.deliver(action)
+    }
+
+    fn deliver(&mut self, action: Action) -> Action {
+        match action {
+            Action::Ready(cred)
+                if self.want_version
+                    && cred.client_version.is_none()
+                    && cred.base_url.as_deref() == Some(CODEX_BASE) =>
+            {
+                let paths: Vec<String> = match self.codex_home() {
+                    Some(home) => vec![
+                        join(&home, &["models_cache.json"]),
+                        join(&home, &["version.json"]),
+                    ],
+                    None => Vec::new(),
+                };
+                self.held = Some(cred);
+                self.next_version(paths)
+            }
+            other => other,
+        }
+    }
+
+    fn next_version(&mut self, paths: Vec<String>) -> Action {
+        match paths.first().cloned() {
+            Some(path) => {
+                self.stage = Stage::Version(paths);
+                file(&path)
+            }
+            None => self.release(None),
+        }
+    }
+
+    fn on_version(&mut self, mut pending: Vec<String>, bytes: Option<Vec<u8>>) -> Action {
+        pending.remove(0);
+        let found = bytes.as_deref().and_then(parse_object).and_then(|m| {
+            ["client_version", "latest_version"]
+                .iter()
+                .find_map(|k| str_of(&m, k))
+                .filter(|v| {
+                    !v.is_empty()
+                        && v.len() <= 32
+                        && v.chars()
+                            .all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))
+                })
+        });
+        match found {
+            Some(version) => self.release(Some(version)),
+            None => self.next_version(pending),
+        }
+    }
+
+    fn release(&mut self, version: Option<String>) -> Action {
+        self.stage = Stage::Done;
+        match self.held.take() {
+            Some(mut cred) => {
+                cred.client_version =
+                    Some(version.unwrap_or_else(|| CODEX_CLIENT_VERSION.to_owned()));
+                Action::Ready(cred)
+            }
+            None => Action::NotFound,
         }
     }
 
@@ -621,11 +738,6 @@ impl SessionFlow {
                 cred.api_version = Some(String::new());
                 cred
             }
-            SessionPreset::ChatgptPlan => {
-                let mut cred = self.credential(token, expires_ms, None, None);
-                cred.dialect = Some("chatgpt_plan".to_owned());
-                cred
-            }
             _ => self.credential(token, expires_ms, None, None),
         };
         Action::Ready(cred)
@@ -716,7 +828,14 @@ impl SessionFlow {
             expires_at_ms,
             label: format!("session:{}", self.preset.as_str()),
             session: self.preset.as_str().to_owned(),
-            dialect: None,
+            dialect: match self.preset {
+                SessionPreset::ClaudeCode | SessionPreset::ClaudeCodeTokenEnv => {
+                    Some(CLAUDE_CODE_IDENTITY_DIALECT.to_owned())
+                }
+                SessionPreset::ChatgptPlan => Some("chatgpt_plan".to_owned()),
+                _ => None,
+            },
+            client_version: None,
         }
     }
 
@@ -804,7 +923,7 @@ impl SessionFlow {
     }
 
     /// Continues after the token endpoint replied.
-    pub fn on_http(&mut self, status: u16, body: &[u8], now_ms: i64) -> Action {
+    fn on_http_step(&mut self, status: u16, body: &[u8], now_ms: i64) -> Action {
         let payload = parse_object(body);
         if status != 200 {
             let code = payload
@@ -938,11 +1057,12 @@ impl SessionFlow {
 
     /// Continues after the token endpoint could not be reached.
     pub fn on_http_error(&mut self, message: String, now_ms: i64) -> Action {
-        self.refresh_failed(message, now_ms)
+        let action = self.refresh_failed(message, now_ms);
+        self.deliver(action)
     }
 
     /// Continues after the backoff before a second token request.
-    pub fn on_slept(&mut self) -> Action {
+    fn on_slept_step(&mut self) -> Action {
         match self.pending.clone() {
             Some(request) if self.stage == Stage::Refreshing => Action::Http(request),
             _ => Action::Failed(auth_error("auth_source", "unexpected sleep for a session")),
@@ -1022,7 +1142,7 @@ impl SessionFlow {
     }
 
     /// Continues after the host answered the write; the refreshed token is used either way.
-    pub fn on_written(&mut self) -> Action {
+    fn on_written_step(&mut self) -> Action {
         self.stage = Stage::Done;
         match self.ready.take() {
             Some(cred) => Action::Ready(cred),
@@ -1031,7 +1151,7 @@ impl SessionFlow {
     }
 
     /// Re-reads the store after the vendor rejected the token; refreshes when allowed.
-    pub fn force_refresh(&mut self) -> Action {
+    fn force_refresh_step(&mut self) -> Action {
         self.forced = true;
         self.etag = None;
         if self.preset == SessionPreset::ClaudeCodeTokenEnv {

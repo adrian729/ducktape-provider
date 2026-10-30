@@ -1,0 +1,239 @@
+{
+  "name": "models_codex_client_version_from_version_file",
+  "source": "synthetic",
+  "start": {
+    "clock": {
+      "now_ms": 0,
+      "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
+    },
+    "provider": {
+      "vendor": "openai",
+      "auth": {
+        "sources": [
+          {
+            "type": "session",
+            "preset": "codex"
+          }
+        ]
+      }
+    },
+    "operation": {
+      "type": "models",
+      "refresh": false
+    }
+  },
+  "secrets": {},
+  "env": {
+    "HOME": "/home/u"
+  },
+  "files": {
+    "/home/u/.codex/auth.json": "{\"auth_mode\": \"chatgpt\", \"OPENAI_API_KEY\": null, \"tokens\": {\"id_token\": \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xIn19.sig\", \"access_token\": \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjE3ODI0MDAsInN1YiI6InUxIn0.sig\", \"refresh_token\": \"rt_c\", \"account_id\": \"acct_1\"}, \"last_refresh\": \"2025-10-28T00:00:00Z\"}",
+    "/home/u/.codex/version.json": "{\"latest_version\": \"0.169.0\", \"last_checked_at\": \"2025-10-28T00:00:00Z\"}"
+  },
+  "http": [
+    {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": "{\"models\": [{\"slug\": \"gpt-5.6-luna\", \"display_name\": \"GPT-5.6 Luna\", \"visibility\": \"list\"}, {\"slug\": \"codex-auto-review\", \"display_name\": \"Auto review\", \"visibility\": \"hide\"}]}"
+    }
+  ],
+  "exchange": [
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "CODEX_HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "HOME"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "L2hvbWUvdQ=="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "env",
+            "name": "USERPROFILE"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.codex/auth.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "eyJhdXRoX21vZGUiOiAiY2hhdGdwdCIsICJPUEVOQUlfQVBJX0tFWSI6IG51bGwsICJ0b2tlbnMiOiB7ImlkX3Rva2VuIjogImV5SmhiR2NpT2lKU1V6STFOaUlzSW5SNWNDSTZJa3BYVkNKOS5leUpvZEhSd2N6b3ZMMkZ3YVM1dmNHVnVZV2t1WTI5dEwyRjFkR2dpT25zaVkyaGhkR2R3ZEY5aFkyTnZkVzUwWDJsa0lqb2lZV05qZEY4eEluMTkuc2lnIiwgImFjY2Vzc190b2tlbiI6ICJleUpoYkdjaU9pSlNVekkxTmlJc0luUjVjQ0k2SWtwWFZDSjkuZXlKbGVIQWlPakUzTmpFM09ESTBNREFzSW5OMVlpSTZJblV4SW4wLnNpZyIsICJyZWZyZXNoX3Rva2VuIjogInJ0X2MiLCAiYWNjb3VudF9pZCI6ICJhY2N0XzEifSwgImxhc3RfcmVmcmVzaCI6ICIyMDI1LTEwLTI4VDAwOjAwOjAwWiJ9",
+        "etag": "0b700b1ee37f2514a6778d460326c38ff44ec303099cefde91df1a4abdcd1442"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.codex/models_cache.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": false
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "need_read",
+          "locator": {
+            "type": "file",
+            "path": "/home/u/.codex/version.json"
+          }
+        }
+      },
+      "input": {
+        "type": "read",
+        "found": true,
+        "bytes": "eyJsYXRlc3RfdmVyc2lvbiI6ICIwLjE2OS4wIiwgImxhc3RfY2hlY2tlZF9hdCI6ICIyMDI1LTEwLTI4VDAwOjAwOjAwWiJ9",
+        "etag": "d73ae38056e286b230d5c11d71090076a7271495afad1413bac79925e8853c72"
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_request",
+            "data": {
+              "attempt": 1,
+              "body_bytes": 0,
+              "headers": {
+                "authorization": "***",
+                "chatgpt-account-id": "acct_1",
+                "content-type": "application/json"
+              },
+              "method": "GET",
+              "url": "https://chatgpt.com/backend-api/codex/models?client_version=0.169.0"
+            }
+          }
+        ],
+        "effect": {
+          "type": "need_http",
+          "request": {
+            "method": "GET",
+            "url": "https://chatgpt.com/backend-api/codex/models?client_version=0.169.0",
+            "headers": {
+              "authorization": "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjE3ODI0MDAsInN1YiI6InUxIn0.sig",
+              "chatgpt-account-id": "acct_1",
+              "content-type": "application/json"
+            },
+            "stream": false,
+            "timeout": {
+              "connect": 10.0,
+              "read": 60.0
+            },
+            "purpose": "models"
+          }
+        }
+      },
+      "input": {
+        "type": "http_response",
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        }
+      }
+    },
+    {
+      "step": {
+        "notify": [
+          {
+            "type": "observer",
+            "hook": "on_response",
+            "data": {
+              "attempt": 1,
+              "elapsed_ms": 700.0,
+              "request_id": null,
+              "status": 200
+            }
+          }
+        ],
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_chunk",
+        "bytes": "eyJtb2RlbHMiOiBbeyJzbHVnIjogImdwdC01LjYtbHVuYSIsICJkaXNwbGF5X25hbWUiOiAiR1BULTUuNiBMdW5hIiwgInZpc2liaWxpdHkiOiAibGlzdCJ9LCB7InNsdWciOiAiY29kZXgtYXV0by1yZXZpZXciLCAiZGlzcGxheV9uYW1lIjogIkF1dG8gcmV2aWV3IiwgInZpc2liaWxpdHkiOiAiaGlkZSJ9XX0="
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "receive"
+        }
+      },
+      "input": {
+        "type": "http_end"
+      }
+    },
+    {
+      "step": {
+        "effect": {
+          "type": "done",
+          "result": {
+            "type": "models",
+            "models": [
+              {
+                "id": "gpt-5.6-luna",
+                "kind": "chat",
+                "raw": {
+                  "display_name": "GPT-5.6 Luna",
+                  "slug": "gpt-5.6-luna",
+                  "visibility": "list"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
