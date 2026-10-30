@@ -56,8 +56,8 @@ jobs:
       - if: matrix.platform.smoke
         shell: bash
         run: |
-          pip install --no-index --find-links dist ducktape-provider
           pip install httpx pytest
+          pip install --no-index --find-links dist ducktape-provider
           python -c "import ducktape_provider as d; print(d.SCHEMA_VERSION)"
           python -m pytest -q
         working-directory: bindings/python

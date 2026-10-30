@@ -11,8 +11,16 @@ execFileSync("cargo", ["build", "--profile", "wasm", "--target", "wasm32-unknown
 copyFileSync(fileURLToPath(new URL("../../../target/wasm32-unknown-unknown/wasm/ducktape_abi.wasm", import.meta.url)), out);
 const raw = statSync(out).size;
 const wasmOpt = process.env.WASM_OPT ?? "wasm-opt";
+const WASM_FEATURES = [
+  "--enable-bulk-memory",
+  "--enable-multivalue",
+  "--enable-mutable-globals",
+  "--enable-nontrapping-float-to-int",
+  "--enable-reference-types",
+  "--enable-sign-ext",
+];
 try {
-  execFileSync(wasmOpt, ["-O3", out, "-o", `${out}.opt`], { stdio: "inherit" });
+  execFileSync(wasmOpt, ["-O3", ...WASM_FEATURES, out, "-o", `${out}.opt`], { stdio: "inherit" });
   renameSync(`${out}.opt`, out);
   console.log(`core.wasm: ${raw} bytes, ${statSync(out).size} after ${wasmOpt} -O3`);
 } catch (e) {
