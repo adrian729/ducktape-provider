@@ -30,7 +30,7 @@
     {
       "status": 200,
       "headers": {},
-      "body": "{\"embeddings\": [{\"values\": [0.1, 0.2, 0.3]}, {\"values\": [0.4, 0.5, 0.6]}]}"
+      "body": "{\"embeddings\": [{\"values\": [0.1, 0.2, 0.3]}, {\"values\": [0.4, 0.5, 0.6]}], \"usageMetadata\": {\"promptTokenCount\": 2, \"promptTokenDetails\": [{\"modality\": \"TEXT\", \"tokenCount\": 2}]}}"
     }
   ],
   "exchange": [
@@ -118,7 +118,7 @@
       },
       "input": {
         "type": "http_chunk",
-        "bytes": "eyJlbWJlZGRpbmdzIjogW3sidmFsdWVzIjogWzAuMSwgMC4yLCAwLjNdfSwgeyJ2YWx1ZXMiOiBbMC40LCAwLjUsIDAuNl19XX0="
+        "bytes": "eyJlbWJlZGRpbmdzIjogW3sidmFsdWVzIjogWzAuMSwgMC4yLCAwLjNdfSwgeyJ2YWx1ZXMiOiBbMC40LCAwLjUsIDAuNl19XSwgInVzYWdlTWV0YWRhdGEiOiB7InByb21wdFRva2VuQ291bnQiOiAyLCAicHJvbXB0VG9rZW5EZXRhaWxzIjogW3sibW9kYWxpdHkiOiAiVEVYVCIsICJ0b2tlbkNvdW50IjogMn1dfX0="
       }
     },
     {
@@ -150,7 +150,11 @@
                   0.6
                 ]
               ],
-              "usage": null,
+              "usage": {
+                "input": {
+                  "total": 2
+                }
+              },
               "warnings": [],
               "origin": {
                 "wire": "google.interactions",

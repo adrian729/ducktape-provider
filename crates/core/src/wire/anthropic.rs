@@ -654,7 +654,12 @@ impl Wire for AnthropicMessages {
         })
     }
 
-    fn chat_decoder(&self, ctx: &CallContext, index_offset: u32) -> Box<dyn ChatDecoder> {
+    fn chat_decoder(
+        &self,
+        ctx: &CallContext,
+        _req: &ChatRequest,
+        index_offset: u32,
+    ) -> Box<dyn ChatDecoder> {
         Box::new(Decoder::new(ctx.clone(), index_offset))
     }
 

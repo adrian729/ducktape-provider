@@ -75,7 +75,12 @@ pub trait Wire: Send + Sync {
         index_offset: u32,
     ) -> Result<Built, ProviderError>;
     /// Decoder for a chat reply; `index_offset` shifts block indices after a continuation.
-    fn chat_decoder(&self, ctx: &CallContext, index_offset: u32) -> Box<dyn ChatDecoder>;
+    fn chat_decoder(
+        &self,
+        ctx: &CallContext,
+        req: &ChatRequest,
+        index_offset: u32,
+    ) -> Box<dyn ChatDecoder>;
     /// Whether this stop asks the core to continue the turn.
     fn wants_continuation(&self, response: &Response) -> bool;
     /// Builds the embed request.

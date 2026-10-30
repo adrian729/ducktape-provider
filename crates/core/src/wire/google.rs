@@ -572,7 +572,12 @@ impl Wire for GoogleInteractions {
         })
     }
 
-    fn chat_decoder(&self, ctx: &CallContext, index_offset: u32) -> Box<dyn ChatDecoder> {
+    fn chat_decoder(
+        &self,
+        ctx: &CallContext,
+        _req: &ChatRequest,
+        index_offset: u32,
+    ) -> Box<dyn ChatDecoder> {
         Box::new(Decoder::new(ctx.clone(), index_offset))
     }
 
@@ -637,9 +642,15 @@ impl Wire for GoogleInteractions {
                     .ok_or_else(|| malformed("embedding row has no `values`"))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let usage = v
+            .get("usageMetadata")
+            .and_then(|u| u64_field(u, "promptTokenCount"))
+            .map(|t| EmbedUsage {
+                input: EmbedInputUsage { total: t },
+            });
         Ok(EmbedResponse {
             embeddings,
-            usage: None,
+            usage,
             warnings: Vec::new(),
             origin: ctx.origin(),
             latency_ms: 0.0,

@@ -1047,14 +1047,16 @@ impl Operation {
                 effect: Effect::Receive,
             };
         }
-        if let Job::Chat { content, .. } = &self.job {
+        if let Job::Chat {
+            request, content, ..
+        } = &self.job
+        {
             let ctx = self.ctx.clone().expect("ctx");
-            self.decoder = Some(
-                self.wire
-                    .as_ref()
-                    .expect("wire")
-                    .chat_decoder(&ctx, content.len() as u32),
-            );
+            self.decoder = Some(self.wire.as_ref().expect("wire").chat_decoder(
+                &ctx,
+                request,
+                content.len() as u32,
+            ));
         }
         self.state = State::Receiving;
         Step {
@@ -1258,6 +1260,7 @@ impl Operation {
             unreachable!()
         };
         content.append(&mut response.content);
+        warnings.append(&mut response.warnings);
         *usage = merge_usage(usage.take(), response.usage.take());
         if continue_turn && *continuations < MAX_CONTINUATIONS {
             *continuations += 1;

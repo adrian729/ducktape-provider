@@ -357,8 +357,17 @@ impl Wire for OllamaNative {
         })
     }
 
-    fn chat_decoder(&self, ctx: &CallContext, index_offset: u32) -> Box<dyn ChatDecoder> {
-        Box::new(Decoder::new(ctx.clone(), index_offset))
+    fn chat_decoder(
+        &self,
+        ctx: &CallContext,
+        req: &ChatRequest,
+        index_offset: u32,
+    ) -> Box<dyn ChatDecoder> {
+        let num_ctx = vendor_for(req.vendor.as_ref(), &ctx.ns)
+            .and_then(|v| v.get("options"))
+            .and_then(|o| o.get("num_ctx"))
+            .and_then(Value::as_u64);
+        Box::new(Decoder::new(ctx.clone(), index_offset, num_ctx))
     }
 
     fn wants_continuation(&self, _response: &Response) -> bool {
@@ -645,13 +654,15 @@ struct Decoder {
     calls: u32,
     done: Option<Value>,
     complete: bool,
+    num_ctx: Option<u64>,
 }
 
 impl Decoder {
-    fn new(ctx: CallContext, offset: u32) -> Self {
+    fn new(ctx: CallContext, offset: u32, num_ctx: Option<u64>) -> Self {
         Decoder {
             ctx,
             offset,
+            num_ctx,
             buffer: Vec::new(),
             next_index: 0,
             open: None,
@@ -872,6 +883,18 @@ impl ChatDecoder for Decoder {
                     raw: Some(Value::Object(raw)),
                 }
             });
+        let mut warnings = Vec::new();
+        if let (Some(limit), Some(prompt)) = (self.num_ctx, u64_field(&done, "prompt_eval_count")) {
+            if prompt >= limit {
+                warnings.push(Warning {
+                    kind: WarningKind::Compatibility,
+                    feature: "context_window".into(),
+                    detail: Some(format!(
+                        "prompt_eval_count {prompt} reached num_ctx {limit}; Ollama may have truncated the prompt"
+                    )),
+                });
+            }
+        }
         Ok(Response {
             content,
             stop: Stop {
@@ -879,7 +902,7 @@ impl ChatDecoder for Decoder {
                 raw: Some(json!(raw_reason)),
             },
             usage,
-            warnings: Vec::new(),
+            warnings,
             origin: self.ctx.origin(),
             latency_ms: 0.0,
             first_token_ms: None,

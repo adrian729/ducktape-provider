@@ -40,6 +40,19 @@ jobs:
           args: --release --out dist
           manylinux: auto
           sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14t"
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist -i python3.14t
+          manylinux: auto
+          sccache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - if: matrix.platform.smoke
         shell: bash
         run: |
