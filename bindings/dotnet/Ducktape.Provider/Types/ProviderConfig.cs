@@ -6,9 +6,9 @@ namespace Ducktape.Types;
 /// <summary>What a binding hands the core for one Provider</summary>
 public sealed record ProviderConfig
 {
-    /// <summary>Vendor namespace, company name</summary>
-    [JsonPropertyName("ns")]
-    public string? Ns { get; init; }
+    /// <summary>Vendor, company name</summary>
+    [JsonPropertyName("vendor")]
+    public string? Vendor { get; init; }
 
     [JsonPropertyName("base_url")]
     public string? BaseUrl { get; init; }

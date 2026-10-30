@@ -12,7 +12,7 @@ pub mod openai;
 /// Everything a codec needs to know about the call besides the request.
 #[derive(Debug, Clone)]
 pub struct CallContext {
-    pub ns: Ns,
+    pub vendor: Vendor,
     pub wire: &'static str,
     pub base_url: String,
     pub model: String,
@@ -30,7 +30,7 @@ impl CallContext {
     pub fn origin(&self) -> Origin {
         Origin {
             wire: self.wire.to_owned(),
-            ns: self.ns.clone(),
+            vendor: self.vendor.clone(),
             base_url: self.base_url.clone(),
             model: self.model.clone(),
             auth_source: self.auth_source.clone(),
@@ -123,13 +123,13 @@ pub trait Wire: Send + Sync {
     }
 }
 
-/// Codec for a namespace.
-pub fn for_ns(ns: &Ns) -> Option<Box<dyn Wire>> {
-    match ns {
-        Ns::Anthropic => Some(Box::new(anthropic::AnthropicMessages)),
-        Ns::Openai => Some(Box::new(openai::OpenaiResponses)),
-        Ns::Ollama => Some(Box::new(ollama::OllamaNative)),
-        Ns::Google => Some(Box::new(google::GoogleInteractions)),
+/// Codec for a vendor.
+pub fn for_vendor(vendor: &Vendor) -> Option<Box<dyn Wire>> {
+    match vendor {
+        Vendor::Anthropic => Some(Box::new(anthropic::AnthropicMessages)),
+        Vendor::Openai => Some(Box::new(openai::OpenaiResponses)),
+        Vendor::Ollama => Some(Box::new(ollama::OllamaNative)),
+        Vendor::Google => Some(Box::new(google::GoogleInteractions)),
         _ => None,
     }
 }
@@ -222,16 +222,19 @@ pub fn malformed(message: impl Into<String>) -> ProviderError {
     ProviderError::new(ErrorKind::MalformedResponse, message)
 }
 
-/// The vendor map entry for a namespace.
-pub fn vendor_for<'a>(vendor: Option<&'a VendorMap>, ns: &Ns) -> Option<&'a Map<String, Value>> {
-    vendor
-        .and_then(|v| v.get(ns.as_str()))
+/// The vendor map entry for a vendor.
+pub fn vendor_for<'a>(
+    fields: Option<&'a VendorMap>,
+    vendor: &Vendor,
+) -> Option<&'a Map<String, Value>> {
+    fields
+        .and_then(|v| v.get(vendor.as_str()))
         .and_then(Value::as_object)
 }
 
 /// Copies a vendor extras map into a block object.
-pub fn apply_vendor(target: &mut Map<String, Value>, vendor: Option<&VendorMap>, ns: &Ns) {
-    if let Some(extra) = vendor_for(vendor, ns) {
+pub fn apply_vendor(target: &mut Map<String, Value>, fields: Option<&VendorMap>, vendor: &Vendor) {
+    if let Some(extra) = vendor_for(fields, vendor) {
         for (k, v) in extra {
             target.insert(k.clone(), v.clone());
         }

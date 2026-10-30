@@ -1,7 +1,7 @@
 //! Login sessions: store layouts, token parsing, refresh and write-back per preset.
 use crate::effects::{HttpRequest, Locator, Method, Purpose};
 use crate::types::{
-    AuthKind, ErrorKind, Headers, Ns, Placement, ProviderError, RefreshMode, SessionPreset,
+    AuthKind, ErrorKind, Headers, Placement, ProviderError, RefreshMode, SessionPreset, Vendor,
 };
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
@@ -64,7 +64,7 @@ enum Stage {
 #[derive(Debug)]
 pub struct SessionFlow {
     preset: SessionPreset,
-    ns: Ns,
+    vendor: Vendor,
     store: Option<String>,
     profile: Option<String>,
     refresh: RefreshMode,
@@ -221,7 +221,7 @@ fn token_request(url: &str, body: Value, extra: &[(&str, &str)]) -> HttpRequest 
 impl SessionFlow {
     /// Prepares the flow for one session source; unknown presets fail.
     pub fn new(
-        ns: &Ns,
+        vendor: &Vendor,
         preset: &SessionPreset,
         store: Option<String>,
         profile: Option<String>,
@@ -248,7 +248,7 @@ impl SessionFlow {
         }
         Ok(SessionFlow {
             preset: preset.clone(),
-            ns: ns.clone(),
+            vendor: vendor.clone(),
             store,
             profile,
             refresh: refresh.unwrap_or(default_refresh),
@@ -624,7 +624,7 @@ impl SessionFlow {
         headers: Option<Headers>,
     ) -> SessionCredential {
         let mut headers = headers.unwrap_or_default();
-        if matches!(self.ns, Ns::Anthropic) {
+        if matches!(self.vendor, Vendor::Anthropic) {
             headers.insert("anthropic-beta".to_owned(), OAUTH_BETA.to_owned());
         }
         SessionCredential {

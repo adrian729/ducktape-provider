@@ -7,7 +7,7 @@ namespace Ducktape;
 /// <summary>One endpoint of one vendor.</summary>
 public sealed class Provider
 {
-    private static readonly HashSet<string> Namespaces = ["anthropic", "openai", "google", "ollama"];
+    private static readonly HashSet<string> Vendors = ["anthropic", "openai", "google", "ollama"];
     private static readonly Lazy<HttpClient> SharedClient = new(() => new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false }) { Timeout = System.Threading.Timeout.InfiniteTimeSpan });
 
     private readonly ProviderConfig config;
@@ -16,19 +16,19 @@ public sealed class Provider
     private readonly ConcurrentDictionary<string, Capabilities> caps = new();
     private volatile List<ModelInfo>? models;
 
-    /// <summary>Configures a provider for a vendor namespace; the key comes from the environment unless options say otherwise.</summary>
-    public Provider(string ns, ProviderOptions? options = null)
+    /// <summary>Configures a provider for a vendor; the key comes from the environment unless options say otherwise.</summary>
+    public Provider(string vendor, ProviderOptions? options = null)
     {
-        if (!Namespaces.Contains(ns))
+        if (!Vendors.Contains(vendor))
         {
-            throw new ArgumentException("unknown namespace " + ns + "; one of " + string.Join(", ", Namespaces), nameof(ns));
+            throw new ArgumentException("unknown vendor " + vendor + "; one of " + string.Join(", ", Vendors), nameof(vendor));
         }
         options ??= new ProviderOptions();
         if (options.DefaultSystem is not null && options.DefaultSystemBlocks is not null)
         {
             throw new ArgumentException("set DefaultSystem or DefaultSystemBlocks, not both");
         }
-        Ns = ns;
+        Vendor = vendor;
         var secrets = new Dictionary<string, string>();
         var resolvers = new Dictionary<string, Func<CancellationToken, Task<string>>>();
         Auth? auth = null;
@@ -57,7 +57,7 @@ public sealed class Provider
         }
         config = new ProviderConfig
         {
-            Ns = ns,
+            Vendor = vendor,
             BaseUrl = options.BaseUrl?.TrimEnd('/'),
             Auth = auth,
             Headers = options.Headers,
@@ -77,7 +77,7 @@ public sealed class Provider
     }
 
     /// <summary>The vendor namespace.</summary>
-    public string Ns { get; }
+    public string Vendor { get; }
 
     private async Task<JsonNode?> RunAsync(JsonObject operation, Func<Event, Task>? onEvent, Func<LoginAction, CancellationToken, Task<string?>>? handleAction, CancellationToken ct)
     {
@@ -211,7 +211,7 @@ public sealed class Provider
     }
 
     /// <summary>Lists the models the endpoint serves; cached after the first call unless refresh is set.</summary>
-    public async Task<IReadOnlyList<ModelInfo>> ModelsAsync(bool refresh = false, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ModelInfo>> GetModelsAsync(bool refresh = false, CancellationToken cancellationToken = default)
     {
         var cached = models;
         if (cached is not null && !refresh)
@@ -227,13 +227,13 @@ public sealed class Provider
     }
 
     /// <summary>Lists the models, blocking.</summary>
-    public IReadOnlyList<ModelInfo> Models(bool refresh = false, CancellationToken cancellationToken = default)
+    public IReadOnlyList<ModelInfo> GetModels(bool refresh = false, CancellationToken cancellationToken = default)
     {
-        return Task.Run(() => ModelsAsync(refresh, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
+        return Task.Run(() => GetModelsAsync(refresh, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>Describes one model.</summary>
-    public async Task<ModelInfo> ModelInfoAsync(string id, CancellationToken cancellationToken = default)
+    public async Task<ModelInfo> GetModelInfoAsync(string id, CancellationToken cancellationToken = default)
     {
         if (infos.TryGetValue(id, out var cached))
         {
@@ -249,13 +249,13 @@ public sealed class Provider
     }
 
     /// <summary>Describes one model, blocking.</summary>
-    public ModelInfo ModelInfo(string id, CancellationToken cancellationToken = default)
+    public ModelInfo GetModelInfo(string id, CancellationToken cancellationToken = default)
     {
-        return Task.Run(() => ModelInfoAsync(id, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
+        return Task.Run(() => GetModelInfoAsync(id, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>Tells what a model supports.</summary>
-    public async Task<Capabilities> CapabilitiesAsync(string model, CancellationToken cancellationToken = default)
+    public async Task<Capabilities> GetCapabilitiesAsync(string model, CancellationToken cancellationToken = default)
     {
         if (caps.TryGetValue(model, out var cached))
         {
@@ -271,9 +271,9 @@ public sealed class Provider
     }
 
     /// <summary>Tells what a model supports, blocking.</summary>
-    public Capabilities Capabilities(string model, CancellationToken cancellationToken = default)
+    public Capabilities GetCapabilities(string model, CancellationToken cancellationToken = default)
     {
-        return Task.Run(() => CapabilitiesAsync(model, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
+        return Task.Run(() => GetCapabilitiesAsync(model, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>Logs into the provider's session source; the handler shows the user what to do and returns any pasted value.</summary>
@@ -293,14 +293,27 @@ public sealed class Provider
         return Json.As<AuthStatus>(result?["status"]);
     }
 
+    /// <summary>Logs in, blocking; the handler shows the user what to do and returns any pasted value.</summary>
+    public AuthStatus Login(Func<LoginAction, string?> handler, string? callback = null, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        return Task.Run(() => LoginAsync((action, _) => Task.FromResult(handler(action)), callback, timeout, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
+    }
+
     /// <summary>Forgets the provider's own session.</summary>
     public async Task LogoutAsync(CancellationToken cancellationToken = default)
     {
         await RunAsync(Operation("logout"), null, null, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Forgets the provider's own session, blocking.</summary>
+    public void Logout(CancellationToken cancellationToken = default)
+    {
+        Task.Run(() => LogoutAsync(cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
+    }
+
     /// <summary>Reports which credential would be used and when it expires.</summary>
-    public async Task<AuthStatus> AuthStatusAsync(CancellationToken cancellationToken = default)
+    public async Task<AuthStatus> GetAuthStatusAsync(CancellationToken cancellationToken = default)
     {
         var result = await RunAsync(Operation("auth_status"), null, null, cancellationToken).ConfigureAwait(false);
         var status = result?["status"];
@@ -308,8 +321,8 @@ public sealed class Provider
     }
 
     /// <summary>Reports the credential state, blocking.</summary>
-    public AuthStatus AuthStatus(CancellationToken cancellationToken = default)
+    public AuthStatus GetAuthStatus(CancellationToken cancellationToken = default)
     {
-        return Task.Run(() => AuthStatusAsync(cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
+        return Task.Run(() => GetAuthStatusAsync(cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 }

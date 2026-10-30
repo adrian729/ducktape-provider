@@ -110,7 +110,7 @@ impl Encoder<'_> {
                     let mut o = Map::new();
                     o.insert("type".into(), json!("function"));
                     o.insert("function".into(), Value::Object(f));
-                    apply_vendor(&mut o, c.meta.vendor.as_ref(), &self.ctx.ns);
+                    apply_vendor(&mut o, c.meta.vendor.as_ref(), &self.ctx.vendor);
                     calls.push(Value::Object(o));
                 }
                 Block::Image(img) if img.data.is_some() => {
@@ -181,7 +181,7 @@ impl Encoder<'_> {
         o.insert("role".into(), json!("tool"));
         o.insert("tool_name".into(), json!(name));
         o.insert("content".into(), json!(content));
-        apply_vendor(&mut o, r.meta.vendor.as_ref(), &self.ctx.ns);
+        apply_vendor(&mut o, r.meta.vendor.as_ref(), &self.ctx.vendor);
         Value::Object(o)
     }
 
@@ -194,7 +194,7 @@ impl Encoder<'_> {
                     f.insert("name".into(), json!(d.name));
                     f.insert("description".into(), json!(d.description));
                     f.insert("parameters".into(), d.input_schema.clone());
-                    apply_vendor(&mut f, d.vendor.as_ref(), &self.ctx.ns);
+                    apply_vendor(&mut f, d.vendor.as_ref(), &self.ctx.vendor);
                     out.push(json!({"type": "function", "function": Value::Object(f)}));
                 }
                 Tool::Provider(p) => self.warn(
@@ -321,7 +321,7 @@ impl Wire for OllamaNative {
         if matches!(opts.cache, Some(CachePolicy::Explicit)) {
             enc.warn("cache", "Ollama has no prompt cache control");
         }
-        let mut vendor = vendor_for(req.vendor.as_ref(), &ctx.ns).cloned();
+        let mut vendor = vendor_for(req.vendor.as_ref(), &ctx.vendor).cloned();
         if let Some(v) = vendor.as_mut() {
             if let Some(Value::Object(extra)) = v.remove("options") {
                 for (k, val) in extra {
@@ -363,7 +363,7 @@ impl Wire for OllamaNative {
         req: &ChatRequest,
         index_offset: u32,
     ) -> Box<dyn ChatDecoder> {
-        let num_ctx = vendor_for(req.vendor.as_ref(), &ctx.ns)
+        let num_ctx = vendor_for(req.vendor.as_ref(), &ctx.vendor)
             .and_then(|v| v.get("options"))
             .and_then(|o| o.get("num_ctx"))
             .and_then(Value::as_u64);
@@ -382,7 +382,7 @@ impl Wire for OllamaNative {
         if let Some(d) = req.options.as_ref().and_then(|o| o.dimensions) {
             body.user("dimensions", json!(d));
         }
-        body.merge_vendor(vendor_for(req.vendor.as_ref(), &ctx.ns))?;
+        body.merge_vendor(vendor_for(req.vendor.as_ref(), &ctx.vendor))?;
         let request = HttpRequest {
             method: Method::Post,
             url: join_url(&ctx.base_url, "api/embed"),

@@ -27,7 +27,7 @@ from ._types import (
     encode,
 )
 
-NAMESPACES = ("anthropic", "openai", "google", "ollama")
+VENDORS = ("anthropic", "openai", "google", "ollama")
 _OPTION_KEYS = {f.name for f in dataclasses.fields(Options)}
 _TIMEOUT_KEYS = {"connect", "read", "total"}
 _CALLBACKS = ("loopback", "paste")
@@ -125,14 +125,14 @@ def _without_vendor(defaults: Optional[dict[str, Any]], call: Optional[dict[str,
     if defaults is None or not call:
         return defaults
     out: dict[str, Any] = {}
-    for ns, fields in defaults.items():
-        incoming = call.get(ns)
-        if incoming is None and ns in call:
+    for key, fields in defaults.items():
+        incoming = call.get(key)
+        if incoming is None and key in call:
             continue
         if isinstance(fields, dict) and isinstance(incoming, dict):
             nulls = {k for k, v in incoming.items() if v is None}
             fields = {k: v for k, v in fields.items() if k not in nulls}
-        out[ns] = fields
+        out[key] = fields
     return out or None
 
 
@@ -140,8 +140,8 @@ def _vendor(value: Any) -> Optional[dict[str, Any]]:
     if value is None:
         return None
     if not isinstance(value, dict):
-        raise TypeError("vendor must be a dict keyed by namespace")
-    return {ns: _drop_nulls(fields) if isinstance(fields, dict) else fields for ns, fields in value.items()}
+        raise TypeError("vendor must be a dict keyed by vendor")
+    return {key: _drop_nulls(fields) if isinstance(fields, dict) else fields for key, fields in value.items()}
 
 
 class _Base:
@@ -149,7 +149,7 @@ class _Base:
 
     def __init__(
         self,
-        ns: str,
+        vendor: str,
         *,
         base_url: Optional[str] = None,
         auth: Any = None,
@@ -168,9 +168,9 @@ class _Base:
         keychain: Optional[Callable[[str, str], Any]] = None,
         keychain_write: Optional[Callable[[str, str, bytes], Any]] = None,
     ) -> None:
-        if ns not in NAMESPACES:
-            raise ValueError(f"unknown namespace {ns!r}; one of {', '.join(NAMESPACES)}")
-        self.ns = ns
+        if vendor not in VENDORS:
+            raise ValueError(f"unknown vendor {vendor!r}; one of {', '.join(VENDORS)}")
+        self.vendor = vendor
         self.host = Host()
         if keychain is not None:
             if not callable(keychain):
@@ -182,7 +182,7 @@ class _Base:
                 raise TypeError("keychain_write must be a callable taking (service, account, value)")
             self.host.keychain_write = keychain_write
         self.observer = observer
-        self._config: dict[str, Any] = {"ns": ns}
+        self._config: dict[str, Any] = {"vendor": vendor}
         if base_url is not None:
             self._config["base_url"] = base_url.rstrip("/")
         if auth is not None or dangerously_allow_browser is not None:
@@ -424,7 +424,7 @@ class Provider(_Base):
 
     def __init__(
         self,
-        ns: str,
+        vendor: str,
         *,
         base_url: Optional[str] = None,
         auth: Any = None,
@@ -445,7 +445,7 @@ class Provider(_Base):
         client: Optional[httpx.Client] = None,
     ) -> None:
         super().__init__(
-            ns,
+            vendor,
             base_url=base_url,
             auth=auth,
             headers=headers,
@@ -584,7 +584,7 @@ class AsyncProvider(_Base):
 
     def __init__(
         self,
-        ns: str,
+        vendor: str,
         *,
         base_url: Optional[str] = None,
         auth: Any = None,
@@ -605,7 +605,7 @@ class AsyncProvider(_Base):
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         super().__init__(
-            ns,
+            vendor,
             base_url=base_url,
             auth=auth,
             headers=headers,

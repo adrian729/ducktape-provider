@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "anthropic"
+      "vendor": "anthropic"
     },
     "operation": {
       "type": "models",

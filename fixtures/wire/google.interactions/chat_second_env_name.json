@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "google"
+      "vendor": "google"
     },
     "operation": {
       "type": "chat",
@@ -183,7 +183,7 @@
                   },
                   "origin": {
                     "wire": "google.interactions",
-                    "ns": "google",
+                    "vendor": "google",
                     "base_url": "https://generativelanguage.googleapis.com",
                     "model": "gemini-3.8-flash",
                     "auth_source": "env:GOOGLE_API_KEY"
@@ -219,7 +219,7 @@
               "warnings": [],
               "origin": {
                 "wire": "google.interactions",
-                "ns": "google",
+                "vendor": "google",
                 "base_url": "https://generativelanguage.googleapis.com",
                 "model": "gemini-3.8-flash",
                 "auth_source": "env:GOOGLE_API_KEY"

@@ -26,7 +26,7 @@ public class ProviderTest
     private static Provider ProviderOf(JsonNode fixture, Scripted server)
     {
         var config = fixture["start"]!["provider"]!;
-        return new Provider(config["ns"]!.GetValue<string>(), new ProviderOptions { BaseUrl = config["base_url"]?.GetValue<string>(), Client = server.Client(), Auth = [Credential.Key("sk-ant-test-key")] });
+        return new Provider(config["vendor"]!.GetValue<string>(), new ProviderOptions { BaseUrl = config["base_url"]?.GetValue<string>(), Client = server.Client(), Auth = [Credential.Key("sk-ant-test-key")] });
     }
 
     private static string Jwt(long expSeconds)
@@ -94,10 +94,10 @@ public class ProviderTest
         Assert.Equal("finish", events[^1].Type);
         var text = string.Concat(events.Where(e => e.Type == "text_delta").Select(e => e.Text));
         Assert.NotEmpty(text);
-        Assert.Equal(text, (await s.ResponseAsync())!.Text());
+        Assert.Equal(text, (await s.GetResponseAsync())!.Text());
         var sync = ProviderOf(fixture, new Scripted(fixture)).Stream(req.Messages!, new ChatOptions { Model = req.Model });
         Assert.Equal(text, string.Concat(sync.ToBlockingEnumerable().Where(e => e.Type == "text_delta").Select(e => e.Text)));
-        Assert.Equal(text, sync.Response!.Text());
+        Assert.Equal(text, sync.GetResponse()!.Text());
     }
 
     [Fact]
@@ -192,8 +192,8 @@ public class ProviderTest
         var fixture = Anthropic("models_two_pages");
         var server = new Scripted(fixture);
         var p = ProviderOf(fixture, server);
-        var models = await p.ModelsAsync();
-        var again = await p.ModelsAsync();
+        var models = await p.GetModelsAsync();
+        var again = await p.GetModelsAsync();
         Assert.NotEmpty(models);
         Assert.Equal(models.Count, again.Count);
         Assert.Equal(2, server.Requests.Count);
@@ -205,7 +205,7 @@ public class ProviderTest
         var fixture = Anthropic("capabilities_shipped");
         var server = new Scripted(fixture);
         var p = ProviderOf(fixture, server);
-        var caps = await p.CapabilitiesAsync(fixture["start"]!["operation"]!["model"]!.GetValue<string>());
+        var caps = await p.GetCapabilitiesAsync(fixture["start"]!["operation"]!["model"]!.GetValue<string>());
         Assert.Equal("shipped", caps.Source);
         Assert.Empty(server.Requests);
     }
@@ -241,7 +241,7 @@ public class ProviderTest
         {
             break;
         }
-        var e = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => s.ResponseAsync());
+        var e = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => s.GetResponseAsync());
         Assert.True(((ProviderException)e.InnerException!).Is(ErrorKind.Cancelled));
         s.Cancel();
         s.Dispose();
@@ -377,7 +377,7 @@ public class ProviderTest
         var written = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "credentials", "default.json")))!;
         Assert.Equal("sk-ant-oat01-new", written["access_token"]!.GetValue<string>());
         Assert.Equal("kept", written["extra"]!.GetValue<string>());
-        Assert.Equal("session:anthropic_profile", (await p.AuthStatusAsync()).Source);
+        Assert.Equal("session:anthropic_profile", (await p.GetAuthStatusAsync()).Source);
     }
 
     [Fact]
@@ -415,7 +415,7 @@ public class ProviderTest
         var e = await Assert.ThrowsAsync<ProviderException>(() => p.ChatAsync([User("hi")], new ChatOptions { Model = "m" }));
         Assert.Equal("credential_expired", e.Code);
         Assert.Contains("claude", e.Message);
-        var status = await p.AuthStatusAsync();
+        var status = await p.GetAuthStatusAsync();
         Assert.Equal("session:claude_code", status.Source);
         Assert.NotNull(status.ExpiresAt);
     }

@@ -138,7 +138,7 @@ fn ttl(mark: &CacheMark) -> Value {
 fn block_meta(
     target: &mut Map<String, Value>,
     meta: &BlockMeta,
-    ns: &Ns,
+    vendor: &Vendor,
     cache_policy: &CachePolicy,
 ) {
     if let Some(mark) = &meta.cache {
@@ -146,7 +146,7 @@ fn block_meta(
             target.insert("cache_control".to_owned(), ttl(mark));
         }
     }
-    apply_vendor(target, meta.vendor.as_ref(), ns);
+    apply_vendor(target, meta.vendor.as_ref(), vendor);
 }
 
 fn source_from(
@@ -187,13 +187,13 @@ impl Encoder<'_> {
     }
 
     fn block(&mut self, block: &Block) -> Result<Option<Value>, ProviderError> {
-        let ns = &self.ctx.ns;
+        let vendor = &self.ctx.vendor;
         let out = match block {
             Block::Text(b) => {
                 let mut o = Map::new();
                 o.insert("type".into(), json!("text"));
                 o.insert("text".into(), json!(b.text));
-                block_meta(&mut o, &b.meta, ns, &self.cache_policy);
+                block_meta(&mut o, &b.meta, vendor, &self.cache_policy);
                 Value::Object(o)
             }
             Block::Image(b) => {
@@ -209,7 +209,7 @@ impl Encoder<'_> {
                 let mut o = Map::new();
                 o.insert("type".into(), json!("image"));
                 o.insert("source".into(), source);
-                block_meta(&mut o, &b.meta, ns, &self.cache_policy);
+                block_meta(&mut o, &b.meta, vendor, &self.cache_policy);
                 Value::Object(o)
             }
             Block::Document(b) => {
@@ -236,7 +236,7 @@ impl Encoder<'_> {
                 if let Some(name) = &b.name {
                     o.insert("title".into(), json!(name));
                 }
-                block_meta(&mut o, &b.meta, ns, &self.cache_policy);
+                block_meta(&mut o, &b.meta, vendor, &self.cache_policy);
                 Value::Object(o)
             }
             Block::ToolCall(b) => {
@@ -245,7 +245,7 @@ impl Encoder<'_> {
                 o.insert("id".into(), json!(b.id));
                 o.insert("name".into(), json!(b.name));
                 o.insert("input".into(), b.arguments.clone());
-                block_meta(&mut o, &b.meta, ns, &self.cache_policy);
+                block_meta(&mut o, &b.meta, vendor, &self.cache_policy);
                 Value::Object(o)
             }
             Block::ToolResult(b) => {
@@ -262,7 +262,7 @@ impl Encoder<'_> {
                 if let Some(err) = b.is_error {
                     o.insert("is_error".into(), json!(err));
                 }
-                block_meta(&mut o, &b.meta, ns, &self.cache_policy);
+                block_meta(&mut o, &b.meta, vendor, &self.cache_policy);
                 Value::Object(o)
             }
             Block::Reasoning(b) => {
@@ -349,7 +349,7 @@ impl Encoder<'_> {
                 let mut o = Map::new();
                 o.insert("type".into(), json!("text"));
                 o.insert("text".into(), json!(b.text));
-                block_meta(&mut o, &b.meta, &self.ctx.ns, &self.cache_policy);
+                block_meta(&mut o, &b.meta, &self.ctx.vendor, &self.cache_policy);
                 Value::Object(o)
             })
             .collect()
@@ -372,7 +372,7 @@ impl Encoder<'_> {
                             o.insert("cache_control".into(), ttl(mark));
                         }
                     }
-                    apply_vendor(&mut o, d.vendor.as_ref(), &self.ctx.ns);
+                    apply_vendor(&mut o, d.vendor.as_ref(), &self.ctx.vendor);
                     out.push(Value::Object(o));
                 }
                 Tool::Provider(p) => {
@@ -633,7 +633,7 @@ impl Wire for AnthropicMessages {
             auto_cache(&mut body);
         }
         body.warnings.append(&mut enc.warnings);
-        body.merge_vendor(vendor_for(req.vendor.as_ref(), &ctx.ns))?;
+        body.merge_vendor(vendor_for(req.vendor.as_ref(), &ctx.vendor))?;
         body.enforce_strict(ctx.strict)?;
         let mut headers = base_headers(ctx);
         for (k, v) in req.headers.iter().flatten() {

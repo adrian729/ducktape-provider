@@ -4,7 +4,7 @@ import json, pathlib, re, subprocess, sys
 root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
 schema = json.load(open(root / "schema/provider.schema.json"))
 defs = schema["$defs"]
-INITIALISMS = {"id": "ID", "url": "URL", "json": "JSON", "ttl": "TTL", "ns": "NS", "api": "API", "uri": "URI"}
+INITIALISMS = {"id": "ID", "url": "URL", "json": "JSON", "ttl": "TTL", "api": "API", "uri": "URI"}
 OPAQUE = {"raw", "vendor_state", "body", "event", "dialect"}
 
 

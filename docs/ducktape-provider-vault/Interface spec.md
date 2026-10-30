@@ -5,16 +5,16 @@ Phase 0. The normalized surface, language-neutral, frozen section by section (da
 ## 1. Provider constructor (2026-10-29)
 
 ```
-Provider(ns, *, base_url?, auth?, headers?, timeout?,
+Provider(vendor, *, base_url?, auth?, headers?, timeout?,
          default_model?, default_embedding_model?, default_system?, default_tools?, default_options?, default_vendor?,
          overrides?, strict?, observer?)
 ```
 
 | Param | Type | Default | What it does |
 |---|---|---|---|
-| `ns` | `anthropic` / `openai` / `google` / `ollama` (company names) | required | Picks the wire, the vendor URL, env var names, header placement, capability table |
+| `vendor` | `anthropic` / `openai` / `google` / `ollama` (company names) | required | Picks the wire, the vendor URL, env var names, header placement, capability table |
 | `base_url` | URL | vendor's own | Same wire on another host: Groq, xAI, OpenRouter, DeepSeek, a proxy, remote Ollama, later Bedrock / Vertex / Foundry |
-| `auth` | string, `env(names)`, `session(preset, store?, client_id?)`, `resolver(fn)`, or a list of those | env vars for `ns`, only when `base_url` is the vendor's own | String = that key. List = tried in literal order. With a custom `base_url`, `auth` is required: the vendor's env key is never sent to another host. See [[Auth model]] |
+| `auth` | string, `env(names)`, `session(preset, store?, client_id?)`, `resolver(fn)`, or a list of those | env vars for `vendor`, only when `base_url` is the vendor's own | String = that key. List = tried in literal order. With a custom `base_url`, `auth` is required: the vendor's env key is never sent to another host. See [[Auth model]] |
 | `headers` | map | none | Sent on every request |
 | `timeout` | seconds or `{connect, read, total}` | connect 10 s, read 60 s, total none | Default for every call |
 | `default_model` | string | none | Model used when a call gives none |
@@ -29,10 +29,10 @@ Provider(ns, *, base_url?, auth?, headers?, timeout?,
 
 - No network at construction; the first call resolves credentials. Missing credential = `auth` error, code `no_credential`, naming what was tried.
 - One `Provider` = one endpoint. No registry; the caller keeps a map.
-- Wire id, API version, model profile and dialect come from the shipped table keyed by `ns` and host; `overrides` is the only way to change them.
+- Wire id, API version, model profile and dialect come from the shipped table keyed by `vendor` and host; `overrides` is the only way to change them.
 - A session preset pins its own `base_url`, headers and dialect (Codex sessions talk to the Codex backend, not `api.openai.com`); `base_url` is ignored with a warning when a session is the active source.
 - Browser build: env, session and file sources do not exist; an API key requires `dangerously_allow_browser=True` (same gate as the vendor SDKs); the recommended pattern is a `resolver` fetching short-lived tokens from the app's backend.
-- Unknown `ns` or option key is an argument error before any request.
+- Unknown `vendor` or option key is an argument error before any request.
 
 ```python
 Provider("anthropic")
@@ -122,18 +122,18 @@ Message { role: user | assistant | system | tool, content: Block[] }
 
 | Block | Fields | Notes |
 |---|---|---|
-| `text` | `text` | citations under `vendor.<ns>.citations` |
+| `text` | `text` | citations under `vendor.<vendor>.citations` |
 | `image` | one of `data` / `url` / `file_id`; `media_type?` (sniffed from `data` for PNG, JPEG, GIF, WebP) | `url` fetched by the core for Ollama (not in the browser build: `unsupported`); `detail` and similar via `vendor` |
 | `document` | one of `data` / `url` / `file_id` / `text`; `media_type`, `name?` | user turns only on Claude |
 | `tool_call` | `id`, `name`, `arguments`, `truncated?`, `arguments_json?` | `arguments` parsed object; when the JSON is cut or invalid: `truncated: true`, `arguments: {}`, raw text in `arguments_json` |
 | `tool_result` | `tool_call_id`, `content: Block[]`, `is_error?` | images inside on Claude, OpenAI, Google |
 | `reasoning` | `text`, `vendor_state?`, `origin?` | `origin` set by the library; redacted reasoning = empty text |
 | `compaction` | `vendor_state`, `text?`, `origin` | |
-| `custom` | `kind: "<ns>.<type>"`, `data`, `origin?` | hosted-tool blocks, Google image / audio / video output, unknown kinds; never fails to decode |
+| `custom` | `kind: "<vendor>.<type>"`, `data`, `origin?` | hosted-tool blocks, Google image / audio / video output, unknown kinds; never fails to decode |
 
-Every block may carry `id?` (the vendor's id when it has one), `cache?: {ttl: short / long}`, `vendor?: {ns: {...}}`.
+Every block may carry `id?` (the vendor's id when it has one), `cache?: {ttl: short / long}`, `vendor?: {<vendor>: {...}}`.
 
-- Opaque state carries its own `origin {wire, ns, base_url, model, auth_source?}` on the block, so a bare `response.content` array describes itself; no message-level origin.
+- Opaque state carries its own `origin {wire, vendor, base_url, model, auth_source?}` on the block, so a bare `response.content` array describes itself; no message-level origin.
 - Replay rule (decision 17): opaque blocks are sent verbatim when the block's `wire` and `base_url` match the call, whatever the model (Anthropic's guidance: pass thinking blocks back unchanged across models, the API drops what the target cannot read, unbilled; stripping client-side counts as editing history). On a different endpoint they are dropped with a warning; a dropped `compaction` warns that summarized history is lost. Hand-written blocks have no `origin` and are never treated as opaque state.
 - History is append-only: append `assistant(response)` and go on.
 - Ollama sends no tool-call ids: the core generates `call_<n>` ids and maps `tool_result` back by name and order.
@@ -145,7 +145,7 @@ Every block may carry `id?` (the vendor's id when it has one), `cache?: {ttl: sh
 
 ```
 ToolDef      { type: "function", name, description, input_schema, strict?, cache?, vendor? }
-ProviderTool { type: "provider", provider_tool: "<ns>.<name>", config? }       # tools the vendor runs itself
+ProviderTool { type: "provider", provider_tool: "<vendor>.<name>", config? }       # tools the vendor runs itself
 tools: Tool[]                                                                 # usually set once as default_tools
 ```
 
@@ -177,7 +177,7 @@ Response
                                  #   | refusal | content_filtered | continue_required | compaction | malformed_output | other
   usage: {input: {total, cache_read?, cache_write?}, output: {total, reasoning?}, raw} | null
   warnings: [{kind: unsupported | compatibility | deprecated, feature, detail}]
-  origin: {wire, ns, base_url, model, auth_source?}
+  origin: {wire, vendor, base_url, model, auth_source?}
   latency_ms, first_token_ms     # whole call incl. retries; first_token_ms = request start to the first delta
   raw?                           # vendor reply body, only with include_raw=True
 ```
@@ -327,6 +327,7 @@ r = p.chat([user("hi")])
 | Rust | builder | drop the future / `cancel()` | enums |
 | C | JSON documents through the C ABI, the host runs the effect loop | resume with `cancelled` | JSON only |
 
+- Names: one name per concept in every language, in that language's casing (`model_info`, `modelInfo`, `ModelInfo`); a language's own rules win where they ask for more, so .NET methods take a verb (`GetModelsAsync`, `GetResponse`) and C# keeps `SystemMessage` and `ToolMessage` where the bare word would clash.
 - Canonical forms (what the schema and the core accept): `system` = `TextBlock[]`, `tool_result.content` = `Block[]`, `embed.input` = `string[]`, `timeout` = `{connect, read, total}`, `tool_choice` = `{mode, name?}`, tools tagged with `type`. Strings and scalars are binding sugar converted before the boundary.
 - `cancel` on any call, streamed or not, closes the host connection; the core sees it on the next resume.
 - Conformance runs against both boundaries (PyO3 native objects and the JSON C ABI / wasm) so they cannot drift.

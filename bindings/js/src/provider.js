@@ -6,7 +6,7 @@ import { readKeychain, writeKeychain } from "./keychain.js";
 import { isBrowser } from "./platform.js";
 import { blocks, withViews } from "./sugar.js";
 
-const NAMESPACES = ["anthropic", "openai", "google", "ollama"];
+const VENDORS = ["anthropic", "openai", "google", "ollama"];
 const OPTION_KEYS = new Set([
   "max_output_tokens",
   "reasoning",
@@ -73,9 +73,9 @@ function messagesOf(value) {
 
 function vendorOf(value) {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "object") throw new TypeError("vendor must be an object keyed by namespace");
+  if (typeof value !== "object") throw new TypeError("vendor must be an object keyed by vendor");
   const out = {};
-  for (const [ns, fields] of Object.entries(value)) out[ns] = fields && typeof fields === "object" ? dropNulls(fields) : fields;
+  for (const [key, fields] of Object.entries(value)) out[key] = fields && typeof fields === "object" ? dropNulls(fields) : fields;
   return out;
 }
 
@@ -90,9 +90,9 @@ function without(defaults, call) {
 function withoutVendor(defaults, call) {
   if (!defaults || !call) return defaults;
   const out = {};
-  for (const [ns, fields] of Object.entries(defaults)) {
-    if (ns in call && call[ns] === null) continue;
-    out[ns] = fields && typeof fields === "object" && call[ns] && typeof call[ns] === "object" ? without(fields, call[ns]) ?? {} : fields;
+  for (const [key, fields] of Object.entries(defaults)) {
+    if (key in call && call[key] === null) continue;
+    out[key] = fields && typeof fields === "object" && call[key] && typeof call[key] === "object" ? without(fields, call[key]) ?? {} : fields;
   }
   return Object.keys(out).length ? out : undefined;
 }
@@ -140,8 +140,8 @@ export class Stream {
 
 /** One endpoint of one vendor. */
 export class Provider {
-  constructor(ns, options = {}) {
-    if (!NAMESPACES.includes(ns)) throw new TypeError(`unknown namespace ${ns}; one of ${NAMESPACES.join(", ")}`);
+  constructor(vendor, options = {}) {
+    if (!VENDORS.includes(vendor)) throw new TypeError(`unknown vendor ${vendor}; one of ${VENDORS.join(", ")}`);
     const {
       base_url,
       auth,
@@ -165,7 +165,7 @@ export class Provider {
     } = options;
     const unknown = Object.keys(rest);
     if (unknown.length) throw new TypeError(`unknown provider option ${unknown[0]}`);
-    this.ns = ns;
+    this.vendor = vendor;
     this.secrets = new Map();
     this.resolvers = new Map();
     this.observer = observer ?? null;
@@ -175,7 +175,7 @@ export class Provider {
     this.keychain = keychain ?? readKeychain;
     this.keychainWrite = keychain_write ?? (keychain ? null : writeKeychain);
     this.corePromise = core ? (core instanceof Core ? Promise.resolve(core) : core.then ? core : loadCore(core)) : null;
-    const config = { ns };
+    const config = { vendor };
     if (base_url) config.base_url = base_url.replace(/\/+$/, "");
     if (auth !== undefined || dangerously_allow_browser !== undefined) {
       config.auth = { sources: this.sourcesOf(auth) };

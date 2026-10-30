@@ -11,7 +11,7 @@ where
     Option::<T>::deserialize(d).map(Some)
 }
 
-/// Vendor request fields by namespace, sent as-is.
+/// Vendor request fields by vendor, sent as-is.
 pub type VendorMap = BTreeMap<String, Value>;
 
 /// Extra HTTP headers by name.
@@ -49,8 +49,8 @@ macro_rules! open_enum {
 }
 
 open_enum! {
-    /// Vendor namespace.
-    Ns { Anthropic => "anthropic", Openai => "openai", Google => "google", Ollama => "ollama" }
+    /// Vendor the provider speaks to.
+    Vendor { Anthropic => "anthropic", Openai => "openai", Google => "google", Ollama => "ollama" }
 }
 
 open_enum! {
@@ -160,7 +160,7 @@ open_enum! {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Origin {
     pub wire: String,
-    pub ns: Ns,
+    pub vendor: Vendor,
     pub base_url: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -896,7 +896,7 @@ pub struct Overrides {
 /// One configured provider.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderConfig {
-    pub ns: Ns,
+    pub vendor: Vendor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -8,7 +8,7 @@
 
 static const char START[] =
     "{\"clock\":" CLOCK ","
-    "\"provider\":{\"ns\":\"anthropic\"},"
+    "\"provider\":{\"vendor\":\"anthropic\"},"
     "\"operation\":{\"type\":\"chat\",\"request\":{\"model\":\"claude-opus-5-5\","
     "\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}]}}}";
 

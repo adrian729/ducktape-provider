@@ -1,7 +1,7 @@
 {
   "def": "ProviderConfig",
   "value": {
-    "ns": "openai",
+    "vendor": "openai",
     "base_url": "https://api.groq.com/openai",
     "auth": {
       "sources": [

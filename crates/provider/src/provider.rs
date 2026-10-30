@@ -10,8 +10,8 @@ pub use ducktape_core::effects::Callback;
 use ducktape_core::effects::{OperationKind, OperationResult, Start};
 use ducktape_core::types::{
     Auth, AuthSource, AuthStatus, Capabilities, ChatRequest, EmbedOptions, EmbedRequest,
-    EmbedResponse, ErrorKind, Headers, LoginAction, Message, ModelInfo, Ns, Options, Overrides,
-    ProviderConfig, Response, SystemBlock, Timeout, Tool, VendorMap,
+    EmbedResponse, ErrorKind, Headers, LoginAction, Message, ModelInfo, Options, Overrides,
+    ProviderConfig, Response, SystemBlock, Timeout, Tool, Vendor, VendorMap,
 };
 use std::collections::HashMap;
 use std::future::IntoFuture;
@@ -36,7 +36,7 @@ pub struct Provider {
 impl std::fmt::Debug for Provider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Provider")
-            .field("ns", &self.inner.config.ns)
+            .field("vendor", &self.inner.config.vendor)
             .field("base_url", &self.inner.config.base_url)
             .finish_non_exhaustive()
     }
@@ -45,7 +45,7 @@ impl std::fmt::Debug for Provider {
 /// Configures a Provider.
 #[derive(Default)]
 pub struct Builder {
-    ns: Option<Ns>,
+    vendor: Option<Vendor>,
     base_url: Option<String>,
     auth: Vec<Credential>,
     headers: Option<Headers>,
@@ -181,13 +181,13 @@ impl Builder {
     }
 
     pub fn build(self) -> std::result::Result<Provider, Error> {
-        let ns = self
-            .ns
+        let vendor = self
+            .vendor
             .clone()
-            .ok_or_else(|| Error::argument("no namespace"))?;
-        if let Ns::Other(other) = &ns {
+            .ok_or_else(|| Error::argument("no vendor"))?;
+        if let Vendor::Other(other) = &vendor {
             return Err(Error::argument(format!(
-                "unknown namespace {other}; one of anthropic, openai, google, ollama"
+                "unknown vendor {other}; one of anthropic, openai, google, ollama"
             )));
         }
         if let Some(headers) = &self.headers {
@@ -238,7 +238,7 @@ impl Builder {
             (None, false) => None,
         };
         let config = ProviderConfig {
-            ns,
+            vendor,
             base_url: self.base_url.map(|u| u.trim_end_matches('/').to_owned()),
             auth: (!sources.is_empty()).then(|| Auth {
                 sources,
@@ -275,22 +275,22 @@ impl Builder {
 }
 
 impl Provider {
-    /// Starts configuring a provider for a vendor namespace.
-    pub fn builder(ns: impl Into<Ns>) -> Builder {
+    /// Starts configuring a provider for a vendor.
+    pub fn builder(vendor: impl Into<Vendor>) -> Builder {
         Builder {
-            ns: Some(ns.into()),
+            vendor: Some(vendor.into()),
             ..Builder::default()
         }
     }
 
     /// A provider with every default: key from the environment, no default model.
-    pub fn new(ns: impl Into<Ns>) -> std::result::Result<Provider, Error> {
-        Provider::builder(ns).build()
+    pub fn new(vendor: impl Into<Vendor>) -> std::result::Result<Provider, Error> {
+        Provider::builder(vendor).build()
     }
 
-    /// The vendor namespace.
-    pub fn ns(&self) -> &Ns {
-        &self.inner.config.ns
+    /// The vendor the provider speaks to.
+    pub fn vendor(&self) -> &Vendor {
+        &self.inner.config.vendor
     }
 
     async fn run(

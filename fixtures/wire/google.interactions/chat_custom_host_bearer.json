@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "google",
+      "vendor": "google",
       "base_url": "https://proxy.example.com/google",
       "auth": {
         "sources": [
@@ -173,7 +173,7 @@
                   },
                   "origin": {
                     "wire": "google.interactions",
-                    "ns": "google",
+                    "vendor": "google",
                     "base_url": "https://proxy.example.com/google",
                     "model": "gemini-3.8-flash",
                     "auth_source": "env:PROXY_KEY"
@@ -209,7 +209,7 @@
               "warnings": [],
               "origin": {
                 "wire": "google.interactions",
-                "ns": "google",
+                "vendor": "google",
                 "base_url": "https://proxy.example.com/google",
                 "model": "gemini-3.8-flash",
                 "auth_source": "env:PROXY_KEY"

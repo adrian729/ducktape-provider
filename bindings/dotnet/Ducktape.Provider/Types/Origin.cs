@@ -9,9 +9,9 @@ public sealed record Origin
     [JsonPropertyName("wire")]
     public string? Wire { get; init; }
 
-    /// <summary>Vendor namespace, company name</summary>
-    [JsonPropertyName("ns")]
-    public string? Ns { get; init; }
+    /// <summary>Vendor, company name</summary>
+    [JsonPropertyName("vendor")]
+    public string? Vendor { get; init; }
 
     [JsonPropertyName("base_url")]
     public string? BaseUrl { get; init; }

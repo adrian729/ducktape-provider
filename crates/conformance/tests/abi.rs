@@ -23,7 +23,7 @@ fn abi_version_is_one() {
 #[test]
 fn auth_status_runs_through_the_abi() {
     let json = format!(
-        r#"{{"clock": {CLOCK}, "provider": {{"ns": "anthropic"}}, "operation": {{"type": "auth_status"}}}}"#
+        r#"{{"clock": {CLOCK}, "provider": {{"vendor": "anthropic"}}, "operation": {{"type": "auth_status"}}}}"#
     );
     unsafe {
         let (op, step) = call_start(&json);
@@ -69,7 +69,7 @@ fn invalid_json_fails_without_a_handle() {
 #[test]
 fn unknown_namespace_fails_with_unsupported() {
     let json = format!(
-        r#"{{"clock": {CLOCK}, "provider": {{"ns": "acme"}}, "operation": {{"type": "models"}}}}"#
+        r#"{{"clock": {CLOCK}, "provider": {{"vendor": "acme"}}, "operation": {{"type": "models"}}}}"#
     );
     unsafe {
         let (op, step) = call_start(&json);

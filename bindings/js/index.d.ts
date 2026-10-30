@@ -36,7 +36,7 @@ declare module "./schema.js" {
   }
 }
 
-export type Ns = "anthropic" | "openai" | "google" | "ollama" | (string & {});
+export type Vendor = "anthropic" | "openai" | "google" | "ollama" | (string & {});
 export type CacheTtl = NonNullable<CacheMark["ttl"]>;
 export type Limits = NonNullable<Capabilities["limits"]>;
 export type EnvAuth = Extract<ConfigAuthSource, { type: "env" }>;
@@ -115,8 +115,8 @@ export declare class Stream implements AsyncIterableIterator<Event> {
 }
 
 export declare class Provider {
-  constructor(ns: Ns, options?: ProviderOptions);
-  readonly ns: Ns;
+  constructor(vendor: Vendor, options?: ProviderOptions);
+  readonly vendor: Vendor;
   chat(messages: Message[], options?: ChatOptions): Promise<Response>;
   stream(messages: Message[], options?: ChatOptions): Stream;
   embed(input: string | string[], options?: EmbedOptions): Promise<EmbedResponse>;

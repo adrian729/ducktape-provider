@@ -138,7 +138,7 @@ class Origin(Model):
     """Where a reply or an opaque block came from."""
 
     wire: str
-    ns: str
+    vendor: str
     base_url: str
     model: str
     auth_source: Optional[str] = None

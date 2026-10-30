@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "openai",
+      "vendor": "openai",
       "default_model": "gpt-5.5",
       "default_system": [
         {
@@ -200,7 +200,7 @@
                   },
                   "origin": {
                     "wire": "openai.responses",
-                    "ns": "openai",
+                    "vendor": "openai",
                     "base_url": "https://api.openai.com",
                     "model": "gpt-5.5",
                     "auth_source": "env:OPENAI_API_KEY"
@@ -242,7 +242,7 @@
               "warnings": [],
               "origin": {
                 "wire": "openai.responses",
-                "ns": "openai",
+                "vendor": "openai",
                 "base_url": "https://api.openai.com",
                 "model": "gpt-5.5",
                 "auth_source": "env:OPENAI_API_KEY"

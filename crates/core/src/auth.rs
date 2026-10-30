@@ -1,6 +1,6 @@
 //! Credential sources and header placement.
 use crate::secret::Secret;
-use crate::types::{Auth, AuthKind, AuthSource, Headers, Ns, Placement, Transport};
+use crate::types::{Auth, AuthKind, AuthSource, Headers, Placement, Transport, Vendor};
 
 /// A credential ready to be sent.
 #[derive(Debug)]
@@ -12,7 +12,7 @@ pub struct Credential<'a> {
 }
 
 /// The vendor's own env sources, used only on its own base URL.
-pub fn default_sources(ns: &Ns) -> Vec<AuthSource> {
+pub fn default_sources(vendor: &Vendor) -> Vec<AuthSource> {
     let env = |name: &str, kind: AuthKind, placement: Placement| AuthSource::Env {
         names: vec![name.to_owned()],
         transport: Transport {
@@ -20,8 +20,8 @@ pub fn default_sources(ns: &Ns) -> Vec<AuthSource> {
             placement: Some(placement),
         },
     };
-    match ns {
-        Ns::Anthropic => vec![
+    match vendor {
+        Vendor::Anthropic => vec![
             env("ANTHROPIC_API_KEY", AuthKind::ApiKey, Placement::XApiKey),
             env(
                 "ANTHROPIC_AUTH_TOKEN",
@@ -29,59 +29,59 @@ pub fn default_sources(ns: &Ns) -> Vec<AuthSource> {
                 Placement::Authorization,
             ),
         ],
-        Ns::Openai => vec![env(
+        Vendor::Openai => vec![env(
             "OPENAI_API_KEY",
             AuthKind::Bearer,
             Placement::Authorization,
         )],
-        Ns::Google => vec![
+        Vendor::Google => vec![
             env("GEMINI_API_KEY", AuthKind::ApiKey, Placement::XGoogApiKey),
             env("GOOGLE_API_KEY", AuthKind::ApiKey, Placement::XGoogApiKey),
         ],
-        Ns::Ollama => vec![AuthSource::Env {
+        Vendor::Ollama => vec![AuthSource::Env {
             names: vec!["OLLAMA_API_KEY".to_owned()],
             transport: Transport {
                 kind: Some(AuthKind::Bearer),
                 placement: Some(Placement::Authorization),
             },
         }],
-        Ns::Other(_) => Vec::new(),
+        Vendor::Other(_) => Vec::new(),
     }
 }
 
 /// Whether a provider without `auth` may fall back to the vendor's env sources.
-pub fn env_fallback_allowed(ns: &Ns, base_url: &str) -> bool {
-    match crate::op::default_base_url(ns) {
+pub fn env_fallback_allowed(vendor: &Vendor, base_url: &str) -> bool {
+    match crate::op::default_base_url(vendor) {
         Some(default) => same_origin(default, base_url),
         None => false,
     }
 }
 
 /// The sources to try, in order.
-pub fn sources(ns: &Ns, base_url: &str, auth: Option<&Auth>) -> Vec<AuthSource> {
+pub fn sources(vendor: &Vendor, base_url: &str, auth: Option<&Auth>) -> Vec<AuthSource> {
     match auth {
         Some(a) if !a.sources.is_empty() => a.sources.clone(),
-        _ if env_fallback_allowed(ns, base_url) => default_sources(ns),
+        _ if env_fallback_allowed(vendor, base_url) => default_sources(vendor),
         _ => Vec::new(),
     }
 }
 
 /// Default placement for a kind on a wire.
-pub fn default_placement(ns: &Ns, kind: &AuthKind) -> Placement {
-    match (ns, kind) {
+pub fn default_placement(vendor: &Vendor, kind: &AuthKind) -> Placement {
+    match (vendor, kind) {
         (_, AuthKind::Bearer) => Placement::Authorization,
-        (Ns::Anthropic, _) => Placement::XApiKey,
-        (Ns::Google, _) => Placement::XGoogApiKey,
+        (Vendor::Anthropic, _) => Placement::XApiKey,
+        (Vendor::Google, _) => Placement::XGoogApiKey,
         _ => Placement::Authorization,
     }
 }
 
 /// Default kind for a source without one.
-pub fn default_kind(ns: &Ns, source: &AuthSource) -> AuthKind {
+pub fn default_kind(vendor: &Vendor, source: &AuthSource) -> AuthKind {
     match source {
         AuthSource::Session { .. } | AuthSource::Exchange { .. } => AuthKind::Bearer,
-        _ => match ns {
-            Ns::Anthropic | Ns::Google => AuthKind::ApiKey,
+        _ => match vendor {
+            Vendor::Anthropic | Vendor::Google => AuthKind::ApiKey,
             _ => AuthKind::Bearer,
         },
     }
@@ -147,13 +147,16 @@ mod tests {
     #[test]
     fn env_fallback_only_on_vendor_origin() {
         assert!(env_fallback_allowed(
-            &Ns::Openai,
+            &Vendor::Openai,
             "https://api.openai.com/v1"
         ));
         assert!(!env_fallback_allowed(
-            &Ns::Openai,
+            &Vendor::Openai,
             "https://api.groq.com/openai"
         ));
-        assert!(env_fallback_allowed(&Ns::Ollama, "http://127.0.0.1:11434"));
+        assert!(env_fallback_allowed(
+            &Vendor::Ollama,
+            "http://127.0.0.1:11434"
+        ));
     }
 }

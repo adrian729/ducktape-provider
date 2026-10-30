@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "ollama",
+      "vendor": "ollama",
       "overrides": {
         "capabilities": {
           "tools": {

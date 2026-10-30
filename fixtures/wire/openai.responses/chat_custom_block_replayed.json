@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "openai"
+      "vendor": "openai"
     },
     "operation": {
       "type": "chat",
@@ -40,7 +40,7 @@
                 },
                 "origin": {
                   "wire": "openai.responses",
-                  "ns": "openai",
+                  "vendor": "openai",
                   "base_url": "https://api.openai.com",
                   "model": "gpt-5.5"
                 }
@@ -203,7 +203,7 @@
                   },
                   "origin": {
                     "wire": "openai.responses",
-                    "ns": "openai",
+                    "vendor": "openai",
                     "base_url": "https://api.openai.com",
                     "model": "gpt-5.5",
                     "auth_source": "env:OPENAI_API_KEY"
@@ -245,7 +245,7 @@
               "warnings": [],
               "origin": {
                 "wire": "openai.responses",
-                "ns": "openai",
+                "vendor": "openai",
                 "base_url": "https://api.openai.com",
                 "model": "gpt-5.5",
                 "auth_source": "env:OPENAI_API_KEY"

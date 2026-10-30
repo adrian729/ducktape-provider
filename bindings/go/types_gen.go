@@ -4,7 +4,7 @@ package ducktape
 
 import "encoding/json"
 
-// VendorMap: Vendor-specific passthrough keyed by namespace
+// VendorMap: Vendor-specific passthrough keyed by vendor
 type VendorMap = map[string]map[string]any
 
 // CacheMark: Cache breakpoint on a block or tool list
@@ -15,10 +15,10 @@ type CacheMark struct {
 // Origin: Where a response or an opaque block came from; opaque state is replayed when wire and base_url match the call
 type Origin struct {
 	Wire string `json:"wire"`
-	// Vendor namespace, company name
-	NS      OriginNS `json:"ns"`
-	BaseURL string   `json:"base_url"`
-	Model   string   `json:"model"`
+	// Vendor, company name
+	Vendor  OriginVendor `json:"vendor"`
+	BaseURL string       `json:"base_url"`
+	Model   string       `json:"model"`
 	// env:NAME, session:PRESET, resolver, inline
 	AuthSource string `json:"auth_source,omitempty"`
 }
@@ -59,7 +59,7 @@ type Block struct {
 	// Opaque
 	VendorState json.RawMessage `json:"vendor_state,omitempty"`
 	Origin      *Origin         `json:"origin,omitempty"`
-	// <ns>.<type>
+	// <vendor>.<type>
 	Kind string `json:"kind,omitempty"`
 }
 
@@ -358,20 +358,20 @@ type Overrides struct {
 
 // ProviderConfig: What a binding hands the core for one Provider
 type ProviderConfig struct {
-	// Vendor namespace, company name
-	NS                    ProviderConfigNS  `json:"ns"`
-	BaseURL               string            `json:"base_url,omitempty"`
-	Auth                  *Auth             `json:"auth,omitempty"`
-	Headers               map[string]string `json:"headers,omitempty"`
-	Timeout               *Timeout          `json:"timeout,omitempty"`
-	DefaultModel          string            `json:"default_model,omitempty"`
-	DefaultEmbeddingModel string            `json:"default_embedding_model,omitempty"`
-	DefaultSystem         []Block           `json:"default_system,omitempty"`
-	DefaultTools          []Tool            `json:"default_tools,omitempty"`
-	DefaultOptions        *Options          `json:"default_options,omitempty"`
-	DefaultVendor         VendorMap         `json:"default_vendor,omitempty"`
-	Overrides             *Overrides        `json:"overrides,omitempty"`
-	Strict                *bool             `json:"strict,omitempty"`
+	// Vendor, company name
+	Vendor                ProviderConfigVendor `json:"vendor"`
+	BaseURL               string               `json:"base_url,omitempty"`
+	Auth                  *Auth                `json:"auth,omitempty"`
+	Headers               map[string]string    `json:"headers,omitempty"`
+	Timeout               *Timeout             `json:"timeout,omitempty"`
+	DefaultModel          string               `json:"default_model,omitempty"`
+	DefaultEmbeddingModel string               `json:"default_embedding_model,omitempty"`
+	DefaultSystem         []Block              `json:"default_system,omitempty"`
+	DefaultTools          []Tool               `json:"default_tools,omitempty"`
+	DefaultOptions        *Options             `json:"default_options,omitempty"`
+	DefaultVendor         VendorMap            `json:"default_vendor,omitempty"`
+	Overrides             *Overrides           `json:"overrides,omitempty"`
+	Strict                *bool                `json:"strict,omitempty"`
 }
 
 // UsageInput: total includes cached tokens
@@ -452,14 +452,14 @@ const (
 	CacheMarkTTLLong  CacheMarkTTL = "long"
 )
 
-// OriginNS: open enum of Origin.ns.
-type OriginNS string
+// OriginVendor: open enum of Origin.vendor.
+type OriginVendor string
 
 const (
-	OriginNSAnthropic OriginNS = "anthropic"
-	OriginNSOpenai    OriginNS = "openai"
-	OriginNSGoogle    OriginNS = "google"
-	OriginNSOllama    OriginNS = "ollama"
+	OriginVendorAnthropic OriginVendor = "anthropic"
+	OriginVendorOpenai    OriginVendor = "openai"
+	OriginVendorGoogle    OriginVendor = "google"
+	OriginVendorOllama    OriginVendor = "ollama"
 )
 
 // BlockStatus: open enum of Block.status.
@@ -601,14 +601,14 @@ const (
 	AuthSourceGrantAwsContainer      AuthSourceGrant = "aws_container"
 )
 
-// ProviderConfigNS: open enum of ProviderConfig.ns.
-type ProviderConfigNS string
+// ProviderConfigVendor: open enum of ProviderConfig.vendor.
+type ProviderConfigVendor string
 
 const (
-	ProviderConfigNSAnthropic ProviderConfigNS = "anthropic"
-	ProviderConfigNSOpenai    ProviderConfigNS = "openai"
-	ProviderConfigNSGoogle    ProviderConfigNS = "google"
-	ProviderConfigNSOllama    ProviderConfigNS = "ollama"
+	ProviderConfigVendorAnthropic ProviderConfigVendor = "anthropic"
+	ProviderConfigVendorOpenai    ProviderConfigVendor = "openai"
+	ProviderConfigVendorGoogle    ProviderConfigVendor = "google"
+	ProviderConfigVendorOllama    ProviderConfigVendor = "ollama"
 )
 
 // CapabilitiesCacheTtls: open enum of CapabilitiesCache.ttls.

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-var namespaces = []string{"anthropic", "openai", "google", "ollama"}
+var vendors = []string{"anthropic", "openai", "google", "ollama"}
 
 // Config sets up one Provider; every field is optional.
 type Config struct {
@@ -37,7 +37,7 @@ type Config struct {
 
 // Provider is one endpoint of one vendor.
 type Provider struct {
-	ns     string
+	vendor     string
 	config ProviderConfig
 	host   *host
 	core   *Core
@@ -57,17 +57,17 @@ var defaultClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Requ
 	ExpectContinueTimeout: time.Second,
 }}
 
-// New makes a provider for a vendor namespace.
-func New(ns string, cfg Config) (*Provider, error) {
+// New makes a provider for a vendor.
+func New(vendor string, cfg Config) (*Provider, error) {
 	known := false
-	for _, n := range namespaces {
-		known = known || n == ns
+	for _, n := range vendors {
+		known = known || n == vendor
 	}
 	if !known {
-		return nil, fmt.Errorf("ducktape: unknown namespace %q; one of %s", ns, strings.Join(namespaces, ", "))
+		return nil, fmt.Errorf("ducktape: unknown vendor %q; one of %s", vendor, strings.Join(vendors, ", "))
 	}
 	p := &Provider{
-		ns:    ns,
+		vendor:    vendor,
 		host:  &host{secrets: map[string]string{}, resolvers: map[string]func(context.Context) (string, error){}, keychain: cfg.Keychain, keychainWrite: cfg.KeychainWrite, client: cfg.Client, observer: cfg.Observer},
 		core:  cfg.Core,
 		infos: map[string]*ModelInfo{},
@@ -82,7 +82,7 @@ func New(ns string, cfg Config) (*Provider, error) {
 			p.host.keychainWrite = WriteKeychain
 		}
 	}
-	c := ProviderConfig{NS: ProviderConfigNS(ns)}
+	c := ProviderConfig{Vendor: ProviderConfigVendor(vendor)}
 	if cfg.BaseURL != "" {
 		c.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	}
@@ -119,8 +119,8 @@ func New(ns string, cfg Config) (*Provider, error) {
 	return p, nil
 }
 
-// NS is the vendor namespace.
-func (p *Provider) NS() string { return p.ns }
+// Vendor is the vendor the provider speaks to.
+func (p *Provider) Vendor() string { return p.vendor }
 
 type operation map[string]any
 

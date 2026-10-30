@@ -276,15 +276,15 @@ if (r.Stop?.Reason == StopReason.ToolCall)
 | A token fetched at request time | `Auth = [Credential.Resolver(async ct => await FetchToken(ct))]` |
 | An existing login | `Credential.Session("codex")`, `Credential.Session("anthropic_profile", profile: "work")` |
 | Refreshing another tool's login | `Credential.Session("codex", refresh: "memory")` or `refresh: "write_back"`, same meaning as in Python |
-| Login state | `await p.AuthStatusAsync()` gives `Source`, `ExpiresAt` and `Session` |
+| Login state | `await p.GetAuthStatusAsync()` gives `Source`, `ExpiresAt` and `Session` |
 | Several sources in order | `Auth = [Credential.Session("claude_code"), Credential.Env("ANTHROPIC_API_KEY")]` |
 | Your own keychain | `Keychain = (service, account) => ...` and `KeychainWrite = (service, account, value) => true`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | Cancel | a `CancellationToken` on any call, `stream.Cancel()`, or leaving the `await foreach` early; all end in `OperationCanceledException` |
-| Blocking calls | `p.Chat(...)`, `p.Embed(...)`, `p.Models()`, `foreach (var ev in p.Stream(...).ToBlockingEnumerable())` |
+| Blocking calls | `p.Chat(...)`, `p.Embed(...)`, `p.GetModels()`, `p.Login(...)`, `foreach (var ev in p.Stream(...).ToBlockingEnumerable())` |
 | Options and vendor fields | `new ChatOptions { Options = new Options { Reasoning = ReasoningLevel.High }, Vendor = new() { ["openai"] = new() { ["temperature"] = 0.2 } } }` |
 | Images | `User("what is this?", Image(pngBytes, "image/png"))` or `ImageUrl("https://...")` |
 | Embeddings | `new Provider("openai", new ProviderOptions { DefaultEmbeddingModel = "text-embedding-3-small" })` then `(await p.EmbedAsync(["a", "b"])).Embeddings` |
-| Discovery | `p.ModelsAsync()`, `p.ModelInfoAsync("gpt-5")`, `p.CapabilitiesAsync("gpt-5")` |
+| Discovery | `p.GetModelsAsync()`, `p.GetModelInfoAsync("gpt-5")`, `p.GetCapabilitiesAsync("gpt-5")` |
 | Your own transport | `Client = new HttpClient(handler)` |
 | Your own `libducktape_abi` location | `Core.Load("/opt/lib/libducktape_abi.so")` before the first call, or the `DUCKTAPE_NATIVE` environment variable |
 

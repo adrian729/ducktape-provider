@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "anthropic",
+      "vendor": "anthropic",
       "base_url": "https://proxy.example.com",
       "auth": {
         "sources": [

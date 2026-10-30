@@ -61,7 +61,7 @@ class ProviderTest {
 
     private static Provider.Builder provider(JsonNode fixture, Scripted server) {
         JsonNode config = fixture.path("start").path("provider");
-        return Provider.builder(config.path("ns").asText()).baseUrl(config.has("base_url") ? config.get("base_url").asText() : null).transport(server).auth(Credential.key("sk-ant-test-key"));
+        return Provider.builder(config.path("vendor").asText()).baseUrl(config.has("base_url") ? config.get("base_url").asText() : null).transport(server).auth(Credential.key("sk-ant-test-key"));
     }
 
     private static String jwt(long expSeconds) {

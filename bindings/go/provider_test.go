@@ -141,7 +141,7 @@ func newProvider(t *testing.T, f wireFixture, cfg Config) (*Provider, *scripted)
 	if cfg.Auth == nil {
 		cfg.Auth = []Credential{Key("sk-ant-test-key")}
 	}
-	p, err := New(string(conf.NS), cfg)
+	p, err := New(string(conf.Vendor), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestArgumentErrorsComeFirst(t *testing.T) {
 		t.Fatalf("expected a model error before any request, got %v", err)
 	}
 	if _, err := New("nope", Config{}); err == nil {
-		t.Fatal("unknown namespace accepted")
+		t.Fatal("unknown vendor accepted")
 	}
 	if _, err := p.Embed(context.Background(), nil, nil); err == nil {
 		t.Fatal("empty embed accepted")

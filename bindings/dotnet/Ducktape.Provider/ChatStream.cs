@@ -53,18 +53,15 @@ public sealed class ChatStream : IAsyncEnumerable<Event>, IDisposable, IAsyncDis
         return response;
     }
 
-    /// <summary>The final response once the stream finished; throws the stream's failure if it had one.</summary>
-    public Response? Response
+    /// <summary>Waits for the stream to finish and returns the final response, blocking.</summary>
+    public Response? GetResponse()
     {
-        get
-        {
-            done.Task.GetAwaiter().GetResult();
-            return Result();
-        }
+        done.Task.GetAwaiter().GetResult();
+        return Result();
     }
 
     /// <summary>Waits for the stream to finish and returns the final response.</summary>
-    public async Task<Response?> ResponseAsync()
+    public async Task<Response?> GetResponseAsync()
     {
         await done.Task.ConfigureAwait(false);
         return Result();

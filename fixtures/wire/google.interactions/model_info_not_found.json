@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "google"
+      "vendor": "google"
     },
     "operation": {
       "type": "model_info",
@@ -140,7 +140,7 @@
             },
             "origin": {
               "wire": "google.interactions",
-              "ns": "google",
+              "vendor": "google",
               "base_url": "https://generativelanguage.googleapis.com",
               "model": "gemini-nope",
               "auth_source": "env:GEMINI_API_KEY"

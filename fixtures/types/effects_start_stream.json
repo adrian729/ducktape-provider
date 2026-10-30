@@ -6,7 +6,7 @@
       "entropy": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     },
     "provider": {
-      "ns": "openai"
+      "vendor": "openai"
     },
     "operation": {
       "type": "stream",

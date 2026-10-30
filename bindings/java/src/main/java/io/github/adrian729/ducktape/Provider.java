@@ -37,7 +37,7 @@ import java.util.function.Supplier;
 
 /** One endpoint of one vendor. */
 public final class Provider {
-    private static final Set<String> NAMESPACES = Set.of("anthropic", "openai", "google", "ollama");
+    private static final Set<String> VENDORS = Set.of("anthropic", "openai", "google", "ollama");
     private static final ExecutorService WORKERS = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "ducktape-worker");
         t.setDaemon(true);
@@ -46,7 +46,7 @@ public final class Provider {
     private static volatile Core defaultCore;
     private static volatile Transport defaultTransport;
 
-    private final String ns;
+    private final String vendor;
     private final ProviderConfig config;
     private final Driver.Host host;
     private final Core core;
@@ -54,26 +54,26 @@ public final class Provider {
     private final Map<String, Capabilities> caps = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile List<ModelInfo> models;
 
-    private Provider(String ns, ProviderConfig config, Driver.Host host, Core core) {
-        this.ns = ns;
+    private Provider(String vendor, ProviderConfig config, Driver.Host host, Core core) {
+        this.vendor = vendor;
         this.config = config;
         this.host = host;
         this.core = core;
     }
 
-    /** Starts configuring a provider for a vendor namespace. */
-    public static Builder builder(String ns) {
-        return new Builder(ns);
+    /** Starts configuring a provider for a vendor. */
+    public static Builder builder(String vendor) {
+        return new Builder(vendor);
     }
 
     /** A provider with every default: key from the environment, no default model. */
-    public static Provider of(String ns) {
-        return builder(ns).build();
+    public static Provider of(String vendor) {
+        return builder(vendor).build();
     }
 
-    /** The vendor namespace. */
-    public String ns() {
-        return ns;
+    /** The vendor the provider speaks to. */
+    public String vendor() {
+        return vendor;
     }
 
     static Core sharedCore() {
@@ -104,7 +104,7 @@ public final class Provider {
 
     /** Configures a Provider. */
     public static final class Builder {
-        private final String ns;
+        private final String vendor;
         private String baseUrl;
         private List<Credential> auth;
         private Map<String, String> headers;
@@ -123,11 +123,11 @@ public final class Provider {
         private Keychain.Reader keychain;
         private Keychain.Writer keychainWrite;
 
-        private Builder(String ns) {
-            if (!NAMESPACES.contains(ns)) {
-                throw new IllegalArgumentException("unknown namespace " + ns + "; one of " + String.join(", ", NAMESPACES));
+        private Builder(String vendor) {
+            if (!VENDORS.contains(vendor)) {
+                throw new IllegalArgumentException("unknown vendor " + vendor + "; one of " + String.join(", ", VENDORS));
             }
-            this.ns = ns;
+            this.vendor = vendor;
         }
 
         public Builder baseUrl(String v) { baseUrl = v; return this; }
@@ -182,7 +182,7 @@ public final class Provider {
                 authDoc = Auth.builder().sources(sources).build();
             }
             ProviderConfig config = ProviderConfig.builder()
-                .ns(ns)
+                .vendor(vendor)
                 .baseUrl(baseUrl == null ? null : baseUrl.replaceAll("/+$", ""))
                 .auth(authDoc)
                 .headers(headers)
@@ -199,7 +199,7 @@ public final class Provider {
             Keychain.Reader reader = keychain == null ? Keychain::read : keychain;
             Keychain.Writer writer = keychainWrite != null ? keychainWrite : keychain == null ? Keychain::write : null;
             Driver.Host host = new Driver.Host(secrets, resolvers, reader, writer, transport == null ? sharedTransport() : transport, observer);
-            return new Provider(ns, config, host, core);
+            return new Provider(vendor, config, host, core);
         }
     }
 

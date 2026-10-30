@@ -7,7 +7,7 @@ import java.util.Map;
 
 /** What a binding hands the core for one Provider */
 public record ProviderConfig(
-    @JsonProperty("ns") String ns,
+    @JsonProperty("vendor") String vendor,
     @JsonProperty("base_url") String baseUrl,
     @JsonProperty("auth") Auth auth,
     @JsonProperty("headers") Map<String, String> headers,
@@ -26,7 +26,7 @@ public record ProviderConfig(
 
     /** Builds a ProviderConfig field by field. */
     public static final class Builder {
-        private String ns;
+        private String vendor;
         private String baseUrl;
         private Auth auth;
         private Map<String, String> headers;
@@ -39,8 +39,8 @@ public record ProviderConfig(
         private Map<String, Map<String, Object>> defaultVendor;
         private Overrides overrides;
         private Boolean strict;
-        /** Vendor namespace, company name */
-        public Builder ns(String value) { this.ns = value; return this; }
+        /** Vendor, company name */
+        public Builder vendor(String value) { this.vendor = value; return this; }
         public Builder baseUrl(String value) { this.baseUrl = value; return this; }
         public Builder auth(Auth value) { this.auth = value; return this; }
         public Builder headers(Map<String, String> value) { this.headers = value; return this; }
@@ -53,6 +53,6 @@ public record ProviderConfig(
         public Builder defaultVendor(Map<String, Map<String, Object>> value) { this.defaultVendor = value; return this; }
         public Builder overrides(Overrides value) { this.overrides = value; return this; }
         public Builder strict(Boolean value) { this.strict = value; return this; }
-        public ProviderConfig build() { return new ProviderConfig(ns, baseUrl, auth, headers, timeout, defaultModel, defaultEmbeddingModel, defaultSystem, defaultTools, defaultOptions, defaultVendor, overrides, strict); }
+        public ProviderConfig build() { return new ProviderConfig(vendor, baseUrl, auth, headers, timeout, defaultModel, defaultEmbeddingModel, defaultSystem, defaultTools, defaultOptions, defaultVendor, overrides, strict); }
     }
 }

@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "anthropic",
+      "vendor": "anthropic",
       "base_url": "https://proxy.example.com/anthropic"
     },
     "operation": {
@@ -43,7 +43,7 @@
             "attempts": 0,
             "origin": {
               "wire": "anthropic.messages",
-              "ns": "anthropic",
+              "vendor": "anthropic",
               "base_url": "https://proxy.example.com/anthropic",
               "model": "claude-opus-5-5"
             }

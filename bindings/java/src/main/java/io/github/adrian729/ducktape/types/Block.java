@@ -79,7 +79,7 @@ public record Block(
         /** Opaque */
         public Builder vendorState(JsonNode value) { this.vendorState = value; return this; }
         public Builder origin(Origin value) { this.origin = value; return this; }
-        /** <ns>.<type> */
+        /** <vendor>.<type> */
         public Builder kind(String value) { this.kind = value; return this; }
         public Block build() { return new Block(type, id, cache, vendor, providerExecuted, text, data, url, fileId, mediaType, name, arguments, truncated, argumentsJson, status, toolCallId, content, isError, vendorState, origin, kind); }
     }

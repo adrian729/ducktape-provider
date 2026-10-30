@@ -34,7 +34,7 @@ def test_response_views():
             "stop": {"reason": "tool_call"},
             "usage": None,
             "warnings": [],
-            "origin": {"wire": "w", "ns": "anthropic", "base_url": "u", "model": "m"},
+            "origin": {"wire": "w", "vendor": "anthropic", "base_url": "u", "model": "m"},
             "latency_ms": 1.0,
         }
     )

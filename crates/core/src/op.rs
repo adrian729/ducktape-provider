@@ -21,24 +21,24 @@ pub const DEFAULT_RETRIES: u32 = 2;
 pub const MAX_CONTINUATIONS: u32 = 10;
 
 /// Default endpoint of each vendor.
-pub fn default_base_url(ns: &Ns) -> Option<&'static str> {
-    match ns {
-        Ns::Anthropic => Some("https://api.anthropic.com"),
-        Ns::Openai => Some("https://api.openai.com"),
-        Ns::Google => Some("https://generativelanguage.googleapis.com"),
-        Ns::Ollama => Some("http://127.0.0.1:11434"),
-        Ns::Other(_) => None,
+pub fn default_base_url(vendor: &Vendor) -> Option<&'static str> {
+    match vendor {
+        Vendor::Anthropic => Some("https://api.anthropic.com"),
+        Vendor::Openai => Some("https://api.openai.com"),
+        Vendor::Google => Some("https://generativelanguage.googleapis.com"),
+        Vendor::Ollama => Some("http://127.0.0.1:11434"),
+        Vendor::Other(_) => None,
     }
 }
 
 /// Codec id of each vendor.
-pub fn wire_of(ns: &Ns) -> Option<&'static str> {
-    match ns {
-        Ns::Anthropic => Some("anthropic.messages"),
-        Ns::Openai => Some("openai.responses"),
-        Ns::Google => Some("google.interactions"),
-        Ns::Ollama => Some("ollama.native"),
-        Ns::Other(_) => None,
+pub fn wire_of(vendor: &Vendor) -> Option<&'static str> {
+    match vendor {
+        Vendor::Anthropic => Some("anthropic.messages"),
+        Vendor::Openai => Some("openai.responses"),
+        Vendor::Google => Some("google.interactions"),
+        Vendor::Ollama => Some("ollama.native"),
+        Vendor::Other(_) => None,
     }
 }
 
@@ -52,15 +52,17 @@ pub struct Endpoint {
 impl Endpoint {
     /// Picks wire and base URL for a config.
     pub fn resolve(config: &ProviderConfig) -> Result<Self, Box<ProviderError>> {
-        let wire = wire_of(&config.ns).ok_or_else(|| {
+        let wire = wire_of(&config.vendor).ok_or_else(|| {
             Box::new(ProviderError::new(
                 ErrorKind::Unsupported,
-                format!("unknown provider namespace {:?}", config.ns.as_str()),
+                format!("unknown vendor {:?}", config.vendor.as_str()),
             ))
         })?;
         let base_url = match &config.base_url {
             Some(url) => url.trim_end_matches('/').to_owned(),
-            None => default_base_url(&config.ns).unwrap_or_default().to_owned(),
+            None => default_base_url(&config.vendor)
+                .unwrap_or_default()
+                .to_owned(),
         };
         Ok(Endpoint { wire, base_url })
     }
@@ -268,7 +270,7 @@ impl Operation {
             }
         };
         let mut op = Operation::new(start.provider, endpoint, job, &start.clock);
-        op.wire = wire::for_ns(&op.config.ns);
+        op.wire = wire::for_vendor(&op.config.vendor);
         let step = op.begin();
         (op, step)
     }
@@ -502,7 +504,7 @@ impl Operation {
             Some(ctx) => ctx.origin(),
             None => Origin {
                 wire: self.endpoint.wire.to_owned(),
-                ns: self.config.ns.clone(),
+                vendor: self.config.vendor.clone(),
                 base_url: self.endpoint.base_url.clone(),
                 model: self.model_hint(),
                 auth_source: None,
@@ -523,7 +525,7 @@ impl Operation {
     fn begin(&mut self) -> Step {
         if let Job::AuthStatus = self.job {
             let sources = auth::sources(
-                &self.config.ns,
+                &self.config.vendor,
                 &self.endpoint.base_url,
                 self.config.auth.as_ref(),
             );
@@ -564,12 +566,12 @@ impl Operation {
             }
         }
         let sources = auth::sources(
-            &self.config.ns,
+            &self.config.vendor,
             &self.endpoint.base_url,
             self.config.auth.as_ref(),
         );
         if sources.is_empty() {
-            if matches!(self.config.ns, Ns::Ollama) {
+            if matches!(self.config.vendor, Vendor::Ollama) {
                 return self.first_request();
             }
             let mut e = self.error(
@@ -643,7 +645,7 @@ impl Operation {
         };
         self.retries = retries;
         self.ctx = Some(CallContext {
-            ns: self.config.ns.clone(),
+            vendor: self.config.vendor.clone(),
             wire: self.endpoint.wire,
             base_url: self.endpoint.base_url.clone(),
             model,
@@ -718,7 +720,7 @@ impl Operation {
                 ..
             } => {
                 let flow = SessionFlow::new(
-                    &self.config.ns,
+                    &self.config.vendor,
                     preset,
                     store.clone(),
                     profile.clone(),
@@ -771,10 +773,10 @@ impl Operation {
         let transport = auth::transport_of(source);
         let kind = transport
             .and_then(|t| t.kind.clone())
-            .unwrap_or_else(|| auth::default_kind(&self.config.ns, source));
+            .unwrap_or_else(|| auth::default_kind(&self.config.vendor, source));
         let placement = transport
             .and_then(|t| t.placement.clone())
-            .unwrap_or_else(|| auth::default_placement(&self.config.ns, &kind));
+            .unwrap_or_else(|| auth::default_placement(&self.config.vendor, &kind));
         let label = auth::label(source);
         if let Job::AuthStatus = self.job {
             return step_done(OperationResult::AuthStatus {
@@ -1433,8 +1435,8 @@ pub fn merge_chat_defaults(req: &mut ChatRequest, config: &ProviderConfig) {
     }
     if let Some(defaults) = &config.default_vendor {
         let v = req.vendor.get_or_insert_with(VendorMap::new);
-        for (ns, fields) in defaults {
-            match (v.get_mut(ns), fields) {
+        for (key, fields) in defaults {
+            match (v.get_mut(key), fields) {
                 (Some(Value::Object(existing)), Value::Object(incoming)) => {
                     for (k, val) in incoming {
                         existing.entry(k.clone()).or_insert_with(|| val.clone());
@@ -1442,7 +1444,7 @@ pub fn merge_chat_defaults(req: &mut ChatRequest, config: &ProviderConfig) {
                 }
                 (Some(_), _) => {}
                 (None, _) => {
-                    v.insert(ns.clone(), fields.clone());
+                    v.insert(key.clone(), fields.clone());
                 }
             }
         }

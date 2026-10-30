@@ -110,7 +110,7 @@ impl Encoder<'_> {
                 self.marks |= t.meta.cache.is_some();
                 o.insert("type".into(), json!("text"));
                 o.insert("text".into(), json!(t.text));
-                apply_vendor(&mut o, t.meta.vendor.as_ref(), &self.ctx.ns);
+                apply_vendor(&mut o, t.meta.vendor.as_ref(), &self.ctx.vendor);
             }
             Block::Image(b) => {
                 self.marks |= b.meta.cache.is_some();
@@ -134,7 +134,7 @@ impl Encoder<'_> {
                     self.warn("image", "image block needs data, url or file_id");
                     return None;
                 }
-                apply_vendor(&mut o, b.meta.vendor.as_ref(), &self.ctx.ns);
+                apply_vendor(&mut o, b.meta.vendor.as_ref(), &self.ctx.vendor);
             }
             Block::Document(b) => {
                 self.marks |= b.meta.cache.is_some();
@@ -162,7 +162,7 @@ impl Encoder<'_> {
                             .unwrap_or_else(|| "application/pdf".to_owned())),
                     );
                 }
-                apply_vendor(&mut o, b.meta.vendor.as_ref(), &self.ctx.ns);
+                apply_vendor(&mut o, b.meta.vendor.as_ref(), &self.ctx.vendor);
             }
             other => {
                 self.warn(
@@ -254,7 +254,7 @@ impl Encoder<'_> {
         if let Some(true) = r.is_error {
             o.insert("is_error".into(), json!(true));
         }
-        apply_vendor(&mut o, r.meta.vendor.as_ref(), &self.ctx.ns);
+        apply_vendor(&mut o, r.meta.vendor.as_ref(), &self.ctx.vendor);
         Value::Object(o)
     }
 
@@ -280,7 +280,7 @@ impl Encoder<'_> {
                     o.insert("id".into(), json!(c.id));
                     o.insert("name".into(), json!(c.name));
                     o.insert("arguments".into(), c.arguments.clone());
-                    apply_vendor(&mut o, c.meta.vendor.as_ref(), &self.ctx.ns);
+                    apply_vendor(&mut o, c.meta.vendor.as_ref(), &self.ctx.vendor);
                     out.push(Value::Object(o));
                 }
                 Block::Reasoning(r) => {
@@ -331,7 +331,7 @@ impl Encoder<'_> {
                     if d.cache.is_some() {
                         self.marks = true;
                     }
-                    apply_vendor(&mut o, d.vendor.as_ref(), &self.ctx.ns);
+                    apply_vendor(&mut o, d.vendor.as_ref(), &self.ctx.vendor);
                     out.push(Value::Object(o));
                 }
                 Tool::Provider(p) => {
@@ -529,7 +529,7 @@ impl Wire for GoogleInteractions {
         if enc.marks && !matches!(cache_policy, CachePolicy::None) {
             enc.warn("cache", "Google caches implicitly; cache marks are ignored");
         }
-        let mut vendor = vendor_for(req.vendor.as_ref(), &ctx.ns).cloned();
+        let mut vendor = vendor_for(req.vendor.as_ref(), &ctx.vendor).cloned();
         if let Some(v) = vendor.as_mut() {
             if let Some(Value::Object(extra)) = v.remove("generation_config") {
                 for (k, val) in extra {
@@ -587,7 +587,7 @@ impl Wire for GoogleInteractions {
 
     fn build_embed(&self, ctx: &CallContext, req: &EmbedRequest) -> Result<Built, ProviderError> {
         let model_name = format!("models/{}", ctx.model);
-        let vendor = vendor_for(req.vendor.as_ref(), &ctx.ns);
+        let vendor = vendor_for(req.vendor.as_ref(), &ctx.vendor);
         let dims = req.options.as_ref().and_then(|o| o.dimensions);
         let mut requests = Vec::with_capacity(req.input.len());
         for text in &req.input {

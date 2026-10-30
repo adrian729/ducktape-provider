@@ -70,7 +70,7 @@ public sealed record Block
     [JsonPropertyName("origin")]
     public Origin? Origin { get; init; }
 
-    /// <summary>&lt;ns&gt;.&lt;type&gt;</summary>
+    /// <summary>&lt;vendor&gt;.&lt;type&gt;</summary>
     [JsonPropertyName("kind")]
     public string? Kind { get; init; }
 }

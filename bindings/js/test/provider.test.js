@@ -14,7 +14,7 @@ function provider(name, options = {}) {
   const fixture = anthropic(name);
   const seen = [];
   const config = fixture.start.provider;
-  const p = new Provider(config.ns, { base_url: config.base_url, auth: "sk-ant-test-key", fetch: scripted(fixture, seen), ...options });
+  const p = new Provider(config.vendor, { base_url: config.base_url, auth: "sk-ant-test-key", fetch: scripted(fixture, seen), ...options });
   return { p, fixture, seen };
 }
 

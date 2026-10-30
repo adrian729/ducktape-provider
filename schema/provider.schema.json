@@ -6,7 +6,7 @@
   "$defs": {
     "VendorMap": {
       "type": "object",
-      "description": "Vendor-specific passthrough keyed by namespace",
+      "description": "Vendor-specific passthrough keyed by vendor",
       "propertyNames": {
         "type": "string"
       },
@@ -39,7 +39,7 @@
         "wire": {
           "type": "string"
         },
-        "ns": {
+        "vendor": {
           "anyOf": [
             {
               "enum": [
@@ -53,7 +53,7 @@
               "type": "string"
             }
           ],
-          "description": "Vendor namespace, company name"
+          "description": "Vendor, company name"
         },
         "base_url": {
           "type": "string",
@@ -69,7 +69,7 @@
       },
       "required": [
         "wire",
-        "ns",
+        "vendor",
         "base_url",
         "model"
       ],
@@ -417,7 +417,7 @@
         "kind": {
           "type": "string",
           "pattern": "^[a-z0-9_]+\\.[A-Za-z0-9_.-]+$",
-          "description": "<ns>.<type>"
+          "description": "<vendor>.<type>"
         },
         "data": {},
         "origin": {
@@ -1912,7 +1912,7 @@
     "ProviderConfig": {
       "type": "object",
       "properties": {
-        "ns": {
+        "vendor": {
           "anyOf": [
             {
               "enum": [
@@ -1926,7 +1926,7 @@
               "type": "string"
             }
           ],
-          "description": "Vendor namespace, company name"
+          "description": "Vendor, company name"
         },
         "base_url": {
           "type": "string",
@@ -1976,7 +1976,7 @@
         }
       },
       "required": [
-        "ns"
+        "vendor"
       ],
       "description": "What a binding hands the core for one Provider"
     }

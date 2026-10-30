@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "openai",
+      "vendor": "openai",
       "base_url": "https://proxy.example.com/openai",
       "auth": {
         "sources": [
@@ -182,7 +182,7 @@
                   },
                   "origin": {
                     "wire": "openai.responses",
-                    "ns": "openai",
+                    "vendor": "openai",
                     "base_url": "https://proxy.example.com/openai",
                     "model": "gpt-5.5",
                     "auth_source": "env:PROXY_KEY"
@@ -224,7 +224,7 @@
               "warnings": [],
               "origin": {
                 "wire": "openai.responses",
-                "ns": "openai",
+                "vendor": "openai",
                 "base_url": "https://proxy.example.com/openai",
                 "model": "gpt-5.5",
                 "auth_source": "env:PROXY_KEY"

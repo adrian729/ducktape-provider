@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "openai",
+      "vendor": "openai",
       "auth": {
         "sources": [
           {
@@ -174,7 +174,7 @@
             "attempts": 0,
             "origin": {
               "wire": "openai.responses",
-              "ns": "openai",
+              "vendor": "openai",
               "base_url": "https://api.openai.com",
               "model": "gpt-5"
             }

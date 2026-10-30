@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "anthropic",
+      "vendor": "anthropic",
       "auth": {
         "sources": [
           {
@@ -281,7 +281,7 @@
                   },
                   "origin": {
                     "wire": "anthropic.messages",
-                    "ns": "anthropic",
+                    "vendor": "anthropic",
                     "base_url": "https://proxy.example.com/anthropic",
                     "model": "claude-opus-5-5",
                     "auth_source": "session:anthropic_profile"
@@ -315,7 +315,7 @@
               "warnings": [],
               "origin": {
                 "wire": "anthropic.messages",
-                "ns": "anthropic",
+                "vendor": "anthropic",
                 "base_url": "https://proxy.example.com/anthropic",
                 "model": "claude-opus-5-5",
                 "auth_source": "session:anthropic_profile"

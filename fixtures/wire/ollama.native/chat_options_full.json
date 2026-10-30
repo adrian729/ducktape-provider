@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "ollama"
+      "vendor": "ollama"
     },
     "operation": {
       "type": "chat",
@@ -269,7 +269,7 @@
               ],
               "origin": {
                 "wire": "ollama.native",
-                "ns": "ollama",
+                "vendor": "ollama",
                 "base_url": "http://127.0.0.1:11434",
                 "model": "qwen3"
               },

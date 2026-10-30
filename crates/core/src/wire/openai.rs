@@ -57,7 +57,7 @@ impl Encoder<'_> {
                 target.insert("prompt_cache_breakpoint".into(), breakpoint(mark));
             }
         }
-        apply_vendor(target, meta.vendor.as_ref(), &self.ctx.ns);
+        apply_vendor(target, meta.vendor.as_ref(), &self.ctx.vendor);
     }
 
     fn input_part(&mut self, block: &Block) -> Result<Option<Value>, ProviderError> {
@@ -233,7 +233,7 @@ impl Encoder<'_> {
                 Block::Text(t) => {
                     pending_text
                         .push(json!({"type": "output_text", "text": t.text, "annotations": []}));
-                    if let Some(extra) = vendor_for(t.meta.vendor.as_ref(), &self.ctx.ns) {
+                    if let Some(extra) = vendor_for(t.meta.vendor.as_ref(), &self.ctx.vendor) {
                         for (k, v) in extra {
                             pending_vendor.insert(k.clone(), v.clone());
                         }
@@ -255,7 +255,7 @@ impl Encoder<'_> {
                     if let Some(id) = &c.meta.id {
                         o.insert("id".into(), json!(id));
                     }
-                    apply_vendor(&mut o, c.meta.vendor.as_ref(), &self.ctx.ns);
+                    apply_vendor(&mut o, c.meta.vendor.as_ref(), &self.ctx.vendor);
                     out.push(Value::Object(o));
                 }
                 Block::Reasoning(r) => {
@@ -317,7 +317,7 @@ impl Encoder<'_> {
                     if d.cache.is_some() {
                         self.warn("cache", "cache marks on tools are not supported on OpenAI");
                     }
-                    apply_vendor(&mut o, d.vendor.as_ref(), &self.ctx.ns);
+                    apply_vendor(&mut o, d.vendor.as_ref(), &self.ctx.vendor);
                     out.push(Value::Object(o));
                 }
                 Tool::Provider(p) => {
@@ -522,7 +522,7 @@ impl Wire for OpenaiResponses {
             body.user("safety_identifier", json!(uid));
         }
         body.warnings.append(&mut enc.warnings);
-        body.merge_vendor(vendor_for(req.vendor.as_ref(), &ctx.ns))?;
+        body.merge_vendor(vendor_for(req.vendor.as_ref(), &ctx.vendor))?;
         body.enforce_strict(ctx.strict)?;
         let mut headers = base_headers(ctx);
         for (k, v) in req.headers.iter().flatten() {
@@ -564,7 +564,7 @@ impl Wire for OpenaiResponses {
         if let Some(d) = req.options.as_ref().and_then(|o| o.dimensions) {
             body.user("dimensions", json!(d));
         }
-        body.merge_vendor(vendor_for(req.vendor.as_ref(), &ctx.ns))?;
+        body.merge_vendor(vendor_for(req.vendor.as_ref(), &ctx.vendor))?;
         if body.map.get("encoding_format").and_then(Value::as_str) == Some("base64") {
             return Err(argument_error(
                 "encoding_format base64 is not supported; vectors are always floats",

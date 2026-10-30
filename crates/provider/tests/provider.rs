@@ -177,7 +177,7 @@ fn last_text(fixture: &WireFixture) -> String {
 }
 
 fn provider(fixture: &WireFixture, server: Arc<Scripted>) -> Provider {
-    let mut b = Provider::builder(fixture.start.provider.ns.clone())
+    let mut b = Provider::builder(fixture.start.provider.vendor.clone())
         .transport(server)
         .auth([Credential::key("sk-ant-test-key")]);
     if let Some(url) = &fixture.start.provider.base_url {

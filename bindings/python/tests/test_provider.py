@@ -46,7 +46,7 @@ def provider(name, **kwargs):
     client = httpx.Client(transport=httpx.MockTransport(scripted(fixture, seen)))
     config = fixture["start"]["provider"]
     kwargs.setdefault("auth", "sk-ant-test-key")
-    p = Provider(config["ns"], client=client, base_url=config.get("base_url"), **kwargs)
+    p = Provider(config["vendor"], client=client, base_url=config.get("base_url"), **kwargs)
     return p, fixture, seen
 
 

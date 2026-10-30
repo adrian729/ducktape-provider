@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "openai"
+      "vendor": "openai"
     },
     "operation": {
       "type": "capabilities",

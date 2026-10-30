@@ -7,7 +7,7 @@
       "entropy": "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA="
     },
     "provider": {
-      "ns": "openai",
+      "vendor": "openai",
       "auth": {
         "sources": [
           {
@@ -312,7 +312,7 @@
                   },
                   "origin": {
                     "wire": "openai.responses",
-                    "ns": "openai",
+                    "vendor": "openai",
                     "base_url": "https://chatgpt.com/backend-api/codex",
                     "model": "gpt-5",
                     "auth_source": "session:codex"
@@ -354,7 +354,7 @@
               "warnings": [],
               "origin": {
                 "wire": "openai.responses",
-                "ns": "openai",
+                "vendor": "openai",
                 "base_url": "https://chatgpt.com/backend-api/codex",
                 "model": "gpt-5",
                 "auth_source": "session:codex"
