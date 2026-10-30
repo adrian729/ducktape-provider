@@ -135,26 +135,35 @@ public final class Keychain {
     }
 
     private static byte[] run(List<String> argv, Map<String, String> env, byte[] stdin) {
+        Process p = null;
         try {
-            ProcessBuilder pb = new ProcessBuilder(argv).redirectErrorStream(false);
+            ProcessBuilder pb = new ProcessBuilder(argv).redirectError(ProcessBuilder.Redirect.DISCARD);
             pb.environment().putAll(env);
-            Process p = pb.start();
+            p = pb.start();
+            Process started = p;
             try (var in = p.getOutputStream()) {
                 if (stdin != null) {
                     in.write(stdin);
                 }
             }
-            byte[] out = readAll(p.getInputStream());
+            java.util.concurrent.FutureTask<byte[]> out = new java.util.concurrent.FutureTask<>(() -> readAll(started.getInputStream()));
+            Thread reader = new Thread(out, "ducktape-keychain");
+            reader.setDaemon(true);
+            reader.start();
             if (!p.waitFor(10, TimeUnit.SECONDS)) {
-                p.destroyForcibly();
                 return null;
             }
-            return p.exitValue() == 0 ? out : null;
-        } catch (IOException | InterruptedException | RuntimeException e) {
+            byte[] bytes = out.get(1, TimeUnit.SECONDS);
+            return p.exitValue() == 0 ? bytes : null;
+        } catch (IOException | InterruptedException | RuntimeException | java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
             return null;
+        } finally {
+            if (p != null && p.isAlive()) {
+                p.destroyForcibly();
+            }
         }
     }
 

@@ -56,9 +56,7 @@ public final class Stream implements Iterator<Event>, Iterable<Event>, AutoClose
         if (next == END) {
             await();
             if (failure != null) {
-                RuntimeException f = failure;
-                failure = null;
-                throw f;
+                throw failure;
             }
             return false;
         }
@@ -75,9 +73,12 @@ public final class Stream implements Iterator<Event>, Iterable<Event>, AutoClose
         return ev;
     }
 
-    /** The final response once the stream finished, or null before that. */
+    /** The final response once the stream finished; throws the stream's failure if it had one. */
     public Response response() {
         await();
+        if (failure != null) {
+            throw failure;
+        }
         return response;
     }
 

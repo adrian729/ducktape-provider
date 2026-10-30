@@ -50,9 +50,9 @@ public final class Provider {
     private final ProviderConfig config;
     private final Driver.Host host;
     private final Core core;
-    private final Map<String, ModelInfo> infos = new HashMap<>();
-    private final Map<String, Capabilities> caps = new HashMap<>();
-    private List<ModelInfo> models;
+    private final Map<String, ModelInfo> infos = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Capabilities> caps = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile List<ModelInfo> models;
 
     private Provider(String ns, ProviderConfig config, Driver.Host host, Core core) {
         this.ns = ns;
@@ -256,7 +256,7 @@ public final class Provider {
         WORKERS.submit(() -> {
             try {
                 future.complete(Json.as(run(operation("chat", request), null, null, cancel).get("response"), Response.class));
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
                 future.completeExceptionally(e);
             }
         });
@@ -283,8 +283,11 @@ public final class Provider {
                 run(operation("stream", request), s::push, null, s.cancel());
             } catch (RuntimeException e) {
                 failure = e;
+            } catch (Throwable e) {
+                failure = new IllegalStateException(e);
+            } finally {
+                s.finish(failure);
             }
-            s.finish(failure);
         });
         return s;
     }
@@ -313,9 +316,10 @@ public final class Provider {
     }
 
     /** Lists the models the endpoint serves; cached after the first call unless refresh is set. */
-    public synchronized List<ModelInfo> models(boolean refresh) {
-        if (models != null && !refresh) {
-            return models;
+    public List<ModelInfo> models(boolean refresh) {
+        List<ModelInfo> cached = models;
+        if (cached != null && !refresh) {
+            return cached;
         }
         JsonNode result = run(operation("models", null).put("refresh", refresh), null, null, null);
         List<ModelInfo> out = new ArrayList<>();
@@ -327,7 +331,7 @@ public final class Provider {
     }
 
     /** Describes one model. */
-    public synchronized ModelInfo modelInfo(String id) {
+    public ModelInfo modelInfo(String id) {
         ModelInfo cached = infos.get(id);
         if (cached != null) {
             return cached;
@@ -343,7 +347,7 @@ public final class Provider {
     }
 
     /** Tells what a model supports. */
-    public synchronized Capabilities capabilities(String model) {
+    public Capabilities capabilities(String model) {
         Capabilities cached = caps.get(model);
         if (cached != null) {
             return cached;

@@ -243,6 +243,10 @@ final class Driver {
         }
         body = reply.body();
         cancel.body = body;
+        if (cancel.flag) {
+            closeBody();
+            return Json.object().put("type", "cancelled");
+        }
         ObjectNode headerNode = Json.object();
         reply.headers().forEach((k, v) -> headerNode.put(k.toLowerCase(java.util.Locale.ROOT), v));
         ObjectNode in = Json.object().put("type", "http_response").put("status", reply.status());
@@ -252,48 +256,53 @@ final class Driver {
 
     private JsonNode receive() {
         pendingInput = null;
-        if (body == null) {
-            pendingInput = Json.object().put("type", "http_end");
-            return null;
+        while (true) {
+            if (body == null) {
+                pendingInput = Json.object().put("type", "http_end");
+                return null;
+            }
+            Duration wait = readTimeout;
+            if (deadline != 0) {
+                Duration left = Duration.ofMillis(Math.max(0, deadline - System.currentTimeMillis()));
+                wait = wait == null || left.compareTo(wait) < 0 ? left : wait;
+            }
+            java.nio.ByteBuffer chunk;
+            try {
+                chunk = body.next(wait);
+            } catch (IOException e) {
+                closeBody();
+                pendingInput = cancel.flag ? Json.object().put("type", "cancelled") : transportError(classify(e), e.getMessage());
+                return null;
+            }
+            if (cancel.flag) {
+                closeBody();
+                pendingInput = Json.object().put("type", "cancelled");
+                return null;
+            }
+            if (chunk == null) {
+                closeBody();
+                pendingInput = Json.object().put("type", "http_end");
+                return null;
+            }
+            int n = chunk.remaining();
+            if (n == 0) {
+                continue;
+            }
+            if (buffer.length < n) {
+                buffer = new byte[n];
+            }
+            chunk.get(buffer, 0, n);
+            return op.feed(buffer, n, clock());
         }
-        Duration wait = readTimeout;
-        if (deadline != 0) {
-            Duration left = Duration.ofMillis(Math.max(0, deadline - System.currentTimeMillis()));
-            wait = wait == null || left.compareTo(wait) < 0 ? left : wait;
-        }
-        java.nio.ByteBuffer chunk;
-        try {
-            chunk = body.next(wait);
-        } catch (IOException e) {
-            closeBody();
-            pendingInput = cancel.flag ? Json.object().put("type", "cancelled") : transportError(classify(e), e.getMessage());
-            return null;
-        }
-        if (cancel.flag) {
-            closeBody();
-            pendingInput = Json.object().put("type", "cancelled");
-            return null;
-        }
-        if (chunk == null) {
-            closeBody();
-            pendingInput = Json.object().put("type", "http_end");
-            return null;
-        }
-        int n = chunk.remaining();
-        if (n == 0) {
-            return receive();
-        }
-        if (buffer.length < n) {
-            buffer = new byte[n];
-        }
-        chunk.get(buffer, 0, n);
-        return op.feed(buffer, n, clock());
     }
 
     static String classify(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t instanceof HttpConnectTimeoutException || t instanceof HttpTimeoutException) {
+            if (t instanceof HttpConnectTimeoutException || t instanceof HttpTimeoutException || t instanceof java.net.SocketTimeoutException || t instanceof java.io.InterruptedIOException) {
                 return "timeout";
+            }
+            if (t instanceof java.io.EOFException || t instanceof java.nio.channels.ClosedChannelException || t instanceof java.net.SocketException) {
+                return "reset";
             }
             if (t instanceof UnknownHostException) {
                 return "dns";
@@ -408,15 +417,13 @@ final class Driver {
         boolean isPrivate = effect.path("private").asBoolean(true);
         try {
             Path dir = path.toAbsolutePath().getParent();
-            Files.createDirectories(dir);
+            createPrivateDirectories(dir);
             Path tmp = Files.createTempFile(dir, path.getFileName().toString(), ".tmp");
             try {
                 Files.write(tmp, data);
-                if (isPrivate) {
-                    try {
-                        Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------"));
-                    } catch (UnsupportedOperationException ignored) {
-                    }
+                try {
+                    Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString(isPrivate ? "rw-------" : "rw-r--r--"));
+                } catch (UnsupportedOperationException ignored) {
                 }
                 Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } finally {
@@ -425,6 +432,19 @@ final class Driver {
             return Json.object().put("type", "written").put("ok", true);
         } catch (IOException | RuntimeException e) {
             return failed;
+        }
+    }
+
+    private static void createPrivateDirectories(Path dir) throws IOException {
+        if (dir == null || Files.isDirectory(dir)) {
+            return;
+        }
+        createPrivateDirectories(dir.getParent());
+        try {
+            Files.createDirectory(dir, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        } catch (UnsupportedOperationException e) {
+            Files.createDirectory(dir);
+        } catch (java.nio.file.FileAlreadyExistsException ignored) {
         }
     }
 

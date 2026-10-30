@@ -38,12 +38,13 @@ public interface Transport {
         return (request, headersTimeout) -> {
             HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(request.url()));
             b.method(request.method(), request.body() == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(request.body()));
-            request.headers().forEach((k, v) -> {
+            for (Map.Entry<String, String> h : request.headers().entrySet()) {
                 try {
-                    b.header(k, v);
-                } catch (IllegalArgumentException ignored) {
+                    b.header(h.getKey(), h.getValue());
+                } catch (IllegalArgumentException e) {
+                    throw new IOException("the HTTP client refuses the header " + h.getKey() + ": " + e.getMessage(), e);
                 }
-            });
+            }
             if (headersTimeout != null) {
                 b.timeout(headersTimeout);
             }
