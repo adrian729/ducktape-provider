@@ -19,6 +19,7 @@ Status: in development, not released. The interface is frozen in [`docs/ducktape
 | `crates/abi` | `extern "C"` surface, built natively and as `core.wasm` |
 | `crates/conformance` | Fixture runner |
 | `crates/py` | PyO3 module behind the Python package |
+| `crates/provider` | Rust crate: `Provider`, streams, messages, errors, optional `reqwest` transport |
 | `bindings/python` | Python package: `Provider`, `AsyncProvider`, messages, errors |
 | `bindings/js` | npm package on `core.wasm`: `Provider`, streams, messages, errors, `index.d.ts` |
 | `bindings/go` | Go module on `core.wasm` through wazero: `Provider`, streams, messages, errors |
@@ -289,6 +290,55 @@ if (r.Stop?.Reason == StopReason.ToolCall)
 
 Every error is a `ProviderException` with `Kind`, `Code`, `Status`, `Retryable` and the full `Error` record; `e.Is(ErrorKind.RateLimit)` matches by kind. Argument mistakes throw `ArgumentException` before any request. Types are records generated from the JSON schema into [`bindings/dotnet/Ducktape.Provider/Types`](bindings/dotnet/Ducktape.Provider/Types) with init-only properties; unions are one record with a `Type` field that says which fields apply, and open enums are `string` properties with the known values as constants (`Role.User`, `StopReason.ToolCall`). The schema's `Timeout` is called `Timeouts` in C#.
 
+## Rust
+
+Not on crates.io yet. Depend on the crate by path (`ducktape-provider = { path = "crates/provider" }`); the default `reqwest` feature brings the HTTP transport, and every call needs a tokio runtime:
+
+```rust
+use ducktape_provider::*;
+
+let p = Provider::builder("anthropic").default_model("claude-opus-5-5").build()?;   // key from ANTHROPIC_API_KEY
+let r = p.chat([user("hello")]).await?;
+println!("{} {:?} {:?}", r.text(), r.usage, r.stop.reason);
+
+let mut s = p.chat([user("tell me a story")]).stream()?;
+while let Some(ev) = s.next().await {
+    if let Event::TextDelta { text, .. } = ev? {
+        print!("{text}");
+    }
+}
+
+let add = function_tool("add", "Adds two numbers", serde_json::json!({"type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}}}));
+let mut history = vec![user("what is 2+2?")];
+let mut r = p.chat(history.clone()).tools([add.clone()]).await?;
+if r.stop.reason == StopReason::ToolCall {
+    let call = r.tool_calls()[0].clone();
+    history.push(assistant(&r));
+    history.push(tool(tool_result(&call.id, "4")));
+    r = p.chat(history.clone()).tools([add]).await?;
+}
+```
+
+| Need | Write |
+|---|---|
+| Another host, same wire | `Provider::builder("openai").base_url("https://api.groq.com/openai").auth([Credential::env(["GROQ_API_KEY"])]).build()?` |
+| A key in code | `.auth([Credential::key("sk-ant-...")])` |
+| A token fetched at request time | `.auth([Credential::resolver(fetch_token)])` where `fetch_token` is any `async fn() -> Result<String, E>` with a displayable `E` |
+| An existing login | `Credential::session("codex")`, `Credential::session("anthropic_profile").profile("work")` |
+| Refreshing another tool's login | `Credential::session("codex").refresh("memory")` or `.refresh("write_back")`, same meaning as in Python |
+| Login state | `p.auth_status().await?` gives `source`, `expires_at` and `session` |
+| Several sources in order | `.auth([Credential::session("claude_code"), Credential::env(["ANTHROPIC_API_KEY"])])` |
+| Your own keychain | `.keychain(reader)` and `.keychain_write(writer)`, a `keychain::Reader` and a `keychain::Writer` (`Arc` of a closure over service and account); the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
+| Cancel | drop the future or the stream, or `s.cancel()` |
+| Options and vendor fields | `p.chat(msgs).options(Options { reasoning: Some(ReasoningLevel::High), ..Default::default() }).vendor(vendor)` |
+| Images | `user([text("what is this?"), image(&png_bytes, "image/png")])` or `image_url("https://...")` |
+| Embeddings | `Provider::builder("openai").default_embedding_model("text-embedding-3-small").build()?.embed(["a", "b"]).await?.embeddings` |
+| Discovery | `p.models(false).await?`, `p.model_info("gpt-5").await?`, `p.capabilities("gpt-5").await?` |
+| Your own `reqwest` client | `.transport(Arc::new(ReqwestTransport::new(client)))` |
+| Your own transport | implement `transport::Transport` and `transport::Body`, then `.transport(Arc::new(mine))`; `default-features = false` drops `reqwest` |
+
+Every error is an `Error`: `Error::Argument(String)` for argument mistakes caught before any request, `Error::Provider(ProviderError)` for everything else, with `kind`, `status`, `code`, `retryable`, `retry_after`, `attempts`, `body`, `request_id` and `origin`; `e.is(ErrorKind::RateLimit)` matches by kind. Types are the core's own Rust types, re-exported at the crate root and documented by [`schema/provider.schema.json`](schema/provider.schema.json); open enums are enums with an `Other(String)` variant.
+
 ## C
 
 Not released yet. Build the libraries, then point CMake at them; the header is [`bindings/c/include/ducktape.h`](bindings/c/include/ducktape.h):
@@ -317,6 +367,7 @@ cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --profile wasm --target wasm32-unknown-unknown -p ducktape-abi
+cargo test -p ducktape-provider --no-default-features
 pip install jsonschema referencing && python scripts/check_fixtures.py .
 python scripts/gen_dts.py . --check
 python scripts/gen_go_types.py . --check

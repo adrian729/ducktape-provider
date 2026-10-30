@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/abi", "crates/conformance", "crates/py"]
-default-members = ["crates/core", "crates/abi", "crates/conformance", "crates/py"]
+members = ["crates/core", "crates/abi", "crates/conformance", "crates/py", "crates/provider"]
+default-members = ["crates/core", "crates/abi", "crates/conformance", "crates/py", "crates/provider"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,6 +17,10 @@ serde_json = { version = "1.0.140", features = ["raw_value"] }
 base64 = "0.22.1"
 zeroize = "1.8.1"
 sha2 = "0.11"
+tokio = { version = "1.47", features = ["time", "sync", "rt"] }
+futures-core = "0.3.31"
+getrandom = "0.4"
+reqwest = "0.13"
 
 [profile.release]
 lto = "fat"

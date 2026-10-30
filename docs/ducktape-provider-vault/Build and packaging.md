@@ -82,7 +82,7 @@ crates/
   abi/                  ducktape-abi: extern "C" surface; crate-type cdylib + staticlib; cbindgen header
                         native target -> C/C++ and .NET; wasm32-unknown-unknown target -> core.wasm
   py/                   ducktape-py: PyO3 module (maturin); not in default-members
-  provider/             (phase 2) ducktape-provider: Rust API + optional reqwest feature -> crates.io
+  provider/             (done) ducktape-provider: Rust API + optional reqwest feature -> crates.io
   conformance/          fixture runner for core, abi (JSON) and the PyO3 objects; publish = false
 bindings/
   js/  go/  java/  dotnet/  c/  python/     thin host glue + per-language conformance runners
