@@ -156,7 +156,7 @@ jobs:
       - run: mkdir -p bindings/dotnet/runtimes/linux-x64/native && cp target/release/libducktape_abi.so bindings/dotnet/runtimes/linux-x64/native/
       - run: dotnet test
         working-directory: bindings/dotnet
-      - run: dotnet pack Ducktape.Provider/Ducktape.Provider.csproj -c Release -o ../../dist/dotnet
+      - run: dotnet pack Ducktape.Provider/Ducktape.Provider.csproj -c Release -o dist
         working-directory: bindings/dotnet
 
   c:
