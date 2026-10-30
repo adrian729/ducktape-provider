@@ -130,7 +130,7 @@ Single-runner alternative: zig + xwin on one Linux box can build every native ta
 
 ### Status (2026-10-30)
 
-The build matrix above is wired as `.github/workflows/package.yml` for wheels (abi3, five targets), the sdist and the npm tarball with `wasm-opt`; artifacts only, no publishing yet. The Go tree builds and tests in the CI `go` job against a freshly built `core.wasm`; the file is still gitignored and gets committed only at release commits (decision 13). The C, .NET and Java artifacts are not built yet.
+The build matrix above is wired as `.github/workflows/package.yml` for wheels (abi3, five targets), the sdist and the npm tarball with `wasm-opt`; artifacts only, no publishing yet. The Go tree builds and tests in the CI `go` job against a freshly built `core.wasm`; the file is still gitignored and gets committed only at release commits (decision 13). The Java module builds and tests in the CI `java` job the same way, with the Chicory build-time compiler turning `core.wasm` into classes inside the jar, so the published jar needs no wasm file and no runtime compile. The C and .NET artifacts are not built yet.
 
 ## 4. Release and distribution
 

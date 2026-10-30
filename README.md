@@ -22,6 +22,7 @@ Status: in development, not released. The interface is frozen in [`docs/ducktape
 | `bindings/python` | Python package: `Provider`, `AsyncProvider`, messages, errors |
 | `bindings/js` | npm package on `core.wasm`: `Provider`, streams, messages, errors, `index.d.ts` |
 | `bindings/go` | Go module on `core.wasm` through wazero: `Provider`, streams, messages, errors |
+| `bindings/java` | Maven module on `core.wasm` compiled to bytecode by Chicory: `Provider`, streams, messages, errors |
 | `fixtures/` | Samples every binding must pass |
 
 ## Python
@@ -175,6 +176,60 @@ if r.Stop.Reason == ducktape.StopReasonToolCall {
 
 Every error is a `*ducktape.ProviderError` with `Kind`, `Status`, `Code`, `Retryable`, `RetryAfter`, `Attempts`, `Body`, `RequestID` and `Origin`; `errors.Is(err, ducktape.ErrRateLimit)` matches by kind (one sentinel per kind). Argument mistakes return a plain error before any request. Types are generated from the JSON schema into [`bindings/go/types_gen.go`](bindings/go/types_gen.go); unions are one struct with a `Type` field that says which fields apply.
 
+## Java
+
+Not on Maven Central yet. Build the wasm core into the module, then `mvn install` it (Java 17+):
+
+```
+cargo build --profile wasm --target wasm32-unknown-unknown -p ducktape-abi && cp target/wasm32-unknown-unknown/wasm/ducktape_abi.wasm bindings/java/core.wasm && cd bindings/java && mvn -B install
+```
+
+```java
+import io.github.adrian729.ducktape.*;
+import io.github.adrian729.ducktape.types.*;
+import static io.github.adrian729.ducktape.Ducktape.*;
+
+Provider p = Provider.builder("anthropic").defaultModel("claude-opus-5-5").build();   // key from ANTHROPIC_API_KEY
+Response r = p.chat(List.of(user("hello")));
+System.out.println(textOf(r) + " " + r.usage() + " " + r.stop().reason());
+
+try (Stream s = p.stream(List.of(user("tell me a story")))) {
+    for (Event ev : s) {
+        if (ev.type().equals("text_delta")) System.out.print(ev.text());
+    }
+}
+
+Tool add = functionTool("add", "Adds two numbers", Map.of("type", "object", "properties", Map.of("a", Map.of("type", "number"), "b", Map.of("type", "number"))));
+List<Message> history = new ArrayList<>(List.of(user("what is 2+2?")));
+r = p.chat(history, ChatOptions.builder().tools(add).build());
+if (r.stop().reason().equals("tool_call")) {
+    Block call = toolCallsOf(r).get(0);
+    history.add(assistant(r));
+    history.add(tool(toolResult(call.id(), "4")));
+    r = p.chat(history, ChatOptions.builder().tools(add).build());
+}
+```
+
+| Need | Write |
+|---|---|
+| Another host, same wire | `Provider.builder("openai").baseUrl("https://api.groq.com/openai").auth(Credential.env("GROQ_API_KEY")).build()` |
+| A key in code | `.auth(Credential.key("sk-ant-..."))` |
+| A token fetched at request time | `.auth(Credential.resolver(() -> fetchToken()))` |
+| An existing login | `Credential.session("codex")`, `Credential.session("anthropic_profile", null, null, "work", null)` (store, client id, profile, refresh) |
+| Refreshing another tool's login | `Credential.session("codex", null, null, null, "memory")` or `"write_back"`, same meaning as in Python |
+| Login state | `p.authStatus()` gives `source()`, `expiresAt()` and `session()` |
+| Several sources in order | `.auth(Credential.session("claude_code"), Credential.env("ANTHROPIC_API_KEY"))` |
+| Your own keychain | `.keychain((service, account) -> ...)` and `.keychainWrite((service, account, value) -> true)`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
+| Cancel | `stream.close()`, or `p.chatAsync(msgs, options).cancel(true)` |
+| Options and vendor fields | `ChatOptions.builder().options(Options.builder().reasoning("high").build()).vendor(Map.of("openai", Map.of("temperature", 0.2))).build()` |
+| Images | `user(text("what is this?"), image(pngBytes, "image/png"))` or `imageUrl("https://...")` |
+| Embeddings | `Provider.builder("openai").defaultEmbeddingModel("text-embedding-3-small").build().embed(List.of("a", "b")).embeddings()` |
+| Discovery | `p.models(false)`, `p.modelInfo("gpt-5")`, `p.capabilities("gpt-5")` |
+| Your own transport | `.client(HttpClient.newBuilder()...build())`, or `.transport((request, headersTimeout) -> ...)` for anything that is not `java.net.http` |
+| One compiled core for many providers | `Core core = Core.bundled()` then `.core(core)` |
+
+Every error is a `ProviderException` with `kind()`, `code()`, `status()`, `retryable()` and the full `error()` record; `e.is(ErrorKind.RATE_LIMIT)` matches by kind. Argument mistakes throw `IllegalArgumentException` before any request. Types are records generated from the JSON schema into [`bindings/java/src/main/java/io/github/adrian729/ducktape/types`](bindings/java/src/main/java/io/github/adrian729/ducktape/types), each with a builder; unions are one record with a `type` field that says which fields apply, and open enums are `String` fields with the known values as constants (`Role.USER`, `StopReason.TOOL_CALL`).
+
 ## Development
 
 ```
@@ -185,9 +240,11 @@ cargo build --profile wasm --target wasm32-unknown-unknown -p ducktape-abi
 pip install jsonschema referencing && python scripts/check_fixtures.py .
 python scripts/gen_dts.py . --check
 python scripts/gen_go_types.py . --check
+python scripts/gen_java_types.py . --check
 cd bindings/python && uvx maturin develop --uv && .venv/bin/python -m pytest
 cd bindings/js && npm ci && npm run check:types && npm run build:wasm && npm test && npm run test:browser
 cp target/wasm32-unknown-unknown/wasm/ducktape_abi.wasm bindings/go/core.wasm && cd bindings/go && go vet ./... && go test ./...
+cp target/wasm32-unknown-unknown/wasm/ducktape_abi.wasm bindings/java/core.wasm && cd bindings/java && mvn -B verify
 ```
 
 `npm run test:browser` replays every fixture and runs a chat and a stream inside headless Chrome (`CHROME_BIN` picks the binary; `npm run serve:browser` serves the same page for any browser). `npm run build:wasm` runs `wasm-opt -O3` on `core.wasm` when [binaryen](https://github.com/WebAssembly/binaryen) is on the PATH. Wheels, the sdist and the npm tarball are built by the Package workflow on every push and uploaded as artifacts.

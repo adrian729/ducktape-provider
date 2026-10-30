@@ -37,3 +37,7 @@ node_modules/
 
 # Go build input
 bindings/go/core.wasm
+
+# Java build input and output
+bindings/java/core.wasm
+bindings/java/target/
