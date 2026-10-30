@@ -41,3 +41,8 @@ bindings/go/core.wasm
 # Java build input and output
 bindings/java/core.wasm
 bindings/java/target/
+
+# .NET build input and output
+bindings/dotnet/runtimes/
+bindings/dotnet/**/bin/
+bindings/dotnet/**/obj/

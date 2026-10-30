@@ -1,0 +1,543 @@
+using System.Net.Http.Headers;
+using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
+using Ducktape.Types;
+
+namespace Ducktape;
+
+/// <summary>The effect loop: answers what the core asks for with the host's HTTP, files, environment and keychain.</summary>
+internal sealed class Driver
+{
+    internal sealed record Host(Dictionary<string, string> Secrets, Dictionary<string, Func<CancellationToken, Task<string>>> Resolvers, KeychainReader? Keychain, KeychainWriter? KeychainWrite, HttpClient Client, Observer? Observer);
+
+    private readonly Core.Operation op;
+    private readonly Host host;
+    private readonly Func<Event, Task>? onEvent;
+    private readonly Func<LoginAction, CancellationToken, Task<string?>>? handleAction;
+    private readonly CancellationToken ct;
+    private HttpResponseMessage? response;
+    private Stream? body;
+    private CancellationTokenSource? requestCts;
+    private TimeSpan? readTimeout;
+    private readonly byte[] buffer = new byte[64 * 1024];
+
+    public Driver(Core.Operation op, Host host, Func<Event, Task>? onEvent, Func<LoginAction, CancellationToken, Task<string?>>? handleAction, CancellationToken ct)
+    {
+        this.op = op;
+        this.host = host;
+        this.onEvent = onEvent;
+        this.handleAction = handleAction;
+        this.ct = ct;
+    }
+
+    public static JsonObject Clock()
+    {
+        return new JsonObject { ["now_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ["entropy"] = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) };
+    }
+
+    public static string Etag(byte[] bytes)
+    {
+        return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    private static JsonObject Input(string type)
+    {
+        return new JsonObject { ["type"] = type };
+    }
+
+    private void CloseBody()
+    {
+        body?.Dispose();
+        body = null;
+        response?.Dispose();
+        response = null;
+        requestCts?.Dispose();
+        requestCts = null;
+    }
+
+    public async Task<JsonNode?> RunAsync(JsonNode start, JsonNode step)
+    {
+        try
+        {
+            for (var i = 0; i < 1_000_000; i++)
+            {
+                foreach (var note in step["notify"] as JsonArray ?? [])
+                {
+                    var noteType = Json.Str(note?["type"]);
+                    if (noteType == "event" && onEvent is not null)
+                    {
+                        await onEvent(Json.As<Event>(note!["event"])).ConfigureAwait(false);
+                    }
+                    else if (noteType == "observer" && host.Observer is not null)
+                    {
+                        Observe(Json.Str(note!["hook"]), note["data"]);
+                    }
+                }
+                var effect = step["effect"];
+                var type = Json.Str(effect?["type"]);
+                if (type == "done")
+                {
+                    return effect!["result"];
+                }
+                if (type == "failed")
+                {
+                    throw new ProviderException(Json.As<ProviderError>(effect!["error"]));
+                }
+                JsonObject input;
+                if (ct.IsCancellationRequested && type != "receive")
+                {
+                    input = Input("cancelled");
+                }
+                else
+                {
+                    switch (type)
+                    {
+                        case "need_secret":
+                            input = await SecretAsync(effect!).ConfigureAwait(false);
+                            break;
+                        case "need_http":
+                            CloseBody();
+                            input = await HttpAsync(effect!["request"]!).ConfigureAwait(false);
+                            break;
+                        case "receive":
+                            var (fed, pending) = await ReceiveAsync().ConfigureAwait(false);
+                            if (fed is not null)
+                            {
+                                step = fed;
+                                continue;
+                            }
+                            input = pending!;
+                            break;
+                        case "need_sleep":
+                            CloseBody();
+                            input = await SleepAsync(effect!["ms"]?.GetValue<long>() ?? 0).ConfigureAwait(false);
+                            break;
+                        case "need_read":
+                            input = Read(effect!["locator"]);
+                            break;
+                        case "need_write":
+                            input = Write(effect!);
+                            break;
+                        case "need_user_action":
+                            input = await UserActionAsync(effect!["action"]).ConfigureAwait(false);
+                            break;
+                        case "need_callback":
+                            throw ProviderException.Of("unsupported", null, "the loopback login callback is not implemented in the .NET binding yet");
+                        default:
+                            throw ProviderException.Of("unsupported", null, "the core asked for an unknown effect " + type);
+                    }
+                }
+                step = op.Resume(new JsonObject { ["clock"] = Clock(), ["input"] = input });
+            }
+            throw ProviderException.Of("other", "internal", "the operation did not finish");
+        }
+        finally
+        {
+            CloseBody();
+        }
+    }
+
+    private void Observe(string? hook, JsonNode? data)
+    {
+        var o = host.Observer!;
+        var element = Json.ToElement(data);
+        switch (hook)
+        {
+            case "on_request":
+                o.OnRequest?.Invoke(element);
+                break;
+            case "on_response":
+                o.OnResponse?.Invoke(element);
+                break;
+            case "on_event":
+                o.OnEvent?.Invoke(element);
+                break;
+            case "on_retry":
+                o.OnRetry?.Invoke(element);
+                break;
+        }
+    }
+
+    private async Task<JsonObject> SecretAsync(JsonNode effect)
+    {
+        var secretRef = Json.Str(effect["secret_ref"]) ?? "";
+        var source = effect["source"];
+        string? value = null;
+        switch (Json.Str(source?["type"]))
+        {
+            case "inline":
+                host.Secrets.TryGetValue(secretRef, out value);
+                break;
+            case "env":
+                foreach (var name in source!["names"] as JsonArray ?? [])
+                {
+                    var v = Environment.GetEnvironmentVariable(Json.Str(name) ?? "");
+                    if (!string.IsNullOrEmpty(v))
+                    {
+                        value = v;
+                        break;
+                    }
+                }
+                break;
+            case "resolver":
+                if (host.Resolvers.TryGetValue(Json.Str(source!["resolver_id"]) ?? "", out var fetch))
+                {
+                    try
+                    {
+                        value = await fetch(ct).ConfigureAwait(false);
+                    }
+                    catch (Exception e)
+                    {
+                        throw new ProviderException(ProviderException.Build("auth", "resolver_failed", "the credential resolver failed: " + e.Message), e);
+                    }
+                }
+                break;
+        }
+        var found = !string.IsNullOrEmpty(value);
+        if (found)
+        {
+            op.SetSecret(secretRef, Encoding.UTF8.GetBytes(value!));
+        }
+        return new JsonObject { ["type"] = "secret", ["secret_ref"] = secretRef, ["found"] = found };
+    }
+
+    private static TimeSpan? Seconds(JsonNode? node)
+    {
+        return node is JsonValue v && v.TryGetValue<double>(out var s) ? TimeSpan.FromMilliseconds(s * 1000) : null;
+    }
+
+    private static JsonObject TransportError(string kind, string? message)
+    {
+        return new JsonObject { ["type"] = "http_error", ["error"] = new JsonObject { ["kind"] = kind, ["message"] = message ?? kind } };
+    }
+
+    private async Task<JsonObject> HttpAsync(JsonNode req)
+    {
+        var timeout = req["timeout"];
+        var connect = Seconds(timeout?["connect"]);
+        var total = Seconds(timeout?["total"]);
+        readTimeout = Seconds(timeout?["read"]);
+        requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (total is { } t)
+        {
+            requestCts.CancelAfter(t);
+        }
+        using var headersCts = CancellationTokenSource.CreateLinkedTokenSource(requestCts.Token);
+        if (connect is { } c)
+        {
+            headersCts.CancelAfter(c);
+        }
+        var message = new HttpRequestMessage(new HttpMethod(Json.Str(req["method"]) ?? "GET"), Json.Str(req["url"]));
+        var bodyText = Json.Str(req["body"]);
+        if (bodyText is not null)
+        {
+            message.Content = new ByteArrayContent(Encoding.UTF8.GetBytes(bodyText));
+        }
+        foreach (var header in req["headers"] as JsonObject ?? [])
+        {
+            var value = Json.Str(header.Value) ?? "";
+            if (!message.Headers.TryAddWithoutValidation(header.Key, value))
+            {
+                message.Content ??= new ByteArrayContent([]);
+                message.Content.Headers.TryAddWithoutValidation(header.Key, value);
+            }
+        }
+        HttpResponseMessage reply;
+        try
+        {
+            reply = await host.Client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, headersCts.Token).ConfigureAwait(false);
+            body = await reply.Content.ReadAsStreamAsync(requestCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return Input("cancelled");
+        }
+        catch (OperationCanceledException)
+        {
+            return TransportError("timeout", "no response headers within the connect timeout");
+        }
+        catch (Exception e)
+        {
+            return TransportError(Classify(e), e.Message);
+        }
+        response = reply;
+        var headers = new JsonObject();
+        foreach (var header in reply.Headers.Concat(reply.Content.Headers))
+        {
+            headers[header.Key.ToLowerInvariant()] = string.Join(", ", header.Value);
+        }
+        return new JsonObject { ["type"] = "http_response", ["status"] = (int)reply.StatusCode, ["headers"] = headers };
+    }
+
+    private async Task<(JsonNode? Fed, JsonObject? Pending)> ReceiveAsync()
+    {
+        while (true)
+        {
+            if (body is null || requestCts is null)
+            {
+                return (null, Input("http_end"));
+            }
+            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(requestCts.Token);
+            if (readTimeout is { } r)
+            {
+                readCts.CancelAfter(r);
+            }
+            int n;
+            try
+            {
+                n = await body.ReadAsync(buffer, readCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                CloseBody();
+                return (null, Input("cancelled"));
+            }
+            catch (OperationCanceledException)
+            {
+                CloseBody();
+                return (null, TransportError("timeout", "read timed out"));
+            }
+            catch (Exception e)
+            {
+                CloseBody();
+                return (null, TransportError(Classify(e), e.Message));
+            }
+            if (ct.IsCancellationRequested)
+            {
+                CloseBody();
+                return (null, Input("cancelled"));
+            }
+            if (n == 0)
+            {
+                CloseBody();
+                return (null, Input("http_end"));
+            }
+            return (op.Feed(buffer.AsSpan(0, n), Clock()), null);
+        }
+    }
+
+    internal static string Classify(Exception e)
+    {
+        for (Exception? t = e; t is not null; t = t.InnerException)
+        {
+            switch (t)
+            {
+                case HttpRequestException { HttpRequestError: HttpRequestError.NameResolutionError }:
+                    return "dns";
+                case HttpRequestException { HttpRequestError: HttpRequestError.SecureConnectionError }:
+                case AuthenticationException:
+                    return "tls";
+                case HttpRequestException { HttpRequestError: HttpRequestError.ConnectionError }:
+                case SocketException { SocketErrorCode: SocketError.ConnectionRefused or SocketError.HostUnreachable or SocketError.NetworkUnreachable }:
+                    return "connect";
+                case SocketException { SocketErrorCode: SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain }:
+                    return "dns";
+                case SocketException { SocketErrorCode: SocketError.TimedOut }:
+                case TimeoutException:
+                case OperationCanceledException:
+                    return "timeout";
+                case SocketException { SocketErrorCode: SocketError.ConnectionReset or SocketError.ConnectionAborted or SocketError.Shutdown }:
+                case HttpRequestException { HttpRequestError: HttpRequestError.ResponseEnded or HttpRequestError.InvalidResponse }:
+                case EndOfStreamException:
+                case IOException:
+                    return "reset";
+            }
+        }
+        return "other";
+    }
+
+    private async Task<JsonObject> SleepAsync(long ms)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(ms), ct).ConfigureAwait(false);
+            return Input("slept");
+        }
+        catch (OperationCanceledException)
+        {
+            return Input("cancelled");
+        }
+    }
+
+    private JsonObject Read(JsonNode? locator)
+    {
+        var missing = new JsonObject { ["type"] = "read", ["found"] = false };
+        if (locator is null)
+        {
+            return missing;
+        }
+        byte[] data;
+        string? tag = null;
+        switch (Json.Str(locator["type"]))
+        {
+            case "file":
+                try
+                {
+                    data = File.ReadAllBytes(Json.Str(locator["path"]) ?? "");
+                }
+                catch (Exception)
+                {
+                    return missing;
+                }
+                tag = Etag(data);
+                break;
+            case "env":
+                var v = Environment.GetEnvironmentVariable(Json.Str(locator["name"]) ?? "");
+                if (v is null)
+                {
+                    return missing;
+                }
+                data = Encoding.UTF8.GetBytes(v);
+                break;
+            case "keychain":
+                if (host.Keychain is null)
+                {
+                    return missing;
+                }
+                byte[]? stored;
+                try
+                {
+                    stored = host.Keychain(Json.Str(locator["service"]) ?? "", Json.Str(locator["account"]) ?? "");
+                }
+                catch (Exception)
+                {
+                    stored = null;
+                }
+                if (stored is not { Length: > 0 })
+                {
+                    return missing;
+                }
+                data = stored;
+                break;
+            default:
+                return missing;
+        }
+        var input = new JsonObject { ["type"] = "read", ["found"] = true, ["bytes"] = Convert.ToBase64String(data) };
+        if (tag is not null)
+        {
+            input["etag"] = tag;
+        }
+        return input;
+    }
+
+    private JsonObject Write(JsonNode effect)
+    {
+        var locator = effect["locator"];
+        var failed = new JsonObject { ["type"] = "written", ["ok"] = false };
+        byte[] data;
+        try
+        {
+            data = Convert.FromBase64String(Json.Str(effect["bytes"]) ?? "");
+        }
+        catch (FormatException)
+        {
+            return failed;
+        }
+        var locatorType = Json.Str(locator?["type"]);
+        if (locatorType == "keychain")
+        {
+            var ok = false;
+            if (host.KeychainWrite is not null)
+            {
+                try
+                {
+                    ok = host.KeychainWrite(Json.Str(locator!["service"]) ?? "", Json.Str(locator["account"]) ?? "", data);
+                }
+                catch (Exception)
+                {
+                    ok = false;
+                }
+            }
+            return new JsonObject { ["type"] = "written", ["ok"] = ok };
+        }
+        if (locatorType != "file")
+        {
+            return failed;
+        }
+        var path = Path.GetFullPath(Json.Str(locator!["path"]) ?? "");
+        var expect = Json.Str(effect["expect"]);
+        if (expect is not null)
+        {
+            string? current = null;
+            try
+            {
+                current = Etag(File.ReadAllBytes(path));
+            }
+            catch (Exception)
+            {
+            }
+            if (current != expect)
+            {
+                failed["conflict"] = true;
+                return failed;
+            }
+        }
+        var isPrivate = effect["private"]?.GetValue<bool>() ?? true;
+        try
+        {
+            var dir = Path.GetDirectoryName(path)!;
+            if (OperatingSystem.IsWindows())
+            {
+                Directory.CreateDirectory(dir);
+            }
+            else
+            {
+                Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            var tmp = Path.Combine(dir, Path.GetFileName(path) + ".tmp" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                File.WriteAllBytes(tmp, data);
+                if (!OperatingSystem.IsWindows())
+                {
+                    var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                    if (!isPrivate)
+                    {
+                        mode |= UnixFileMode.GroupRead | UnixFileMode.OtherRead;
+                    }
+                    File.SetUnixFileMode(tmp, mode);
+                }
+                File.Move(tmp, path, true);
+            }
+            finally
+            {
+                File.Delete(tmp);
+            }
+            return new JsonObject { ["type"] = "written", ["ok"] = true };
+        }
+        catch (Exception)
+        {
+            return failed;
+        }
+    }
+
+    private async Task<JsonObject> UserActionAsync(JsonNode? action)
+    {
+        if (handleAction is null)
+        {
+            throw ProviderException.Of("unsupported", null, "this call cannot ask the user for anything");
+        }
+        if (action is null)
+        {
+            throw ProviderException.Of("malformed_response", null, "the core asked for a user action without one");
+        }
+        string? value;
+        try
+        {
+            value = await handleAction(Json.As<LoginAction>(action), ct).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            throw new ProviderException(ProviderException.Build("auth", "user_action_failed", "the login handler failed: " + e.Message), e);
+        }
+        var input = Input("user_action");
+        if (value is not null)
+        {
+            input["value"] = value;
+        }
+        return input;
+    }
+}

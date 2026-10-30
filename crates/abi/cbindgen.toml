@@ -3,5 +3,8 @@ include_guard = "DUCKTAPE_H"
 pragma_once = false
 cpp_compat = true
 documentation = true
+usize_is_size_t = true
+after_includes = "\n#define DUCKTAPE_ABI_VERSION 1\n\ntypedef struct ducktape_Operation ducktape_Operation;"
 [export]
 prefix = "ducktape_"
+exclude = ["ABI_VERSION"]

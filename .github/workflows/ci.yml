@@ -46,6 +46,7 @@ jobs:
           go-version: "1.24"
       - run: python scripts/gen_go_types.py . --check
       - run: python scripts/gen_java_types.py . --check
+      - run: python scripts/gen_cs_types.py . --check
 
   python:
     runs-on: ubuntu-latest
@@ -132,3 +133,41 @@ jobs:
       - run: cp target/wasm32-unknown-unknown/wasm/ducktape_abi.wasm bindings/java/core.wasm
       - run: mvn -B verify
         working-directory: bindings/java
+
+  dotnet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: cargo build --release -p ducktape-abi
+      - run: mkdir -p bindings/dotnet/runtimes/linux-x64/native && cp target/release/libducktape_abi.so bindings/dotnet/runtimes/linux-x64/native/
+      - run: dotnet test
+        working-directory: bindings/dotnet
+      - run: dotnet pack Ducktape.Provider -c Release -o ../../dist/dotnet
+        working-directory: bindings/dotnet
+
+  c:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cbindgen@0.29.4
+      - run: cargo build --release -p ducktape-abi
+      - run: cbindgen --config crates/abi/cbindgen.toml --crate ducktape-abi --output /tmp/ducktape.h && diff -u bindings/c/include/ducktape.h /tmp/ducktape.h
+      - run: cmake -S bindings/c -B build/c -DCMAKE_C_FLAGS="-Wall -Wextra -Werror"
+      - run: cmake --build build/c
+      - run: ctest --test-dir build/c --output-on-failure
+      - run: cmake --install build/c --prefix /tmp/ducktape-prefix

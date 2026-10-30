@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+libdir=${pcfiledir}/..
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: ducktape
+Description: One normalized interface over model vendors
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lducktape_abi
+Libs.private:@DUCKTAPE_PKGCONFIG_PRIVATE@
+Cflags: -I${includedir}

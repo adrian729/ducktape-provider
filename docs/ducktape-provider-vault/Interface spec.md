@@ -325,7 +325,7 @@ r = p.chat([user("hi")])
 | Java / Kotlin | builder | `cancel()` on the stream, `CompletableFuture.cancel` | canonical object forms only |
 | .NET | optional parameters / options record | `CancellationToken` on every call | canonical object forms only |
 | Rust | builder | drop the future / `cancel()` | enums |
-| C | structs + JSON strings | `ducktape_cancel(handle)` | JSON only |
+| C | JSON documents through the C ABI, the host runs the effect loop | resume with `cancelled` | JSON only |
 
 - Canonical forms (what the schema and the core accept): `system` = `TextBlock[]`, `tool_result.content` = `Block[]`, `embed.input` = `string[]`, `timeout` = `{connect, read, total}`, `tool_choice` = `{mode, name?}`, tools tagged with `type`. Strings and scalars are binding sugar converted before the boundary.
 - `cancel` on any call, streamed or not, closes the host connection; the core sees it on the next resume.

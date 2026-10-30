@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Ducktape</RootNamespace>
+    <PackageId>Ducktape.Provider</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>adrian729</Authors>
+    <Description>One normalized interface over model vendors.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/adrian729/ducktape-provider</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="../runtimes/**/*" Link="runtimes/%(RecursiveDir)%(Filename)%(Extension)" Pack="true" PackagePath="runtimes" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../README.md" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="Ducktape.Provider.Tests" />
+  </ItemGroup>
+
+</Project>

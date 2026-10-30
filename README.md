@@ -23,6 +23,8 @@ Status: in development, not released. The interface is frozen in [`docs/ducktape
 | `bindings/js` | npm package on `core.wasm`: `Provider`, streams, messages, errors, `index.d.ts` |
 | `bindings/go` | Go module on `core.wasm` through wazero: `Provider`, streams, messages, errors |
 | `bindings/java` | Maven module on `core.wasm` compiled to bytecode by Chicory: `Provider`, streams, messages, errors |
+| `bindings/dotnet` | NuGet package on the native library through P/Invoke: `Provider`, streams, messages, errors |
+| `bindings/c` | Header, CMake and pkg-config files and a smoke test for the native library |
 | `fixtures/` | Samples every binding must pass |
 
 ## Python
@@ -230,6 +232,84 @@ if (r.stop().reason().equals("tool_call")) {
 
 Every error is a `ProviderException` with `kind()`, `code()`, `status()`, `retryable()` and the full `error()` record; `e.is(ErrorKind.RATE_LIMIT)` matches by kind. Argument mistakes throw `IllegalArgumentException` before any request. Types are records generated from the JSON schema into [`bindings/java/src/main/java/io/github/adrian729/ducktape/types`](bindings/java/src/main/java/io/github/adrian729/ducktape/types), each with a builder; unions are one record with a `type` field that says which fields apply, and open enums are `String` fields with the known values as constants (`Role.USER`, `StopReason.TOOL_CALL`).
 
+## .NET
+
+Not on NuGet yet. Build the native core, put it where the package expects it, then reference `bindings/dotnet/Ducktape.Provider` (.NET 8+):
+
+```
+cargo build --release -p ducktape-abi && mkdir -p bindings/dotnet/runtimes/linux-x64/native && cp target/release/libducktape_abi.so bindings/dotnet/runtimes/linux-x64/native/
+```
+
+On macOS copy `libducktape_abi.dylib` under `osx-arm64` or `osx-x64`, on Windows `ducktape_abi.dll` under `win-x64`.
+
+```csharp
+using Ducktape;
+using Ducktape.Types;
+using static Ducktape.Messages;
+
+var p = new Provider("anthropic", new ProviderOptions { DefaultModel = "claude-opus-5-5" });   // key from ANTHROPIC_API_KEY
+var r = await p.ChatAsync([User("hello")]);
+Console.WriteLine($"{r.Text()} {r.Usage} {r.Stop?.Reason}");
+
+await foreach (var ev in p.Stream([User("tell me a story")]))
+{
+    if (ev.Type == "text_delta") Console.Write(ev.Text);
+}
+
+var add = Tools.Function("add", "Adds two numbers", """{"type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}}}""");
+var history = new List<Message> { User("what is 2+2?") };
+r = await p.ChatAsync(history, new ChatOptions { Tools = [add] });
+if (r.Stop?.Reason == StopReason.ToolCall)
+{
+    var call = r.ToolCalls()[0];
+    history.Add(Assistant(r));
+    history.Add(ToolMessage(ToolResult(call.Id!, "4")));
+    r = await p.ChatAsync(history, new ChatOptions { Tools = [add] });
+}
+```
+
+| Need | Write |
+|---|---|
+| Another host, same wire | `new Provider("openai", new ProviderOptions { BaseUrl = "https://api.groq.com/openai", Auth = [Credential.Env("GROQ_API_KEY")] })` |
+| A key in code | `Auth = [Credential.Key("sk-ant-...")]` |
+| A token fetched at request time | `Auth = [Credential.Resolver(async ct => await FetchToken(ct))]` |
+| An existing login | `Credential.Session("codex")`, `Credential.Session("anthropic_profile", profile: "work")` |
+| Refreshing another tool's login | `Credential.Session("codex", refresh: "memory")` or `refresh: "write_back"`, same meaning as in Python |
+| Login state | `await p.AuthStatusAsync()` gives `Source`, `ExpiresAt` and `Session` |
+| Several sources in order | `Auth = [Credential.Session("claude_code"), Credential.Env("ANTHROPIC_API_KEY")]` |
+| Your own keychain | `Keychain = (service, account) => ...` and `KeychainWrite = (service, account, value) => true`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
+| Cancel | a `CancellationToken` on any call, or `stream.Cancel()`; both end in `OperationCanceledException` |
+| Blocking calls | `p.Chat(...)`, `p.Embed(...)`, `p.Models()`, `foreach (var ev in p.Stream(...))` |
+| Options and vendor fields | `new ChatOptions { Options = new Options { Reasoning = ReasoningLevel.High }, Vendor = new() { ["openai"] = new() { ["temperature"] = 0.2 } } }` |
+| Images | `User("what is this?", Image(pngBytes, "image/png"))` or `ImageUrl("https://...")` |
+| Embeddings | `new Provider("openai", new ProviderOptions { DefaultEmbeddingModel = "text-embedding-3-small" })` then `(await p.EmbedAsync(["a", "b"])).Embeddings` |
+| Discovery | `p.ModelsAsync()`, `p.ModelInfoAsync("gpt-5")`, `p.CapabilitiesAsync("gpt-5")` |
+| Your own transport | `Client = new HttpClient(handler)` |
+| Your own `libducktape_abi` location | `Core.Load("/opt/lib/libducktape_abi.so")` before the first call, or the `DUCKTAPE_NATIVE` environment variable |
+
+Every error is a `ProviderException` with `Kind`, `Code`, `Status`, `Retryable` and the full `Error` record; `e.Is(ErrorKind.RateLimit)` matches by kind. Argument mistakes throw `ArgumentException` before any request. Types are records generated from the JSON schema into [`bindings/dotnet/Ducktape.Provider/Types`](bindings/dotnet/Ducktape.Provider/Types) with init-only properties; unions are one record with a `Type` field that says which fields apply, and open enums are `string` properties with the known values as constants (`Role.User`, `StopReason.ToolCall`). The schema's `Timeout` is called `Timeouts` in C#.
+
+## C
+
+Not released yet. Build the libraries, then point CMake at them; the header is [`bindings/c/include/ducktape.h`](bindings/c/include/ducktape.h):
+
+```
+cargo build --release -p ducktape-abi && cmake -S bindings/c -B build/c && cmake --build build/c && ctest --test-dir build/c && cmake --install build/c --prefix /usr/local
+```
+
+The C surface is the core itself: JSON in, JSON out, no I/O. Your program runs the effect loop: start an operation with a `Start` document, read the `Step` it returns, answer the effect (send the HTTP request, sleep, read a file, store a secret) with a `Resume` document, and repeat until the effect is `done` or `failed`. The documents are in [`schema/effects.schema.json`](schema/effects.schema.json), the requests and results in [`schema/provider.schema.json`](schema/provider.schema.json), and [`bindings/c/test/smoke.c`](bindings/c/test/smoke.c) is a whole chat in one file.
+
+| Need | Write |
+|---|---|
+| Start | `op = ducktape_op_start(start_json, len, &out, &out_len)`; a null handle means the document was invalid and `out` holds a `failed` step |
+| Answer an effect | `ducktape_op_resume(op, resume_json, len, &out, &out_len)` with `{"clock": {...}, "input": {...}}` |
+| Deliver body bytes | `ducktape_op_feed(op, bytes, len, clock_json, clock_len, &out, &out_len)` while the effect is `receive`, then resume with `http_end` |
+| Provide a secret | `ducktape_op_set_secret(op, ref, ref_len, bytes, len)`, then resume with `{"type": "secret", "secret_ref": ref, "found": true}` |
+| Cancel | resume with `{"type": "cancelled"}` at any point; the core answers with a `cancelled` error |
+| Memory | every `out` buffer goes back through `ducktape_free(out, out_len)`; `ducktape_op_free(op)` releases the operation |
+| Link | `pkg-config --cflags --libs ducktape`, or `find_package(ducktape)` and `ducktape::ducktape` / `ducktape::ducktape_static` in CMake |
+| Version | `ducktape_abi_version()` must equal `DUCKTAPE_ABI_VERSION` from the header |
+
 ## Development
 
 ```
@@ -241,10 +321,13 @@ pip install jsonschema referencing && python scripts/check_fixtures.py .
 python scripts/gen_dts.py . --check
 python scripts/gen_go_types.py . --check
 python scripts/gen_java_types.py . --check
+python scripts/gen_cs_types.py . --check
 cd bindings/python && uvx maturin develop --uv && .venv/bin/python -m pytest
 cd bindings/js && npm ci && npm run check:types && npm run build:wasm && npm test && npm run test:browser
 cp target/wasm32-unknown-unknown/wasm/ducktape_abi.wasm bindings/go/core.wasm && cd bindings/go && go vet ./... && go test ./...
 cp target/wasm32-unknown-unknown/wasm/ducktape_abi.wasm bindings/java/core.wasm && cd bindings/java && mvn -B verify
+cargo build --release -p ducktape-abi && mkdir -p bindings/dotnet/runtimes/linux-x64/native && cp target/release/libducktape_abi.so bindings/dotnet/runtimes/linux-x64/native/ && cd bindings/dotnet && dotnet test
+cbindgen --config crates/abi/cbindgen.toml --crate ducktape-abi --output bindings/c/include/ducktape.h && cmake -S bindings/c -B build/c && cmake --build build/c && ctest --test-dir build/c
 ```
 
 `npm run test:browser` replays every fixture and runs a chat and a stream inside headless Chrome (`CHROME_BIN` picks the binary; `npm run serve:browser` serves the same page for any browser). `npm run build:wasm` runs `wasm-opt -O3` on `core.wasm` when [binaryen](https://github.com/WebAssembly/binaryen) is on the PATH. Wheels, the sdist and the npm tarball are built by the Package workflow on every push and uploaded as artifacts.
