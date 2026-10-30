@@ -98,7 +98,9 @@ export async function writeKeychain(service, account, bytes) {
   if (!isNode) return false;
   const platform = process.platform;
   if (platform === "darwin") {
-    return (await run("security", ["add-generic-password", "-U", "-s", service, "-a", account, "-w", text(bytes)])) !== null;
+    const quote = (s) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+    const script = `add-generic-password -U -s ${quote(service)} -a ${quote(account)} -w ${quote(text(bytes))}\n`;
+    return (await run("security", ["-i"], undefined, script)) !== null;
   }
   if (platform === "linux" || platform.endsWith("bsd")) {
     return (await run("secret-tool", ["store", `--label=${service}`, "service", service, "username", account], undefined, bytes)) !== null;

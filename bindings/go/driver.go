@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -230,9 +229,12 @@ func (r *runner) run(start any) (*result, error) {
 			if r.handleAction == nil {
 				return nil, unsupported("this call cannot ask the user for anything")
 			}
+			if e.Action == nil {
+				return nil, &ProviderError{Kind: ErrorKindMalformedResponse, Message: "the core asked for a user action without one"}
+			}
 			value, actErr := r.handleAction(*e.Action)
 			if actErr != nil {
-				return nil, &ProviderError{Kind: ErrorKindAuth, Code: "user_action_failed", Message: "the login handler failed: " + actErr.Error()}
+				return nil, authFailure("user_action_failed", "the login handler failed: "+actErr.Error())
 			}
 			in = input{Type: "user_action", Value: value}
 		case "need_callback":
@@ -272,7 +274,7 @@ func (r *runner) secret(e effect) (input, error) {
 			if fn := r.host.resolvers[e.Source.ResolverID]; fn != nil {
 				v, err := fn(r.ctx)
 				if err != nil {
-					return input{}, &ProviderError{Kind: ErrorKindAuth, Code: "resolver_failed", Message: "the credential resolver failed: " + err.Error()}
+					return input{}, authFailure("resolver_failed", "the credential resolver failed: "+err.Error())
 				}
 				value = v
 			}
@@ -286,11 +288,18 @@ func (r *runner) secret(e effect) (input, error) {
 	return input{Type: "secret", SecretRef: ref, Found: boolPtr(value != "")}, nil
 }
 
+func seconds(s *float64) time.Duration {
+	if s == nil {
+		return 0
+	}
+	return time.Duration(*s * float64(time.Second))
+}
+
 func (r *runner) http(req *httpRequest) input {
 	ctx := r.ctx
 	var cancel context.CancelFunc
-	if req.Timeout != nil && req.Timeout.Total != nil {
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(*req.Timeout.Total*float64(time.Second)))
+	if total := seconds(timeoutOf(req).Total); total > 0 {
+		ctx, cancel = context.WithTimeout(ctx, total)
 	} else {
 		ctx, cancel = context.WithCancel(ctx)
 	}
@@ -306,24 +315,35 @@ func (r *runner) http(req *httpRequest) input {
 	for k, v := range req.Headers {
 		hr.Header.Set(k, v)
 	}
+	connectTimedOut := false
+	var connectTimer *time.Timer
+	if connect := seconds(timeoutOf(req).Connect); connect > 0 {
+		connectTimer = time.AfterFunc(connect, func() {
+			connectTimedOut = true
+			cancel()
+		})
+	}
 	resp, err := r.host.client.Do(hr)
+	if connectTimer != nil && !connectTimer.Stop() && err == nil {
+		err = context.DeadlineExceeded
+	}
 	if err != nil {
 		cancel()
 		if r.ctx.Err() != nil {
 			return input{Type: "cancelled"}
 		}
+		if connectTimedOut {
+			return input{Type: "http_error", Error: &transportError{Kind: "timeout", Message: "no response headers within the connect timeout"}}
+		}
 		return input{Type: "http_error", Error: classify(err)}
 	}
 	r.body = resp.Body
 	r.cancelBody = cancel
-	r.readTimeout = 0
-	if req.Timeout != nil && req.Timeout.Read != nil {
-		r.readTimeout = time.Duration(*req.Timeout.Read * float64(time.Second))
-	}
+	r.readTimeout = seconds(timeoutOf(req).Read)
 	headers := make(map[string]string, len(resp.Header))
 	for k, v := range resp.Header {
 		if len(v) > 0 {
-			headers[strings.ToLower(k)] = v[0]
+			headers[strings.ToLower(k)] = strings.Join(v, ", ")
 		}
 	}
 	return input{Type: "http_response", Status: resp.StatusCode, Headers: headers}
@@ -371,6 +391,13 @@ func (r *runner) receive() (*step, input, error) {
 		te = &transportError{Kind: "timeout", Message: "read timed out"}
 	}
 	return nil, input{Type: "http_error", Error: te}, nil
+}
+
+func timeoutOf(req *httpRequest) Timeout {
+	if req.Timeout == nil {
+		return Timeout{}
+	}
+	return *req.Timeout
 }
 
 func classify(err error) *transportError {
@@ -463,12 +490,14 @@ func (r *runner) write(e effect) input {
 	if e.Private == nil || *e.Private {
 		mode = 0o600
 	}
-	tmp := path + ".tmp" + strconv.Itoa(os.Getpid())
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
 		return input{Type: "written", Ok: boolPtr(false)}
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if writeErr != nil || closeErr != nil || os.Chmod(tmp.Name(), mode) != nil || os.Rename(tmp.Name(), path) != nil {
+		_ = os.Remove(tmp.Name())
 		return input{Type: "written", Ok: boolPtr(false)}
 	}
 	return input{Type: "written", Ok: boolPtr(true)}

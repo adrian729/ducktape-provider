@@ -5,6 +5,7 @@ import (
 	"context"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -37,14 +38,23 @@ func ReadKeychain(ctx context.Context, service, account string) ([]byte, error) 
 	return nil, nil
 }
 
+func securityQuote(s string) string {
+	return "\"" + strings.NewReplacer("\\", "\\\\", "\"", "\\\"").Replace(s) + "\""
+}
+
+func securityAdd(service, account, value string) string {
+	return "add-generic-password -U -s " + securityQuote(service) + " -a " + securityQuote(account) + " -w " + securityQuote(value) + "\n"
+}
+
 // WriteKeychain stores a keychain entry through the platform's own tools.
 func WriteKeychain(ctx context.Context, service, account string, value []byte) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	switch runtime.GOOS {
 	case "darwin":
-		err := exec.CommandContext(ctx, "security", "add-generic-password", "-U", "-s", service, "-a", account, "-w", string(value)).Run()
-		return err == nil, nil
+		cmd := exec.CommandContext(ctx, "security", "-i")
+		cmd.Stdin = strings.NewReader(securityAdd(service, account, string(value)))
+		return cmd.Run() == nil, nil
 	case "linux", "freebsd", "openbsd", "netbsd":
 		cmd := exec.CommandContext(ctx, "secret-tool", "store", "--label="+service, "service", service, "username", account)
 		cmd.Stdin = bytes.NewReader(value)

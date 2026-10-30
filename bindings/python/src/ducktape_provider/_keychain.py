@@ -20,7 +20,9 @@ def read_keychain(service: str, account: str) -> Optional[bytes]:
 def write_keychain(service: str, account: str, value: bytes) -> bool:
     """Stores `value` under `service` and `account`; False when the platform store is unavailable."""
     if sys.platform == "darwin":
-        return _ok(["security", "add-generic-password", "-U", "-s", service, "-a", account, "-w", value.decode()])
+        quote = lambda s: '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        script = f"add-generic-password -U -s {quote(service)} -a {quote(account)} -w {quote(value.decode())}\n"
+        return _ok(["security", "-i"], stdin=script.encode())
     if sys.platform.startswith("linux") or "bsd" in sys.platform:
         return _ok(["secret-tool", "store", f"--label={service}", "service", service, "username", account], stdin=value)
     if sys.platform == "win32":

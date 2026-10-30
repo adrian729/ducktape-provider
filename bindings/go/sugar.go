@@ -3,7 +3,6 @@ package ducktape
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 )
 
 // Text makes a text block.
@@ -155,9 +154,4 @@ func Source(src AuthSource) Credential {
 func (c Credential) WithKind(kind AuthSourceKind, placement AuthSourcePlacement) Credential {
 	c.source.Kind, c.source.Placement = kind, placement
 	return c
-}
-
-func rawObject(v any) json.RawMessage {
-	b, _ := json.Marshal(v)
-	return b
 }

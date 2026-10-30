@@ -72,20 +72,29 @@ func (c *Core) instantiate(ctx context.Context) (*instance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ducktape: instantiate core.wasm: %w", err)
 	}
-	version, err := mod.ExportedFunction("ducktape_abi_version").Call(ctx)
+	exports := map[string]api.Function{}
+	for _, name := range []string{"ducktape_abi_version", "ducktape_alloc", "ducktape_free", "ducktape_op_start", "ducktape_op_resume", "ducktape_op_feed", "ducktape_op_set_secret", "ducktape_op_free"} {
+		fn := mod.ExportedFunction(name)
+		if fn == nil {
+			_ = mod.Close(ctx)
+			return nil, errors.New("ducktape: core.wasm does not export " + name)
+		}
+		exports[name] = fn
+	}
+	version, err := exports["ducktape_abi_version"].Call(ctx)
 	if err != nil || len(version) != 1 || version[0] != 1 {
 		_ = mod.Close(ctx)
 		return nil, errors.New("ducktape: core.wasm has an unknown ABI version")
 	}
 	in := &instance{
 		mod:      mod,
-		alloc:    mod.ExportedFunction("ducktape_alloc"),
-		free:     mod.ExportedFunction("ducktape_free"),
-		opStart:  mod.ExportedFunction("ducktape_op_start"),
-		opResume: mod.ExportedFunction("ducktape_op_resume"),
-		opFeed:   mod.ExportedFunction("ducktape_op_feed"),
-		opSecret: mod.ExportedFunction("ducktape_op_set_secret"),
-		opFree:   mod.ExportedFunction("ducktape_op_free"),
+		alloc:    exports["ducktape_alloc"],
+		free:     exports["ducktape_free"],
+		opStart:  exports["ducktape_op_start"],
+		opResume: exports["ducktape_op_resume"],
+		opFeed:   exports["ducktape_op_feed"],
+		opSecret: exports["ducktape_op_set_secret"],
+		opFree:   exports["ducktape_op_free"],
 	}
 	scratch, err := in.put(ctx, make([]byte, 8))
 	if err != nil {

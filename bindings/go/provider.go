@@ -47,7 +47,7 @@ type Provider struct {
 	caps   map[string]*Capabilities
 }
 
-var defaultClient = &http.Client{Transport: &http.Transport{
+var defaultClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{
 	Proxy:                 http.ProxyFromEnvironment,
 	DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 	ForceAttemptHTTP2:     true,
@@ -195,7 +195,7 @@ func (p *Provider) Chat(ctx context.Context, messages []Message, options *ChatOp
 	return &out, nil
 }
 
-// Stream is a streamed chat reply: call Next until it returns false, then check Err.
+// Stream is a streamed chat reply: call Next until it returns false, then check Err; Close when stopping early.
 type Stream struct {
 	events   chan Event
 	done     chan struct{}
@@ -213,7 +213,7 @@ func (p *Provider) Stream(ctx context.Context, messages []Message, options *Chat
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Stream{events: make(chan Event), done: make(chan struct{}), cancel: cancel}
+	s := &Stream{events: make(chan Event, 16), done: make(chan struct{}), cancel: cancel}
 	go func() {
 		defer close(s.done)
 		defer close(s.events)
