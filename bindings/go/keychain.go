@@ -48,6 +48,9 @@ func securityAdd(service, account, value string) string {
 
 // WriteKeychain stores a keychain entry through the platform's own tools.
 func WriteKeychain(ctx context.Context, service, account string, value []byte) (bool, error) {
+	if strings.ContainsAny(service, "\r\n") || strings.ContainsAny(account, "\r\n") || strings.ContainsAny(string(value), "\r\n") {
+		return false, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	switch runtime.GOOS {

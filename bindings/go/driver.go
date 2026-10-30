@@ -318,7 +318,7 @@ func (r *runner) http(req *httpRequest) input {
 	connectTimedOut := false
 	var connectTimer *time.Timer
 	if connect := seconds(timeoutOf(req).Connect); connect > 0 {
-		connectTimer = time.AfterFunc(connect, func() {
+		connectTimer = time.AfterFunc(connect+seconds(timeoutOf(req).Read), func() {
 			connectTimedOut = true
 			cancel()
 		})
@@ -333,7 +333,7 @@ func (r *runner) http(req *httpRequest) input {
 			return input{Type: "cancelled"}
 		}
 		if connectTimedOut {
-			return input{Type: "http_error", Error: &transportError{Kind: "timeout", Message: "no response headers within the connect timeout"}}
+			return input{Type: "http_error", Error: &transportError{Kind: "timeout", Message: "no response headers within the connect and read timeouts"}}
 		}
 		return input{Type: "http_error", Error: classify(err)}
 	}

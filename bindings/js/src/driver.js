@@ -98,7 +98,8 @@ export async function* drive(core, start, host, { fetch: doFetch, signal, cancel
           const abort = () => controller.abort();
           signal?.addEventListener("abort", abort, { once: true });
           if (cancel) cancel.abort = abort;
-          const connect = new Timer(req.timeout?.connect, () => {
+          const headersWait = req.timeout?.connect ? req.timeout.connect + (req.timeout.read || 0) : 0;
+          const connect = new Timer(headersWait, () => {
             timedOut = true;
             controller.abort();
           });

@@ -39,6 +39,10 @@ public static class Keychain
     /// <summary>The default writer for the same three stores.</summary>
     public static bool Write(string service, string account, byte[] value)
     {
+        if (HasLineBreak(service) || HasLineBreak(account) || value.Any(b => b is (byte)'\n' or (byte)'\r'))
+        {
+            return false;
+        }
         if (OperatingSystem.IsMacOS())
         {
             var script = "add-generic-password -U -s " + Quote(service) + " -a " + Quote(account) + " -w " + Quote(Encoding.UTF8.GetString(value)) + "\n";
@@ -58,6 +62,11 @@ public static class Keychain
     private static string Quote(string s)
     {
         return "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    }
+
+    private static bool HasLineBreak(string s)
+    {
+        return s.Contains('\n') || s.Contains('\r');
     }
 
     private static byte[]? Present(byte[]? output)

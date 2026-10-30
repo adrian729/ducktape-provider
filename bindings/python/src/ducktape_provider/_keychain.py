@@ -19,6 +19,8 @@ def read_keychain(service: str, account: str) -> Optional[bytes]:
 
 def write_keychain(service: str, account: str, value: bytes) -> bool:
     """Stores `value` under `service` and `account`; False when the platform store is unavailable."""
+    if any(c in service or c in account for c in "\r\n") or b"\n" in value or b"\r" in value:
+        return False
     if sys.platform == "darwin":
         quote = lambda s: '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
         script = f"add-generic-password -U -s {quote(service)} -a {quote(account)} -w {quote(value.decode())}\n"

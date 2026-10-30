@@ -225,7 +225,7 @@ final class Driver {
         }
         JsonNode bodyNode = req.get("body");
         Transport.Request request = new Transport.Request(req.path("method").asText("GET"), req.path("url").asText(), headers, bodyNode == null || bodyNode.isNull() ? null : bodyNode.asText());
-        Duration headersTimeout = connect;
+        Duration headersTimeout = connect == null ? null : readTimeout == null ? connect : connect.plus(readTimeout);
         if (total != null && (headersTimeout == null || total.compareTo(headersTimeout) < 0)) {
             headersTimeout = total;
         }

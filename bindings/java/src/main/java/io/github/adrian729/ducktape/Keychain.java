@@ -111,6 +111,9 @@ public final class Keychain {
 
     /** The default writer for the same three stores. */
     public static boolean write(String service, String account, byte[] value) {
+        if (hasLineBreak(service) || hasLineBreak(account) || hasLineBreak(new String(value, StandardCharsets.ISO_8859_1))) {
+            return false;
+        }
         String os = os();
         if (os.contains("mac")) {
             String script = "add-generic-password -U -s " + quote(service) + " -a " + quote(account) + " -w " + quote(new String(value, StandardCharsets.UTF_8)) + "\n";
@@ -175,5 +178,9 @@ public final class Keychain {
             out.write(buf, 0, n);
         }
         return out.toByteArray();
+    }
+
+    private static boolean hasLineBreak(String s) {
+        return s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0;
     }
 }

@@ -96,6 +96,7 @@ export async function readKeychain(service, account) {
 /** Stores a keychain entry through the platform's own tools; false when unavailable. */
 export async function writeKeychain(service, account, bytes) {
   if (!isNode) return false;
+  if (/[\r\n]/.test(service) || /[\r\n]/.test(account) || bytes.some((b) => b === 10 || b === 13)) return false;
   const platform = process.platform;
   if (platform === "darwin") {
     const quote = (s) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
