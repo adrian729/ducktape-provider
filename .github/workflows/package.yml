@@ -125,3 +125,103 @@ jobs:
           name: npm
           path: bindings/js/dist
           if-no-files-found: error
+
+  native:
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-24.04, rid: linux-x64, lib: libducktape_abi.so }
+          - { runner: ubuntu-24.04-arm, rid: linux-arm64, lib: libducktape_abi.so }
+          - { runner: windows-2025, rid: win-x64, lib: ducktape_abi.dll }
+          - { runner: macos-15, rid: osx-arm64, lib: libducktape_abi.dylib }
+          - { runner: macos-15-intel, rid: osx-x64, lib: libducktape_abi.dylib }
+    env:
+      RID: ${{ matrix.platform.rid }}
+      LIB: ${{ matrix.platform.lib }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p ducktape-abi
+      - name: Build, test and install the C package
+        shell: bash
+        run: |
+          cmake -S bindings/c -B build/c -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/c --config Release
+          ctest --test-dir build/c -C Release --output-on-failure
+          cmake --install build/c --config Release --prefix "dist/c/ducktape-${RID}"
+      - name: Collect the shared library for NuGet
+        shell: bash
+        run: |
+          mkdir -p "dist/native/${RID}/native"
+          cp "target/release/${LIB}" "dist/native/${RID}/native/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c-${{ matrix.platform.rid }}
+          path: dist/c
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform.rid }}
+          path: dist/native
+          if-no-files-found: error
+
+  nuget:
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: bindings/dotnet/runtimes
+          merge-multiple: true
+      - run: dotnet test
+        working-directory: bindings/dotnet
+      - name: Check the package versions match the workspace
+        run: |
+          workspace=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "ducktape-core") | .version')
+          nupkg=$(grep -oP '(?<=<Version>)[^<]+' bindings/dotnet/Ducktape.Provider/Ducktape.Provider.csproj)
+          cmake=$(grep -oP '(?<=project\(ducktape VERSION )[^ )]+' bindings/c/CMakeLists.txt)
+          test "$workspace" = "$nupkg" || { echo "csproj $nupkg != workspace $workspace"; exit 1; }
+          test "$workspace" = "$cmake" || { echo "CMakeLists $cmake != workspace $workspace"; exit 1; }
+      - run: dotnet pack Ducktape.Provider -c Release -o dist
+        working-directory: bindings/dotnet
+      - name: Check every runtime is in the package
+        run: |
+          unzip -l bindings/dotnet/dist/*.nupkg > listing
+          for rid in linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64; do
+            grep -q "runtimes/${rid}/native/" listing || { echo "missing ${rid}"; cat listing; exit 1; }
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: bindings/dotnet/dist
+          if-no-files-found: error
+
+  crates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo package -p ducktape-core -p ducktape-provider
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crates
+          path: target/package/*.crate
+          if-no-files-found: error

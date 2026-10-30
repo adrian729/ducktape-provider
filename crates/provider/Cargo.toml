@@ -16,7 +16,7 @@ default = ["reqwest"]
 reqwest = ["dep:reqwest"]
 
 [dependencies]
-ducktape-core = { path = "../core" }
+ducktape-core = { path = "../core", version = "0.1.0" }
 serde_json.workspace = true
 base64.workspace = true
 sha2.workspace = true

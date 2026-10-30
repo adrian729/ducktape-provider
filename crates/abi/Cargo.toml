@@ -14,5 +14,5 @@ name = "ducktape_abi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-ducktape-core = { path = "../core" }
+ducktape-core = { path = "../core", version = "0.1.0" }
 serde_json.workspace = true

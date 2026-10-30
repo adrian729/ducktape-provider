@@ -381,7 +381,7 @@ cargo build --release -p ducktape-abi && mkdir -p bindings/dotnet/runtimes/linux
 cbindgen --config crates/abi/cbindgen.toml --crate ducktape-abi --output bindings/c/include/ducktape.h && cmake -S bindings/c -B build/c && cmake --build build/c && ctest --test-dir build/c
 ```
 
-`npm run test:browser` replays every fixture and runs a chat and a stream inside headless Chrome (`CHROME_BIN` picks the binary; `npm run serve:browser` serves the same page for any browser). `npm run build:wasm` runs `wasm-opt -O3` on `core.wasm` when [binaryen](https://github.com/WebAssembly/binaryen) is on the PATH. Wheels, the sdist and the npm tarball are built by the Package workflow on every push and uploaded as artifacts.
+`npm run test:browser` replays every fixture and runs a chat and a stream inside headless Chrome (`CHROME_BIN` picks the binary; `npm run serve:browser` serves the same page for any browser). `npm run build:wasm` runs `wasm-opt -O3` on `core.wasm` when [binaryen](https://github.com/WebAssembly/binaryen) is on the PATH. Wheels, the sdist, the npm tarball, the native libraries and C package for five platforms, the NuGet package and the crates are built by the Package workflow on every push and uploaded as artifacts.
 
 ## License
 
