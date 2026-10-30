@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using Ducktape.Types;
@@ -22,7 +23,7 @@ public class ProviderTest
 
     private static string LastText(JsonNode fixture) => DoneResponse(fixture).Content![^1].Text!;
 
-    private static Provider ProviderOf(JsonNode fixture, Scripted server, Action<ProviderOptions>? _ = null)
+    private static Provider ProviderOf(JsonNode fixture, Scripted server)
     {
         var config = fixture["start"]!["provider"]!;
         return new Provider(config["ns"]!.GetValue<string>(), new ProviderOptions { BaseUrl = config["base_url"]?.GetValue<string>(), Client = server.Client(), Auth = [Credential.Key("sk-ant-test-key")] });
@@ -95,7 +96,7 @@ public class ProviderTest
         Assert.NotEmpty(text);
         Assert.Equal(text, (await s.ResponseAsync())!.Text());
         var sync = ProviderOf(fixture, new Scripted(fixture)).Stream(req.Messages!, new ChatOptions { Model = req.Model });
-        Assert.Equal(text, string.Concat(sync.Where(e => e.Type == "text_delta").Select(e => e.Text)));
+        Assert.Equal(text, string.Concat(sync.ToBlockingEnumerable().Where(e => e.Type == "text_delta").Select(e => e.Text)));
         Assert.Equal(text, sync.Response!.Text());
     }
 
@@ -226,6 +227,92 @@ public class ProviderTest
         });
         Assert.IsType<ProviderException>(e.InnerException);
         Assert.True(((ProviderException)e.InnerException!).Is(ErrorKind.Cancelled));
+    }
+
+    [Fact]
+    public async Task LeavingTheLoopStopsTheStream()
+    {
+        var fixture = Anthropic("stream_text_reasoning_chunked");
+        var server = new Scripted(fixture) { DelayMs = 30 };
+        var p = ProviderOf(fixture, server);
+        var req = RequestOf(fixture);
+        var s = p.Stream(req.Messages!, new ChatOptions { Model = req.Model });
+        await foreach (var ev in s)
+        {
+            break;
+        }
+        var e = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => s.ResponseAsync());
+        Assert.True(((ProviderException)e.InnerException!).Is(ErrorKind.Cancelled));
+        s.Cancel();
+        s.Dispose();
+    }
+
+    [Fact]
+    public async Task CancelDuringTheResolverIsCancelled()
+    {
+        var fixture = Anthropic("chat_text_reasoning");
+        var server = new Scripted(fixture);
+        using var cts = new CancellationTokenSource();
+        var p = new Provider("anthropic", new ProviderOptions
+        {
+            Client = server.Client(),
+            Auth = [Credential.Resolver(async ct =>
+            {
+                cts.Cancel();
+                await Task.Delay(Timeout.Infinite, ct);
+                return "never";
+            })],
+        });
+        var req = RequestOf(fixture);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => p.ChatAsync(req.Messages!, new ChatOptions { Model = req.Model }, cts.Token));
+        Assert.Empty(server.Requests);
+    }
+
+    [Fact]
+    public async Task OddTimeoutsAreIgnored()
+    {
+        var fixture = Anthropic("chat_text_reasoning");
+        var p = ProviderOf(fixture, new Scripted(fixture));
+        var req = RequestOf(fixture);
+        var o = new ChatOptions { Model = req.Model, Timeout = new Timeouts { Read = 0, Connect = -1, Total = 1e12 } };
+        var r = await p.ChatAsync(req.Messages!, o);
+        Assert.NotEmpty(r.Text());
+    }
+
+    [Fact]
+    public void BlockingCallsWorkUnderASynchronizationContext()
+    {
+        var fixture = Anthropic("chat_text_reasoning");
+        var p = ProviderOf(fixture, new Scripted(fixture));
+        var req = RequestOf(fixture);
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
+        try
+        {
+            var r = p.Chat(req.Messages!, new ChatOptions { Model = req.Model });
+            Assert.NotEmpty(r.Text());
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
+    [Fact]
+    public void TimeoutsInsideResetsAreTimeouts()
+    {
+        Assert.Equal("timeout", Driver.Classify(new IOException("read", new TimeoutException())));
+        Assert.Equal("reset", Driver.Classify(new IOException("read", new SocketException((int)SocketError.ConnectionReset))));
+    }
+
+    [Fact]
+    public async Task LoadAfterTheFirstCallThrows()
+    {
+        var fixture = Anthropic("chat_text_reasoning");
+        var p = ProviderOf(fixture, new Scripted(fixture));
+        var req = RequestOf(fixture);
+        await p.ChatAsync(req.Messages!, new ChatOptions { Model = req.Model });
+        Assert.Throws<InvalidOperationException>(() => Core.Load("/nowhere/libducktape_abi.so"));
     }
 
     [Fact]

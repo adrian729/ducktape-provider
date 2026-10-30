@@ -1,15 +1,17 @@
-using System.Collections;
+using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 using Ducktape.Types;
 
 namespace Ducktape;
 
 /// <summary>A streamed chat reply: enumerate the events, then read the response; cancel when stopping early.</summary>
-public sealed class ChatStream : IAsyncEnumerable<Event>, IEnumerable<Event>, IDisposable
+public sealed class ChatStream : IAsyncEnumerable<Event>, IDisposable, IAsyncDisposable
 {
     private readonly Channel<Event> channel = Channel.CreateUnbounded<Event>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly CancellationTokenSource cts;
     private readonly TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object gate = new();
+    private bool finished;
     private Response? response;
     private Exception? failure;
 
@@ -34,7 +36,21 @@ public sealed class ChatStream : IAsyncEnumerable<Event>, IEnumerable<Event>, ID
     {
         failure = error;
         channel.Writer.TryComplete();
+        lock (gate)
+        {
+            finished = true;
+            cts.Dispose();
+        }
         done.TrySetResult();
+    }
+
+    private Response? Result()
+    {
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Throw(failure);
+        }
+        return response;
     }
 
     /// <summary>The final response once the stream finished; throws the stream's failure if it had one.</summary>
@@ -43,7 +59,7 @@ public sealed class ChatStream : IAsyncEnumerable<Event>, IEnumerable<Event>, ID
         get
         {
             done.Task.GetAwaiter().GetResult();
-            return failure is null ? response : throw failure;
+            return Result();
         }
     }
 
@@ -51,55 +67,71 @@ public sealed class ChatStream : IAsyncEnumerable<Event>, IEnumerable<Event>, ID
     public async Task<Response?> ResponseAsync()
     {
         await done.Task.ConfigureAwait(false);
-        return failure is null ? response : throw failure;
+        return Result();
     }
 
     public async IAsyncEnumerator<Event> GetAsyncEnumerator(CancellationToken cancellationToken = default)
     {
         using var registration = cancellationToken.Register(Cancel);
-        while (await channel.Reader.WaitToReadAsync(CancellationToken.None).ConfigureAwait(false))
+        try
         {
-            while (channel.Reader.TryRead(out var ev))
+            while (await channel.Reader.WaitToReadAsync(CancellationToken.None).ConfigureAwait(false))
             {
-                yield return ev;
+                while (channel.Reader.TryRead(out var ev))
+                {
+                    yield return ev;
+                }
             }
+            await done.Task.ConfigureAwait(false);
+            Result();
         }
-        await done.Task.ConfigureAwait(false);
-        if (failure is not null)
+        finally
         {
-            throw failure;
+            Cancel();
         }
     }
 
-    public IEnumerator<Event> GetEnumerator()
+    /// <summary>The events as a blocking sequence.</summary>
+    public IEnumerable<Event> ToBlockingEnumerable()
     {
-        while (channel.Reader.WaitToReadAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult())
+        try
         {
-            while (channel.Reader.TryRead(out var ev))
+            while (channel.Reader.WaitToReadAsync(CancellationToken.None).AsTask().GetAwaiter().GetResult())
             {
-                yield return ev;
+                while (channel.Reader.TryRead(out var ev))
+                {
+                    yield return ev;
+                }
             }
+            done.Task.GetAwaiter().GetResult();
+            Result();
         }
-        done.Task.GetAwaiter().GetResult();
-        if (failure is not null)
+        finally
         {
-            throw failure;
+            Cancel();
         }
-    }
-
-    IEnumerator IEnumerable.GetEnumerator()
-    {
-        return GetEnumerator();
     }
 
     /// <summary>Stops the stream and releases the connection.</summary>
     public void Cancel()
     {
-        cts.Cancel();
+        lock (gate)
+        {
+            if (!finished)
+            {
+                cts.Cancel();
+            }
+        }
     }
 
     public void Dispose()
     {
         Cancel();
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Cancel();
+        return ValueTask.CompletedTask;
     }
 }

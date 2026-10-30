@@ -189,6 +189,10 @@ internal sealed class Driver
                     {
                         value = await fetch(ct).ConfigureAwait(false);
                     }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        return Input("cancelled");
+                    }
                     catch (Exception e)
                     {
                         throw new ProviderException(ProviderException.Build("auth", "resolver_failed", "the credential resolver failed: " + e.Message), e);
@@ -206,7 +210,11 @@ internal sealed class Driver
 
     private static TimeSpan? Seconds(JsonNode? node)
     {
-        return node is JsonValue v && v.TryGetValue<double>(out var s) ? TimeSpan.FromMilliseconds(s * 1000) : null;
+        if (node is not JsonValue v || !v.TryGetValue<double>(out var s) || !double.IsFinite(s) || s <= 0)
+        {
+            return null;
+        }
+        return TimeSpan.FromMilliseconds(Math.Min(s * 1000, uint.MaxValue - 1));
     }
 
     private static JsonObject TransportError(string kind, string? message)
@@ -230,7 +238,15 @@ internal sealed class Driver
         {
             headersCts.CancelAfter(c);
         }
-        var message = new HttpRequestMessage(new HttpMethod(Json.Str(req["method"]) ?? "GET"), Json.Str(req["url"]));
+        HttpRequestMessage message;
+        try
+        {
+            message = new HttpRequestMessage(new HttpMethod(Json.Str(req["method"]) ?? "GET"), Json.Str(req["url"]));
+        }
+        catch (Exception e)
+        {
+            return TransportError("other", e.Message);
+        }
         var bodyText = Json.Str(req["body"]);
         if (bodyText is not null)
         {
@@ -239,28 +255,35 @@ internal sealed class Driver
         foreach (var header in req["headers"] as JsonObject ?? [])
         {
             var value = Json.Str(header.Value) ?? "";
-            if (!message.Headers.TryAddWithoutValidation(header.Key, value))
+            if (message.Headers.TryAddWithoutValidation(header.Key, value))
             {
-                message.Content ??= new ByteArrayContent([]);
-                message.Content.Headers.TryAddWithoutValidation(header.Key, value);
+                continue;
+            }
+            if (message.Content is not null && !message.Content.Headers.TryAddWithoutValidation(header.Key, value))
+            {
+                message.Dispose();
+                return TransportError("other", "the header " + header.Key + " was rejected");
             }
         }
-        HttpResponseMessage reply;
+        HttpResponseMessage? reply = null;
         try
         {
             reply = await host.Client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, headersCts.Token).ConfigureAwait(false);
             body = await reply.Content.ReadAsStreamAsync(requestCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (Exception) when (ct.IsCancellationRequested)
         {
+            reply?.Dispose();
             return Input("cancelled");
         }
         catch (OperationCanceledException)
         {
+            reply?.Dispose();
             return TransportError("timeout", "no response headers within the connect timeout");
         }
         catch (Exception e)
         {
+            reply?.Dispose();
             return TransportError(Classify(e), e.Message);
         }
         response = reply;
@@ -290,7 +313,7 @@ internal sealed class Driver
             {
                 n = await body.ReadAsync(buffer, readCts.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            catch (Exception) when (ct.IsCancellationRequested)
             {
                 CloseBody();
                 return (null, Input("cancelled"));
@@ -323,6 +346,13 @@ internal sealed class Driver
     {
         for (Exception? t = e; t is not null; t = t.InnerException)
         {
+            if (t is TimeoutException or OperationCanceledException or SocketException { SocketErrorCode: SocketError.TimedOut })
+            {
+                return "timeout";
+            }
+        }
+        for (Exception? t = e; t is not null; t = t.InnerException)
+        {
             switch (t)
             {
                 case HttpRequestException { HttpRequestError: HttpRequestError.NameResolutionError }:
@@ -335,10 +365,6 @@ internal sealed class Driver
                     return "connect";
                 case SocketException { SocketErrorCode: SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain }:
                     return "dns";
-                case SocketException { SocketErrorCode: SocketError.TimedOut }:
-                case TimeoutException:
-                case OperationCanceledException:
-                    return "timeout";
                 case SocketException { SocketErrorCode: SocketError.ConnectionReset or SocketError.ConnectionAborted or SocketError.Shutdown }:
                 case HttpRequestException { HttpRequestError: HttpRequestError.ResponseEnded or HttpRequestError.InvalidResponse }:
                 case EndOfStreamException:
@@ -490,7 +516,7 @@ internal sealed class Driver
             var tmp = Path.Combine(dir, Path.GetFileName(path) + ".tmp" + Guid.NewGuid().ToString("N"));
             try
             {
-                File.WriteAllBytes(tmp, data);
+                var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
                 if (!OperatingSystem.IsWindows())
                 {
                     var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
@@ -498,7 +524,11 @@ internal sealed class Driver
                     {
                         mode |= UnixFileMode.GroupRead | UnixFileMode.OtherRead;
                     }
-                    File.SetUnixFileMode(tmp, mode);
+                    options.UnixCreateMode = mode;
+                }
+                using (var file = new FileStream(tmp, options))
+                {
+                    file.Write(data);
                 }
                 File.Move(tmp, path, true);
             }
@@ -528,6 +558,10 @@ internal sealed class Driver
         try
         {
             value = await handleAction(Json.As<LoginAction>(action), ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return Input("cancelled");
         }
         catch (Exception e)
         {

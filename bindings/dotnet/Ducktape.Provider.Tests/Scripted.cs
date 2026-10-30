@@ -110,6 +110,10 @@ internal sealed class Scripted : HttpMessageHandler
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
+            while (index < chunks.Count && chunks[index].Length == 0)
+            {
+                index++;
+            }
             if (index >= chunks.Count)
             {
                 return 0;

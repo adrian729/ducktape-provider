@@ -279,8 +279,8 @@ if (r.Stop?.Reason == StopReason.ToolCall)
 | Login state | `await p.AuthStatusAsync()` gives `Source`, `ExpiresAt` and `Session` |
 | Several sources in order | `Auth = [Credential.Session("claude_code"), Credential.Env("ANTHROPIC_API_KEY")]` |
 | Your own keychain | `Keychain = (service, account) => ...` and `KeychainWrite = (service, account, value) => true`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
-| Cancel | a `CancellationToken` on any call, or `stream.Cancel()`; both end in `OperationCanceledException` |
-| Blocking calls | `p.Chat(...)`, `p.Embed(...)`, `p.Models()`, `foreach (var ev in p.Stream(...))` |
+| Cancel | a `CancellationToken` on any call, `stream.Cancel()`, or leaving the `await foreach` early; all end in `OperationCanceledException` |
+| Blocking calls | `p.Chat(...)`, `p.Embed(...)`, `p.Models()`, `foreach (var ev in p.Stream(...).ToBlockingEnumerable())` |
 | Options and vendor fields | `new ChatOptions { Options = new Options { Reasoning = ReasoningLevel.High }, Vendor = new() { ["openai"] = new() { ["temperature"] = 0.2 } } }` |
 | Images | `User("what is this?", Image(pngBytes, "image/png"))` or `ImageUrl("https://...")` |
 | Embeddings | `new Provider("openai", new ProviderOptions { DefaultEmbeddingModel = "text-embedding-3-small" })` then `(await p.EmbedAsync(["a", "b"])).Embeddings` |

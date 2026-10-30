@@ -150,7 +150,7 @@ public sealed class Provider
     /// <summary>Sends the messages and blocks for the whole reply.</summary>
     public Response Chat(IEnumerable<Message> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
     {
-        return ChatAsync(messages, options, cancellationToken).GetAwaiter().GetResult();
+        return Task.Run(() => ChatAsync(messages, options, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>Sends the messages and returns the events as they arrive.</summary>
@@ -207,11 +207,11 @@ public sealed class Provider
     /// <summary>Returns one embedding per input text, blocking.</summary>
     public EmbedResponse Embed(IEnumerable<string> input, EmbedOptions? options = null, CancellationToken cancellationToken = default)
     {
-        return EmbedAsync(input, options, cancellationToken).GetAwaiter().GetResult();
+        return Task.Run(() => EmbedAsync(input, options, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>Lists the models the endpoint serves; cached after the first call unless refresh is set.</summary>
-    public async Task<List<ModelInfo>> ModelsAsync(bool refresh = false, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ModelInfo>> ModelsAsync(bool refresh = false, CancellationToken cancellationToken = default)
     {
         var cached = models;
         if (cached is not null && !refresh)
@@ -227,9 +227,9 @@ public sealed class Provider
     }
 
     /// <summary>Lists the models, blocking.</summary>
-    public List<ModelInfo> Models(bool refresh = false, CancellationToken cancellationToken = default)
+    public IReadOnlyList<ModelInfo> Models(bool refresh = false, CancellationToken cancellationToken = default)
     {
-        return ModelsAsync(refresh, cancellationToken).GetAwaiter().GetResult();
+        return Task.Run(() => ModelsAsync(refresh, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>Describes one model.</summary>
@@ -251,7 +251,7 @@ public sealed class Provider
     /// <summary>Describes one model, blocking.</summary>
     public ModelInfo ModelInfo(string id, CancellationToken cancellationToken = default)
     {
-        return ModelInfoAsync(id, cancellationToken).GetAwaiter().GetResult();
+        return Task.Run(() => ModelInfoAsync(id, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>Tells what a model supports.</summary>
@@ -273,7 +273,7 @@ public sealed class Provider
     /// <summary>Tells what a model supports, blocking.</summary>
     public Capabilities Capabilities(string model, CancellationToken cancellationToken = default)
     {
-        return CapabilitiesAsync(model, cancellationToken).GetAwaiter().GetResult();
+        return Task.Run(() => CapabilitiesAsync(model, cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     /// <summary>Logs into the provider's session source; the handler shows the user what to do and returns any pasted value.</summary>
@@ -310,6 +310,6 @@ public sealed class Provider
     /// <summary>Reports the credential state, blocking.</summary>
     public AuthStatus AuthStatus(CancellationToken cancellationToken = default)
     {
-        return AuthStatusAsync(cancellationToken).GetAwaiter().GetResult();
+        return Task.Run(() => AuthStatusAsync(cancellationToken), CancellationToken.None).GetAwaiter().GetResult();
     }
 }

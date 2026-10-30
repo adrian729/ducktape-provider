@@ -8,10 +8,10 @@ public static class Core
 {
     internal const uint Abi = 1;
 
-    /// <summary>Loads the core from an explicit path instead of the package's runtimes folder.</summary>
+    /// <summary>Loads the core from an explicit path instead of the package's runtimes folder; only before the first call.</summary>
     public static void Load(string path)
     {
-        Native.LibraryPath = path;
+        Native.Load(path);
     }
 
     /// <summary>The ABI version of the loaded core.</summary>

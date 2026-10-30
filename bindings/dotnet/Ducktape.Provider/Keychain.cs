@@ -79,22 +79,23 @@ public static class Keychain
             {
                 return null;
             }
-            using (var input = process.StandardInput.BaseStream)
-            {
-                if (stdin is not null)
-                {
-                    input.Write(stdin);
-                }
-            }
             var collected = new MemoryStream();
             var copy = process.StandardOutput.BaseStream.CopyToAsync(collected);
-            process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+            _ = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+            var feed = Task.Run(async () =>
+            {
+                using var input = process.StandardInput.BaseStream;
+                if (stdin is not null)
+                {
+                    await input.WriteAsync(stdin);
+                }
+            });
             if (!process.WaitForExit(10_000))
             {
                 process.Kill(true);
                 return null;
             }
-            if (!copy.Wait(1_000) || process.ExitCode != 0)
+            if (!Task.WaitAll([copy, feed], 1_000) || process.ExitCode != 0)
             {
                 return null;
             }
@@ -143,6 +144,10 @@ public static class Keychain
             try
             {
                 var cred = Marshal.PtrToStructure<CredentialW>(ptr);
+                if (cred.CredentialBlobSize == 0 || cred.CredentialBlob == IntPtr.Zero)
+                {
+                    return null;
+                }
                 var blob = new byte[cred.CredentialBlobSize];
                 Marshal.Copy(cred.CredentialBlob, blob, 0, blob.Length);
                 return Encoding.UTF8.GetBytes(Encoding.Unicode.GetString(blob));
