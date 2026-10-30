@@ -41,6 +41,10 @@ jobs:
       - run: pip install jsonschema referencing
       - run: python scripts/check_fixtures.py .
       - run: python scripts/gen_dts.py . --check
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - run: python scripts/gen_go_types.py . --check
 
   python:
     runs-on: ubuntu-latest
@@ -84,3 +88,25 @@ jobs:
         working-directory: bindings/js
       - run: npm run test:browser
         working-directory: bindings/js
+
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: bindings/go/go.sum
+      - run: cargo build --profile wasm --target wasm32-unknown-unknown -p ducktape-abi
+      - run: cp target/wasm32-unknown-unknown/wasm/ducktape_abi.wasm bindings/go/core.wasm
+      - run: go vet ./...
+        working-directory: bindings/go
+      - run: go test ./...
+        working-directory: bindings/go

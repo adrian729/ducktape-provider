@@ -34,3 +34,6 @@ target/
 # JS build output
 bindings/js/core.wasm
 node_modules/
+
+# Go build input
+bindings/go/core.wasm
