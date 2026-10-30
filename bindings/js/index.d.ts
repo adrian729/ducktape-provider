@@ -79,8 +79,10 @@ export interface ProviderOptions {
   fetch?: Fetch;
   core?: Core | Promise<Core> | string | URL | Uint8Array | WebAssembly.Module;
   keychain?: KeychainReader;
+  keychain_write?: KeychainWriter;
 }
 export type KeychainReader = (service: string, account: string) => string | Uint8Array | null | undefined | Promise<string | Uint8Array | null | undefined>;
+export type KeychainWriter = (service: string, account: string, value: Uint8Array) => boolean | Promise<boolean>;
 
 export interface ChatOptions {
   model?: string;

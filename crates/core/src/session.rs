@@ -16,6 +16,7 @@ const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const ADVISORY_MS: i64 = 120_000;
 const MANDATORY_MS: i64 = 30_000;
 const TOKEN_TIMEOUT_S: f64 = 30.0;
+const REFRESH_BACKOFF_MS: u64 = 5_000;
 
 /// A credential a session produced.
 #[derive(Debug, Clone)]
@@ -36,7 +37,12 @@ pub struct SessionCredential {
 pub enum Action {
     Read(Locator),
     Http(HttpRequest),
-    Write { locator: Locator, bytes: Vec<u8> },
+    Sleep(u64),
+    Write {
+        locator: Locator,
+        bytes: Vec<u8>,
+        expect: Option<String>,
+    },
     Ready(SessionCredential),
     NotFound,
     Failed(ProviderError),
@@ -65,12 +71,13 @@ pub struct SessionFlow {
     stage: Stage,
     env: Vec<(&'static str, Option<String>)>,
     dir: Option<String>,
-    config_path: Option<String>,
-    creds_path: Option<String>,
+    source: Option<Locator>,
+    etag: Option<String>,
     config: Option<Map<String, Value>>,
     creds: Option<Map<String, Value>>,
-    pending_creds: Option<Map<String, Value>>,
     ready: Option<SessionCredential>,
+    pending: Option<HttpRequest>,
+    retried: bool,
     forced: bool,
     expired_ms: Option<i64>,
 }
@@ -137,6 +144,10 @@ fn file(path: &str) -> Action {
     Action::Read(Locator::File {
         path: path.to_owned(),
     })
+}
+
+fn plain_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['/', '\\']) && !name.starts_with('.')
 }
 
 fn parse_object(bytes: &[u8]) -> Option<Map<String, Value>> {
@@ -244,12 +255,13 @@ impl SessionFlow {
             stage: Stage::Env(env_candidates(preset)),
             env: Vec::new(),
             dir: None,
-            config_path: None,
-            creds_path: None,
+            source: None,
+            etag: None,
             config: None,
             creds: None,
-            pending_creds: None,
             ready: None,
+            pending: None,
+            retried: false,
             forced: false,
             expired_ms: None,
         })
@@ -260,24 +272,19 @@ impl SessionFlow {
         &self.preset
     }
 
-    /// Whether a 401 may be answered with one forced refresh.
     /// Expiry of the stored credential when it was found expired or unrefreshable.
     pub fn expired_at_ms(&self) -> Option<i64> {
         self.expired_ms
     }
 
-    pub fn can_refresh(&self) -> bool {
-        !self.forced
-            && self.refresh != RefreshMode::Never
-            && matches!(
-                self.preset,
-                SessionPreset::AnthropicProfile | SessionPreset::Codex
-            )
+    /// Whether a 401 has already forced a re-read of the store.
+    pub fn forced(&self) -> bool {
+        self.forced
     }
 
     /// Begins resolving the session.
-    pub fn start(&mut self, now_ms: i64) -> Action {
-        self.advance(now_ms)
+    pub fn start(&mut self) -> Action {
+        self.advance()
     }
 
     fn env_value(&self, name: &str) -> Option<&str> {
@@ -287,7 +294,7 @@ impl SessionFlow {
             .and_then(|(_, v)| v.as_deref())
     }
 
-    fn advance(&mut self, now_ms: i64) -> Action {
+    fn advance(&mut self) -> Action {
         if let Stage::Env(pending) = &mut self.stage {
             if let Some(name) = pending.first().copied() {
                 return Action::Read(Locator::Env {
@@ -299,15 +306,24 @@ impl SessionFlow {
         match self.preset {
             SessionPreset::ClaudeCodeTokenEnv => self.token_env(),
             SessionPreset::ClaudeCode => self.claude_code_locate(),
-            SessionPreset::AnthropicProfile => self.profile_locate(now_ms),
+            SessionPreset::AnthropicProfile => self.profile_locate(),
             SessionPreset::Codex => self.codex_locate(),
             _ => Action::NotFound,
         }
     }
 
     /// Continues after the host answered a read.
-    pub fn on_read(&mut self, found: bool, bytes: Option<Vec<u8>>, now_ms: i64) -> Action {
+    pub fn on_read(
+        &mut self,
+        found: bool,
+        bytes: Option<Vec<u8>>,
+        etag: Option<String>,
+        now_ms: i64,
+    ) -> Action {
         let bytes = if found { bytes } else { None };
+        if matches!(self.stage, Stage::Credentials | Stage::Keychain) {
+            self.etag = if found { etag } else { None };
+        }
         match self.stage.clone() {
             Stage::Env(mut pending) => {
                 let name = pending.remove(0);
@@ -317,13 +333,13 @@ impl SessionFlow {
                     .filter(|s| !s.is_empty());
                 self.env.push((name, value));
                 self.stage = Stage::Env(pending);
-                self.advance(now_ms)
+                self.advance()
             }
             Stage::ActiveConfig => {
                 let name = bytes
                     .and_then(|b| String::from_utf8(b).ok())
                     .map(|s| s.trim().to_owned())
-                    .filter(|s| !s.is_empty() && !s.contains(['/', '\\']) && !s.starts_with('.'));
+                    .filter(|s| plain_name(s));
                 self.profile = Some(name.unwrap_or_else(|| "default".to_owned()));
                 self.profile_config()
             }
@@ -336,6 +352,7 @@ impl SessionFlow {
                 SessionPreset::AnthropicProfile => self.profile_credentials(bytes, now_ms),
                 SessionPreset::Codex => match bytes {
                     Some(b) => self.codex_parse(&b, now_ms),
+                    None if self.store.is_some() || self.forced => Action::NotFound,
                     None => self.codex_keychain(),
                 },
                 _ => Action::NotFound,
@@ -371,7 +388,7 @@ impl SessionFlow {
                 None => return Action::NotFound,
             },
         };
-        self.creds_path = Some(path.clone());
+        self.source = Some(Locator::File { path: path.clone() });
         self.stage = Stage::Credentials;
         file(&path)
     }
@@ -407,7 +424,19 @@ impl SessionFlow {
         Action::Ready(self.credential(token, expires, None, None))
     }
 
-    fn profile_locate(&mut self, _now_ms: i64) -> Action {
+    fn profile_locate(&mut self) -> Action {
+        if let Some(name) = self
+            .profile
+            .as_deref()
+            .or_else(|| self.env_value("ANTHROPIC_PROFILE"))
+        {
+            if !plain_name(name) {
+                return Action::Failed(auth_error(
+                    "auth_source",
+                    format!("Anthropic profile name {name:?} must be a plain name without path separators"),
+                ));
+            }
+        }
         let dir = match (&self.store, self.env_value("ANTHROPIC_CONFIG_DIR")) {
             (Some(store), _) => store.clone(),
             (None, Some(dir)) => dir.to_owned(),
@@ -438,7 +467,6 @@ impl SessionFlow {
         let dir = self.dir.clone().unwrap_or_default();
         let profile = self.profile.clone().unwrap_or_else(|| "default".to_owned());
         let path = join(&dir, &["configs", &format!("{profile}.json")]);
-        self.config_path = Some(path.clone());
         self.stage = Stage::Config;
         file(&path)
     }
@@ -475,7 +503,9 @@ impl SessionFlow {
         let profile = self.profile.clone().unwrap_or_else(|| "default".to_owned());
         let creds_path = str_of(auth, "credentials_path")
             .unwrap_or_else(|| join(&dir, &["credentials", &format!("{profile}.json")]));
-        self.creds_path = Some(creds_path.clone());
+        self.source = Some(Locator::File {
+            path: creds_path.clone(),
+        });
         self.config = Some(config);
         self.stage = Stage::Credentials;
         file(&creds_path)
@@ -527,9 +557,8 @@ impl SessionFlow {
         let stale = self.forced || expires_ms.is_some_and(|e| e <= now_ms + ADVISORY_MS);
         if stale && self.refresh != RefreshMode::Never {
             if let (Some(client_id), Some(refresh_token)) = (client_id, refresh_token) {
-                self.stage = Stage::Refreshing;
                 let url = format!("{}/v1/oauth/token", self.profile_base_url());
-                return Action::Http(token_request(
+                return self.refresh_with(token_request(
                     &url,
                     json!({"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": client_id}),
                     &[("anthropic-beta", OAUTH_BETA)],
@@ -537,6 +566,12 @@ impl SessionFlow {
             }
         }
         self.finish_with(token, expires_ms, now_ms)
+    }
+
+    fn refresh_with(&mut self, request: HttpRequest) -> Action {
+        self.stage = Stage::Refreshing;
+        self.pending = Some(request.clone());
+        Action::Http(request)
     }
 
     fn finish_with(&mut self, token: String, expires_ms: Option<i64>, now_ms: i64) -> Action {
@@ -620,7 +655,7 @@ impl SessionFlow {
                 None => return Action::NotFound,
             },
         };
-        self.creds_path = Some(path.clone());
+        self.source = Some(Locator::File { path: path.clone() });
         self.stage = Stage::Credentials;
         file(&path)
     }
@@ -631,11 +666,13 @@ impl SessionFlow {
         };
         let digest = Sha256::digest(home.as_bytes());
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-        self.stage = Stage::Keychain;
-        Action::Read(Locator::Keychain {
+        let locator = Locator::Keychain {
             service: "Codex Auth".to_owned(),
             account: format!("cli|{}", &hex[..16]),
-        })
+        };
+        self.source = Some(locator.clone());
+        self.stage = Stage::Keychain;
+        Action::Read(locator)
     }
 
     fn codex_account_id(&self) -> Option<String> {
@@ -667,8 +704,7 @@ impl SessionFlow {
                 let stale = self.forced || expires_ms.is_some_and(|e| e <= now_ms + ADVISORY_MS);
                 if stale && self.refresh != RefreshMode::Never {
                     if let Some(refresh_token) = refresh_token {
-                        self.stage = Stage::Refreshing;
-                        return Action::Http(token_request(
+                        return self.refresh_with(token_request(
                             CODEX_TOKEN_URL,
                             json!({"client_id": CODEX_CLIENT_ID, "grant_type": "refresh_token", "refresh_token": refresh_token}),
                             &[],
@@ -680,9 +716,7 @@ impl SessionFlow {
             None => match str_of(&map, "OPENAI_API_KEY") {
                 Some(key) => {
                     self.stage = Stage::Done;
-                    let mut cred = self.credential(key, None, None, None);
-                    cred.label = "session:codex".to_owned();
-                    Action::Ready(cred)
+                    Action::Ready(self.credential(key, None, None, None))
                 }
                 None => Action::NotFound,
             },
@@ -697,7 +731,7 @@ impl SessionFlow {
                 .as_ref()
                 .and_then(|p| str_of(p, "error"))
                 .unwrap_or_default();
-            let permanent = status == 401
+            let revoked = status == 401
                 || status == 403
                 || matches!(
                     code.as_str(),
@@ -706,7 +740,22 @@ impl SessionFlow {
                         | "refresh_token_reused"
                         | "refresh_token_invalidated"
                 );
-            if permanent {
+            let rejected = matches!(
+                code.as_str(),
+                "invalid_client"
+                    | "unauthorized_client"
+                    | "unsupported_grant_type"
+                    | "invalid_request"
+                    | "invalid_scope"
+            );
+            if rejected {
+                self.retried = true;
+                return self.refresh_failed(
+                    format!("token endpoint rejected the request (HTTP {status} {code})"),
+                    now_ms,
+                );
+            }
+            if revoked {
                 self.stage = Stage::Done;
                 self.expired_ms = self.current_token().1;
                 return Action::Failed(auth_error(
@@ -786,12 +835,24 @@ impl SessionFlow {
         self.refresh_failed(message, now_ms)
     }
 
+    /// Continues after the backoff before a second token request.
+    pub fn on_slept(&mut self) -> Action {
+        match self.pending.clone() {
+            Some(request) if self.stage == Stage::Refreshing => Action::Http(request),
+            _ => Action::Failed(auth_error("auth_source", "unexpected sleep for a session")),
+        }
+    }
+
     fn refresh_failed(&mut self, detail: String, now_ms: i64) -> Action {
         let (token, expires) = self.current_token();
         if let Some(token) = token {
             if !self.forced && expires.is_none_or(|e| e > now_ms + MANDATORY_MS) {
                 return self.finish_with(token, expires, now_ms);
             }
+        }
+        if !self.retried && self.pending.is_some() {
+            self.retried = true;
+            return Action::Sleep(REFRESH_BACKOFF_MS);
         }
         self.stage = Stage::Done;
         self.expired_ms = expires;
@@ -835,9 +896,7 @@ impl SessionFlow {
         now_ms: i64,
     ) -> Action {
         if self.refresh == RefreshMode::WriteBack {
-            if let Some(path) = self.creds_path.clone() {
-                self.stage = Stage::Writing;
-                self.pending_creds = Some(creds.clone());
+            if let Some(locator) = self.source.clone() {
                 self.ready = match self.finish_with(token, expires_ms, now_ms) {
                     Action::Ready(c) => Some(c),
                     other => return other,
@@ -847,42 +906,42 @@ impl SessionFlow {
                     serde_json::to_vec_pretty(&Value::Object(creds)).unwrap_or_default();
                 bytes.push(b'\n');
                 return Action::Write {
-                    locator: Locator::File { path },
+                    locator,
                     bytes,
+                    expect: self.etag.clone(),
                 };
             }
         }
         self.finish_with(token, expires_ms, now_ms)
     }
 
-    /// Continues after the host wrote the store.
-    pub fn on_written(&mut self, ok: bool) -> Action {
+    /// Continues after the host answered the write; the refreshed token is used either way.
+    pub fn on_written(&mut self) -> Action {
         self.stage = Stage::Done;
-        if !ok {
-            return Action::Failed(auth_error(
-                "store_write_failed",
-                format!(
-                    "the refreshed {} token could not be written back to its store",
-                    self.preset.as_str()
-                ),
-            ));
-        }
         match self.ready.take() {
             Some(cred) => Action::Ready(cred),
             None => Action::NotFound,
         }
     }
 
-    /// Re-reads and refreshes the session after the vendor rejected the token.
-    pub fn force_refresh(&mut self, now_ms: i64) -> Action {
+    /// Re-reads the store after the vendor rejected the token; refreshes when allowed.
+    pub fn force_refresh(&mut self) -> Action {
         self.forced = true;
-        self.stage = Stage::Credentials;
-        match self.creds_path.clone() {
-            Some(path) if self.preset != SessionPreset::ClaudeCode => file(&path),
-            _ => {
-                let _ = now_ms;
-                Action::NotFound
+        self.etag = None;
+        if self.preset == SessionPreset::ClaudeCodeTokenEnv {
+            self.env.clear();
+            self.stage = Stage::Env(env_candidates(&self.preset));
+            return self.advance();
+        }
+        match self.source.clone() {
+            Some(locator) => {
+                self.stage = match locator {
+                    Locator::Keychain { .. } => Stage::Keychain,
+                    _ => Stage::Credentials,
+                };
+                Action::Read(locator)
             }
+            None => Action::NotFound,
         }
     }
 }

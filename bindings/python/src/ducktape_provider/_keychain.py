@@ -1,4 +1,4 @@
-"""Reads another tool's keychain entry through the platform's own tools."""
+"""Reads and writes another tool's keychain entry through the platform's own tools."""
 from __future__ import annotations
 
 import subprocess
@@ -17,6 +17,17 @@ def read_keychain(service: str, account: str) -> Optional[bytes]:
     return None
 
 
+def write_keychain(service: str, account: str, value: bytes) -> bool:
+    """Stores `value` under `service` and `account`; False when the platform store is unavailable."""
+    if sys.platform == "darwin":
+        return _ok(["security", "add-generic-password", "-U", "-s", service, "-a", account, "-w", value.decode()])
+    if sys.platform.startswith("linux") or "bsd" in sys.platform:
+        return _ok(["secret-tool", "store", f"--label={service}", "service", service, "username", account], stdin=value)
+    if sys.platform == "win32":
+        return _windows_write(f"{account}.{service}", account, value)
+    return False
+
+
 def _run(argv: list[str], *, strip: bool) -> Optional[bytes]:
     try:
         done = subprocess.run(argv, capture_output=True, timeout=10, check=False)
@@ -30,7 +41,15 @@ def _run(argv: list[str], *, strip: bool) -> Optional[bytes]:
     return out or None
 
 
-def _windows(target: str) -> Optional[bytes]:
+def _ok(argv: list[str], stdin: Optional[bytes] = None) -> bool:
+    try:
+        done = subprocess.run(argv, input=stdin, capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def _credential_type():
     import ctypes
     from ctypes import wintypes
 
@@ -50,6 +69,14 @@ def _windows(target: str) -> Optional[bytes]:
             ("UserName", wintypes.LPWSTR),
         ]
 
+    return Credential
+
+
+def _windows(target: str) -> Optional[bytes]:
+    import ctypes
+    from ctypes import wintypes
+
+    Credential = _credential_type()
     try:
         advapi = ctypes.WinDLL("advapi32", use_last_error=True)
         advapi.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.POINTER(Credential))]
@@ -65,3 +92,26 @@ def _windows(target: str) -> Optional[bytes]:
         return blob.decode("utf-16-le").encode() or None
     except (OSError, AttributeError, UnicodeDecodeError):
         return None
+
+
+def _windows_write(target: str, account: str, value: bytes) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    Credential = _credential_type()
+    try:
+        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi.CredWriteW.argtypes = [ctypes.POINTER(Credential), wintypes.DWORD]
+        advapi.CredWriteW.restype = wintypes.BOOL
+        blob = value.decode().encode("utf-16-le")
+        buffer = (ctypes.c_ubyte * len(blob)).from_buffer_copy(blob)
+        cred = Credential()
+        cred.Type = 1
+        cred.TargetName = target
+        cred.CredentialBlobSize = len(blob)
+        cred.CredentialBlob = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte))
+        cred.Persist = 3
+        cred.UserName = account
+        return bool(advapi.CredWriteW(ctypes.byref(cred), 0))
+    except (OSError, AttributeError, UnicodeError):
+        return False

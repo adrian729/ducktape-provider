@@ -2,7 +2,7 @@
 import { Core, defaultCore, loadCore } from "./core.js";
 import { drive } from "./driver.js";
 import { NotFoundError } from "./errors.js";
-import { readKeychain } from "./keychain.js";
+import { readKeychain, writeKeychain } from "./keychain.js";
 import { isBrowser } from "./platform.js";
 import { blocks, withViews } from "./sugar.js";
 
@@ -160,6 +160,7 @@ export class Provider {
       fetch: doFetch,
       core,
       keychain,
+      keychain_write,
       ...rest
     } = options;
     const unknown = Object.keys(rest);
@@ -170,7 +171,9 @@ export class Provider {
     this.observer = observer ?? null;
     this.fetch = doFetch ?? globalThis.fetch.bind(globalThis);
     if (keychain !== undefined && typeof keychain !== "function") throw new TypeError("keychain must be a function taking (service, account)");
+    if (keychain_write !== undefined && typeof keychain_write !== "function") throw new TypeError("keychain_write must be a function taking (service, account, bytes)");
     this.keychain = keychain ?? readKeychain;
+    this.keychainWrite = keychain_write ?? (keychain ? null : writeKeychain);
     this.corePromise = core ? (core instanceof Core ? Promise.resolve(core) : core.then ? core : loadCore(core)) : null;
     const config = { ns };
     if (base_url) config.base_url = base_url.replace(/\/+$/, "");
@@ -219,7 +222,7 @@ export class Provider {
   }
 
   get host() {
-    return { secrets: this.secrets, resolvers: this.resolvers, keychain: this.keychain };
+    return { secrets: this.secrets, resolvers: this.resolvers, keychain: this.keychain, keychainWrite: this.keychainWrite };
   }
 
   core() {

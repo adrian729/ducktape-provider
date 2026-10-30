@@ -1,6 +1,6 @@
 /** The effect loop: runs one operation of the core over fetch. */
 import { errorFromData, UnsupportedError, AuthError, CancelledError } from "./errors.js";
-import { fromBase64, getEnv, randomBytes, readFile, toBase64, writeFile } from "./platform.js";
+import { fromBase64, getEnv, randomBytes, etagOf, readFile, toBase64, writeFile } from "./platform.js";
 
 /** The current time and fresh entropy. */
 export function clock() {
@@ -208,11 +208,36 @@ export async function* drive(core, start, host, { fetch: doFetch, signal, cancel
             if (v && v.length) bytes = v;
           }
           input = bytes ? { type: "read", found: true, bytes: toBase64(bytes) } : { type: "read", found: false };
+          if (bytes && locator.type === "file") input.etag = await etagOf(bytes);
           break;
         }
         case "need_write": {
-          const ok = effect.locator.type === "file" && (await writeFile(effect.locator.path, fromBase64(effect.bytes), effect.private ?? true));
-          input = { type: "written", ok };
+          const locator = effect.locator;
+          const bytes = fromBase64(effect.bytes);
+          if (locator.type === "keychain") {
+            let ok = false;
+            if (host.keychainWrite) {
+              try {
+                ok = !!(await host.keychainWrite(locator.service, locator.account, bytes));
+              } catch {
+                ok = false;
+              }
+            }
+            input = { type: "written", ok };
+            break;
+          }
+          if (locator.type !== "file") {
+            input = { type: "written", ok: false };
+            break;
+          }
+          if (effect.expect) {
+            const current = await readFile(locator.path);
+            if (!current || (await etagOf(current)) !== effect.expect) {
+              input = { type: "written", ok: false, conflict: true };
+              break;
+            }
+          }
+          input = { type: "written", ok: await writeFile(locator.path, bytes, effect.private ?? true) };
           break;
         }
         case "need_user_action": {

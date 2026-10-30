@@ -111,7 +111,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJjbGF1ZGVBaU9hdXRoIjogeyJhY2Nlc3NUb2tlbiI6ICJzay1hbnQtb2F0MDEtY2MiLCAicmVmcmVzaFRva2VuIjogInJ0X2NjIiwgImV4cGlyZXNBdCI6IDE3NjE2OTk2MDAwMDAsICJzY29wZXMiOiBbInVzZXI6aW5mZXJlbmNlIl0sICJzdWJzY3JpcHRpb25UeXBlIjogIm1heCJ9fQ=="
+        "bytes": "eyJjbGF1ZGVBaU9hdXRoIjogeyJhY2Nlc3NUb2tlbiI6ICJzay1hbnQtb2F0MDEtY2MiLCAicmVmcmVzaFRva2VuIjogInJ0X2NjIiwgImV4cGlyZXNBdCI6IDE3NjE2OTk2MDAwMDAsICJzY29wZXMiOiBbInVzZXI6aW5mZXJlbmNlIl0sICJzdWJzY3JpcHRpb25UeXBlIjogIm1heCJ9fQ==",
+        "etag": "68d04cff3fc7639e431f1e886e706da75540125c5305e6332e6e490a160f5d0e"
       }
     },
     {

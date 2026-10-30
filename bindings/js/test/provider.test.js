@@ -264,3 +264,62 @@ test("a loaded core can be shared between providers", async () => {
   assert.equal(r.text, doneResponse(fixture).content.at(-1).text);
   assert.equal(seen.length, 1);
 });
+
+test("a write conflict keeps the refreshed token", async () => {
+  const fixture = anthropic("session_profile_write_conflict_keeps_token");
+  const dir = mkdtempSync(join(tmpdir(), "ducktape-profile-"));
+  sessionStore(fixture, dir, "/home/u/.config/anthropic");
+  process.env.ANTHROPIC_CONFIG_DIR = dir;
+  delete process.env.ANTHROPIC_PROFILE;
+  try {
+    const creds = join(dir, "credentials", "default.json");
+    const inner = scripted(fixture);
+    const fetch = async (url, init) => {
+      if (url.endsWith("/v1/oauth/token")) writeFileSync(creds, JSON.stringify({ access_token: "sk-ant-oat01-other-process", expires_at: 4102444800 }));
+      return inner(url, init);
+    };
+    const p = new Provider("anthropic", { auth: dp.session("anthropic_profile"), fetch });
+    const req = requestOf(fixture);
+    const r = await p.chat(req.messages, { model: req.model });
+    assert.equal(r.text, doneResponse(fixture).content.at(-1).text);
+    assert.equal(JSON.parse(readFileSync(creds, "utf8")).access_token, "sk-ant-oat01-other-process");
+  } finally {
+    delete process.env.ANTHROPIC_CONFIG_DIR;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("codex keychain write-back goes through the keychain writer", async () => {
+  const fixture = load(join(fixtures, "wire", "openai.responses", "session_codex_keychain_write_back.json"));
+  const dir = mkdtempSync(join(tmpdir(), "ducktape-codex-"));
+  process.env.CODEX_HOME = dir;
+  try {
+    const [[key, stored]] = Object.entries(fixture.keychain);
+    const [service] = key.split("|", 2);
+    const b64url = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const jwt = (exp) => `${b64url({ alg: "RS256" })}.${b64url({ exp })}.sig`;
+    const doc = JSON.parse(stored);
+    doc.tokens.access_token = jwt(Math.floor(Date.now() / 1000) + 60);
+    fixture.http[0].body = JSON.stringify({ ...JSON.parse(fixture.http[0].body), access_token: jwt(Math.floor(Date.now() / 1000) + 86400) });
+    const written = [];
+    const keychain = async (s) => (s === service ? JSON.stringify(doc) : null);
+    const keychain_write = async (s, a, bytes) => {
+      written.push([s, a, JSON.parse(new TextDecoder().decode(bytes))]);
+      return true;
+    };
+    const p = new Provider("openai", { auth: dp.session("codex", { refresh: "write_back" }), keychain, keychain_write, fetch: scripted(fixture) });
+    const req = requestOf(fixture);
+    const r = await p.chat(req.messages, { model: req.model });
+    assert.equal(r.text, doneResponse(fixture).content.at(-1).text);
+    assert.equal(written[0][0], "Codex Auth");
+    assert.ok(written[0][1].startsWith("cli|"));
+    assert.equal(written[0][2].tokens.refresh_token, "rt_d");
+    const readerOnly = new Provider("openai", { auth: dp.session("codex", { refresh: "write_back" }), keychain, fetch: scripted(fixture) });
+    assert.equal(readerOnly.keychainWrite, null);
+    assert.equal((await readerOnly.chat(req.messages, { model: req.model })).text, r.text);
+    assert.throws(() => new Provider("openai", { keychain_write: "nope" }), TypeError);
+  } finally {
+    delete process.env.CODEX_HOME;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

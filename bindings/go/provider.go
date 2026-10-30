@@ -32,6 +32,7 @@ type Config struct {
 	Client                *http.Client
 	Core                  *Core
 	Keychain              KeychainReader
+	KeychainWrite         KeychainWriter
 }
 
 // Provider is one endpoint of one vendor.
@@ -67,7 +68,7 @@ func New(ns string, cfg Config) (*Provider, error) {
 	}
 	p := &Provider{
 		ns:    ns,
-		host:  &host{secrets: map[string]string{}, resolvers: map[string]func(context.Context) (string, error){}, keychain: cfg.Keychain, client: cfg.Client, observer: cfg.Observer},
+		host:  &host{secrets: map[string]string{}, resolvers: map[string]func(context.Context) (string, error){}, keychain: cfg.Keychain, keychainWrite: cfg.KeychainWrite, client: cfg.Client, observer: cfg.Observer},
 		core:  cfg.Core,
 		infos: map[string]*ModelInfo{},
 		caps:  map[string]*Capabilities{},
@@ -77,6 +78,9 @@ func New(ns string, cfg Config) (*Provider, error) {
 	}
 	if p.host.keychain == nil {
 		p.host.keychain = ReadKeychain
+		if p.host.keychainWrite == nil {
+			p.host.keychainWrite = WriteKeychain
+		}
 	}
 	c := ProviderConfig{NS: ProviderConfigNS(ns)}
 	if cfg.BaseURL != "" {

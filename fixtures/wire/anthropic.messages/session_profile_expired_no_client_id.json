@@ -149,7 +149,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJhdXRoZW50aWNhdGlvbiI6IHsidHlwZSI6ICJ1c2VyX29hdXRoIn19"
+        "bytes": "eyJhdXRoZW50aWNhdGlvbiI6IHsidHlwZSI6ICJ1c2VyX29hdXRoIn19",
+        "etag": "0f2b91cf1c4fe6a1c6142402042848ee0afa2ac237f55ec2706532064c1de2e2"
       }
     },
     {
@@ -165,7 +166,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJhY2Nlc3NfdG9rZW4iOiAic2stYW50LW9hdDAxLW9sZCIsICJleHBpcmVzX2F0IjogMTc2MTY5NTk5MH0="
+        "bytes": "eyJhY2Nlc3NfdG9rZW4iOiAic2stYW50LW9hdDAxLW9sZCIsICJleHBpcmVzX2F0IjogMTc2MTY5NTk5MH0=",
+        "etag": "34dd964be35c38d918bde133150b9d082da6b1326851c1dd2e401230cbe3bed9"
       }
     },
     {

@@ -8,8 +8,8 @@ import { mismatch, replay } from "./replay.js";
 const core = await loadCore();
 
 for (const f of wireFixtures()) {
-  test(`${f.wire}/${f.name}`, () => {
+  test(`${f.wire}/${f.name}`, async () => {
     const fixture = load(f.path);
-    assert.equal(mismatch(replay(core, fixture), fixture.exchange), null);
+    assert.equal(mismatch(await replay(core, fixture), fixture.exchange), null);
   });
 }

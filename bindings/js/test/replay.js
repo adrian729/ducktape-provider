@@ -1,4 +1,4 @@
-import { toBase64 } from "../src/platform.js";
+import { etagOf, toBase64 } from "../src/platform.js";
 
 const ENTROPY = toBase64(new Uint8Array(32).fill(128));
 
@@ -20,12 +20,14 @@ export function normalize(step) {
 }
 
 const encode = (text) => toBase64(new TextEncoder().encode(text));
+const etag = (text) => etagOf(new TextEncoder().encode(text));
 
 /** Replays a wire fixture's script through the core and returns the exchange it produced. */
-export function replay(core, fixture) {
+export async function replay(core, fixture) {
   const [op, first] = core.start({ ...fixture.start, clock: clock(0) });
   let step = first;
   const http = fixture.http[Symbol.iterator]();
+  const writes = (fixture.writes ?? [])[Symbol.iterator]();
   let queue = [];
   const out = [];
   let tick = 0;
@@ -71,11 +73,14 @@ export function replay(core, fixture) {
                 ? fixture.env?.[loc.name]
                 : fixture.keychain?.[`${loc.service}|${loc.account}`];
           input = value === undefined ? { type: "read", found: false } : { type: "read", found: true, bytes: encode(value) };
+          if (value !== undefined && loc.type === "file") input.etag = await etag(value);
           break;
         }
-        case "need_write":
-          input = { type: "written", ok: true, conflict: false };
+        case "need_write": {
+          const w = writes.next().value ?? { ok: true };
+          input = { type: "written", ok: w.ok, conflict: w.conflict ?? false };
           break;
+        }
         default:
           throw new Error(`unsupported effect in replay: ${effect.type}`);
       }

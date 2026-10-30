@@ -103,7 +103,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJjbGF1ZGVBaU9hdXRoIjogeyJhY2Nlc3NUb2tlbiI6ICJzay1hbnQtb2F0MDEtY2MiLCAicmVmcmVzaFRva2VuIjogInJ0X2NjIiwgImV4cGlyZXNBdCI6IDE3NjE2OTU5OTUwMDAsICJzY29wZXMiOiBbInVzZXI6aW5mZXJlbmNlIl0sICJzdWJzY3JpcHRpb25UeXBlIjogIm1heCJ9fQ=="
+        "bytes": "eyJjbGF1ZGVBaU9hdXRoIjogeyJhY2Nlc3NUb2tlbiI6ICJzay1hbnQtb2F0MDEtY2MiLCAicmVmcmVzaFRva2VuIjogInJ0X2NjIiwgImV4cGlyZXNBdCI6IDE3NjE2OTU5OTUwMDAsICJzY29wZXMiOiBbInVzZXI6aW5mZXJlbmNlIl0sICJzdWJzY3JpcHRpb25UeXBlIjogIm1heCJ9fQ==",
+        "etag": "b36c2b93b65965f20c0ca999c7c1452184abecb77f7f6e7f93a24c1675a630d8"
       }
     },
     {

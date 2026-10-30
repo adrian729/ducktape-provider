@@ -36,8 +36,25 @@ pub struct WireFixture {
     pub keychain: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub http: Vec<ScriptedHttp>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<ScriptedWrite>,
     #[serde(default)]
     pub exchange: Vec<Exchange>,
+}
+
+/// One scripted answer to a write.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptedWrite {
+    pub ok: bool,
+    #[serde(default)]
+    pub conflict: bool,
+}
+
+/// The etag replay hosts report for file reads.
+pub fn etag(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// One step of the golden exchange.
@@ -62,6 +79,7 @@ pub fn run(fixture: &WireFixture) -> Vec<Exchange> {
     let (mut op, mut step) = Operation::start(start);
     let mut out = Vec::new();
     let mut http = fixture.http.iter();
+    let mut writes = fixture.writes.iter();
     let mut tick = 0;
     let mut queue: Vec<Input> = Vec::new();
     for _ in 0..10_000 {
@@ -120,15 +138,22 @@ pub fn run(fixture: &WireFixture) -> Vec<Exchange> {
                         fixture.keychain.get(&format!("{service}|{account}"))
                     }
                 };
+                let tagged = matches!(locator, Locator::File { .. });
                 Input::Read {
                     found: found.is_some(),
                     bytes: found.map(|v| v.clone().into_bytes()),
-                    etag: None,
+                    etag: found.filter(|_| tagged).map(|v| etag(v.as_bytes())),
                 }
             }
-            Effect::NeedWrite { .. } => Input::Written {
-                ok: true,
-                conflict: false,
+            Effect::NeedWrite { .. } => match writes.next() {
+                Some(w) => Input::Written {
+                    ok: w.ok,
+                    conflict: w.conflict,
+                },
+                None => Input::Written {
+                    ok: true,
+                    conflict: false,
+                },
             },
             other => panic!("{}: unsupported effect in replay: {other:?}", fixture.name),
         };

@@ -103,7 +103,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJvdGhlciI6IDF9"
+        "bytes": "eyJvdGhlciI6IDF9",
+        "etag": "ba15681d40dc8af3bc3f71358ce39913dbaa9d6f5b6cea01bcff96858e985a1d"
       }
     },
     {

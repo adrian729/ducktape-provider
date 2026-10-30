@@ -58,10 +58,10 @@ if r.stop.reason == "tool_call":
 | A key in code | `Provider("anthropic", auth="sk-ant-...")` |
 | A token fetched at request time | `Provider("openai", auth=resolver(get_token))` |
 | An existing login | `Provider("openai", auth=session("codex"))`, `Provider("anthropic", auth=session("claude_code"))`, `session("anthropic_profile", profile="work")` |
-| Refreshing another tool's login | `session("codex", refresh="memory")` keeps the new token in process; `refresh="write_back"` updates the tool's store |
+| Refreshing another tool's login | `session("codex", refresh="memory")` keeps the new token in process; `refresh="write_back"` updates the tool's store (file or keychain, only if it did not change meanwhile; the call still uses the new token when the write is refused) |
 | Login state | `p.auth_status()` gives `source`, `expires_at` and `session`; `source` is `None` when nothing is configured |
 | Several sources in order | `Provider("anthropic", auth=[session("claude_code"), env("ANTHROPIC_API_KEY")])` |
-| Your own keychain reader | `Provider("openai", auth=session("codex"), keychain=lambda service, account: keyring.get_password(service, account))`; the default reads macOS Keychain, Linux Secret Service and Windows Credential Manager |
+| Your own keychain | `Provider("openai", auth=session("codex"), keychain=lambda service, account: keyring.get_password(service, account), keychain_write=lambda service, account, value: keyring.set_password(service, account, value.decode()))`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager; a reader without a writer makes `refresh="write_back"` keep the refreshed token in memory only |
 | Local Ollama | `Provider("ollama", default_model="llama3")` |
 | Options | `p.chat(msgs, options={"max_output_tokens": 500, "reasoning": "high", "tool_choice": {"name": "add"}})` |
 | Vendor fields | `p.chat(msgs, vendor={"anthropic": {"temperature": 0.2}})` |
@@ -112,7 +112,7 @@ if (reply.stop.reason === "tool_call") {
 | An existing login | `new Provider("openai", { auth: session("codex") })`, `session("anthropic_profile", { profile: "work" })` |
 | Refreshing another tool's login | `session("codex", { refresh: "memory" })` or `{ refresh: "write_back" }`, same meaning as in Python |
 | Login state | `await p.authStatus()` gives `source`, `expires_at` and `session` |
-| Your own keychain reader | `new Provider("openai", { auth: session("codex"), keychain: async (service, account) => ... })`; the default reads macOS Keychain, Linux Secret Service and Windows Credential Manager |
+| Your own keychain | `new Provider("openai", { auth: session("codex"), keychain: async (service, account) => ..., keychain_write: async (service, account, bytes) => true })`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | In a browser | `resolver()` against your backend; an API key needs `dangerously_allow_browser: true` |
 | Cancel | `signal: controller.signal` on any call, or `stream.cancel()` |
 | Options and vendor fields | same keys as Python: `{ options: { reasoning: "high" }, vendor: { openai: { temperature: 0.2 } } }` |
@@ -164,7 +164,7 @@ if r.Stop.Reason == ducktape.StopReasonToolCall {
 | Refreshing another tool's login | `ducktape.Session("codex", ducktape.SessionOptions{Refresh: ducktape.AuthSourceRefreshMemory})` or `AuthSourceRefreshWriteBack`, same meaning as in Python |
 | Login state | `p.AuthStatus(ctx)` gives `Source`, `ExpiresAt` and `Session` |
 | Several sources in order | `Auth: []ducktape.Credential{ducktape.Session("claude_code"), ducktape.Env("ANTHROPIC_API_KEY")}` |
-| Your own keychain reader | `Keychain: func(ctx context.Context, service, account string) ([]byte, error) { ... }`; the default reads macOS Keychain, Linux Secret Service and Windows Credential Manager |
+| Your own keychain | `Keychain: func(ctx context.Context, service, account string) ([]byte, error) { ... }` and `KeychainWrite: func(ctx context.Context, service, account string, value []byte) (bool, error) { ... }`; the defaults read and write macOS Keychain, Linux Secret Service and Windows Credential Manager |
 | Cancel | cancel the `ctx` of any call, or `s.Close()` on a stream |
 | Options and vendor fields | `&ducktape.ChatOptions{Options: &ducktape.Options{Reasoning: ducktape.ReasoningLevelHigh}, Vendor: ducktape.VendorMap{"openai": {"temperature": 0.2}}}` |
 | Images | `ducktape.User(ducktape.Text("what is this?"), ducktape.Image(pngBytes, "image/png"))` or `ducktape.ImageURL("https://...")` |

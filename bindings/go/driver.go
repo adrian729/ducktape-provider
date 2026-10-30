@@ -97,6 +97,7 @@ type input struct {
 	Status    int               `json:"status,omitempty"`
 	Headers   map[string]string `json:"headers,omitzero"`
 	Bytes     string            `json:"bytes,omitempty"`
+	Etag      string            `json:"etag,omitempty"`
 	Error     *transportError   `json:"error,omitempty"`
 	SecretRef string            `json:"secret_ref,omitempty"`
 	Found     *bool             `json:"found,omitempty"`
@@ -112,11 +113,17 @@ type resumeDoc struct {
 }
 
 type host struct {
-	secrets   map[string]string
-	resolvers map[string]func(context.Context) (string, error)
-	keychain  KeychainReader
-	client    *http.Client
-	observer  Observer
+	secrets       map[string]string
+	resolvers     map[string]func(context.Context) (string, error)
+	keychain      KeychainReader
+	keychainWrite KeychainWriter
+	client        *http.Client
+	observer      Observer
+}
+
+func etag(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // Observer receives request, response, event and retry notifications as raw JSON.
@@ -397,6 +404,7 @@ func (r *runner) read(loc *locator) input {
 		return input{Type: "read", Found: boolPtr(false)}
 	}
 	var data []byte
+	tag := ""
 	switch loc.Type {
 	case "file":
 		b, err := os.ReadFile(loc.Path)
@@ -404,6 +412,7 @@ func (r *runner) read(loc *locator) input {
 			return input{Type: "read", Found: boolPtr(false)}
 		}
 		data = b
+		tag = etag(b)
 	case "env":
 		v, ok := os.LookupEnv(loc.Name)
 		if !ok {
@@ -422,25 +431,29 @@ func (r *runner) read(loc *locator) input {
 	default:
 		return input{Type: "read", Found: boolPtr(false)}
 	}
-	return input{Type: "read", Found: boolPtr(true), Bytes: base64.StdEncoding.EncodeToString(data)}
+	return input{Type: "read", Found: boolPtr(true), Bytes: base64.StdEncoding.EncodeToString(data), Etag: tag}
 }
 
 func (r *runner) write(e effect) input {
-	if e.Locator == nil || e.Locator.Type != "file" {
+	data, err := base64.StdEncoding.DecodeString(e.Bytes)
+	if err != nil || e.Locator == nil {
 		return input{Type: "written", Ok: boolPtr(false)}
 	}
-	data, err := base64.StdEncoding.DecodeString(e.Bytes)
-	if err != nil {
+	if e.Locator.Type == "keychain" {
+		ok := false
+		if r.host.keychainWrite != nil {
+			ok, _ = r.host.keychainWrite(r.ctx, e.Locator.Service, e.Locator.Account, data)
+		}
+		return input{Type: "written", Ok: boolPtr(ok)}
+	}
+	if e.Locator.Type != "file" {
 		return input{Type: "written", Ok: boolPtr(false)}
 	}
 	path := e.Locator.Path
 	if e.Expect != "" {
 		current, readErr := os.ReadFile(path)
-		if readErr == nil {
-			sum := sha256.Sum256(current)
-			if hex.EncodeToString(sum[:]) != e.Expect {
-				return input{Type: "written", Ok: boolPtr(false), Conflict: boolPtr(true)}
-			}
+		if readErr != nil || etag(current) != e.Expect {
+			return input{Type: "written", Ok: boolPtr(false), Conflict: boolPtr(true)}
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

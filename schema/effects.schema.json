@@ -312,7 +312,7 @@
             },
             "etag": {
               "type": "string",
-              "description": "Opaque version of what was read, echoed on need_write.expect"
+              "description": "Version of what was read, echoed on need_write.expect; every host reports the lower-case hex SHA-256 of the bytes for file reads and nothing for keychain or env reads"
             }
           },
           "required": [

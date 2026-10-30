@@ -164,7 +164,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJ2ZXJzaW9uIjogIjEuMCIsICJhdXRoZW50aWNhdGlvbiI6IHsidHlwZSI6ICJ1c2VyX29hdXRoIiwgImNsaWVudF9pZCI6ICJjaWRfMSJ9LCAid29ya3NwYWNlX2lkIjogIndzXzEifQ=="
+        "bytes": "eyJ2ZXJzaW9uIjogIjEuMCIsICJhdXRoZW50aWNhdGlvbiI6IHsidHlwZSI6ICJ1c2VyX29hdXRoIiwgImNsaWVudF9pZCI6ICJjaWRfMSJ9LCAid29ya3NwYWNlX2lkIjogIndzXzEifQ==",
+        "etag": "8f0532787c381a1e05cf3ff1e66f84ff7af95af086031f622f343b1db1f03e37"
       }
     },
     {
@@ -180,7 +181,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJ2ZXJzaW9uIjogIjEuMCIsICJ0eXBlIjogIm9hdXRoX3Rva2VuIiwgImFjY2Vzc190b2tlbiI6ICJzay1hbnQtb2F0MDEtb2xkIiwgImV4cGlyZXNfYXQiOiAxNzYxNjk2MDYwLCAicmVmcmVzaF90b2tlbiI6ICJydF8xIiwgImV4dHJhIjogImtlcHQifQ=="
+        "bytes": "eyJ2ZXJzaW9uIjogIjEuMCIsICJ0eXBlIjogIm9hdXRoX3Rva2VuIiwgImFjY2Vzc190b2tlbiI6ICJzay1hbnQtb2F0MDEtb2xkIiwgImV4cGlyZXNfYXQiOiAxNzYxNjk2MDYwLCAicmVmcmVzaF90b2tlbiI6ICJydF8xIiwgImV4dHJhIjogImtlcHQifQ==",
+        "etag": "b0fc18ce277d032c65a6b3dca46a1a85ac86aea405d1f003800ffaf6654ae173"
       }
     },
     {
@@ -243,6 +245,7 @@
             "path": "/home/u/.config/anthropic/credentials/default.json"
           },
           "bytes": "ewogICJhY2Nlc3NfdG9rZW4iOiAic2stYW50LW9hdDAxLW5ldyIsCiAgImV4cGlyZXNfYXQiOiAxNzYxNjk5NjAxLAogICJleHRyYSI6ICJrZXB0IiwKICAicmVmcmVzaF90b2tlbiI6ICJydF8yIiwKICAidHlwZSI6ICJvYXV0aF90b2tlbiIsCiAgInZlcnNpb24iOiAiMS4wIgp9Cg==",
+          "expect": "b0fc18ce277d032c65a6b3dca46a1a85ac86aea405d1f003800ffaf6654ae173",
           "private": true
         }
       },

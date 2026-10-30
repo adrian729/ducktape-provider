@@ -24,6 +24,11 @@ type exchange struct {
 	Input json.RawMessage `json:"input,omitempty"`
 }
 
+type scriptedWrite struct {
+	Ok       bool `json:"ok"`
+	Conflict bool `json:"conflict"`
+}
+
 type wireFixture struct {
 	Name     string            `json:"name"`
 	Start    json.RawMessage   `json:"start"`
@@ -32,6 +37,7 @@ type wireFixture struct {
 	Files    map[string]string `json:"files"`
 	Keychain map[string]string `json:"keychain"`
 	HTTP     []scriptedHTTP    `json:"http"`
+	Writes   []scriptedWrite   `json:"writes"`
 	Exchange []exchange        `json:"exchange"`
 }
 
@@ -101,6 +107,7 @@ func replay(t *testing.T, core *Core, f wireFixture) []actual {
 	var out []actual
 	var queue []input
 	http := f.HTTP
+	writes := f.Writes
 	var tick int64
 	for i := 0; i < 10_000; i++ {
 		e := s.Effect
@@ -167,9 +174,16 @@ func replay(t *testing.T, core *Core, f wireFixture) []actual {
 			next = input{Type: "read", Found: boolPtr(ok)}
 			if ok {
 				next.Bytes = base64.StdEncoding.EncodeToString([]byte(value))
+				if e.Locator.Type == "file" {
+					next.Etag = etag([]byte(value))
+				}
 			}
 		case "need_write":
-			next = input{Type: "written", Ok: boolPtr(true), Conflict: boolPtr(false)}
+			w := scriptedWrite{Ok: true}
+			if len(writes) > 0 {
+				w, writes = writes[0], writes[1:]
+			}
+			next = input{Type: "written", Ok: boolPtr(w.Ok), Conflict: boolPtr(w.Conflict)}
 		default:
 			t.Fatalf("%s: unsupported effect in replay: %s", f.Name, e.Type)
 		}

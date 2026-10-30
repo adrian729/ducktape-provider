@@ -79,8 +79,12 @@ try {
   console.log(`browser conformance: ${results.pass} passed, ${results.fail} failed; chat text ${JSON.stringify(results.provider.chat).slice(0, 40)}; stream ${results.provider.stream.length} events ending in ${results.provider.stream.at(-1)}; browser gate ${results.provider.browser_gate ? "enforced" : "MISSING"}`);
   failed = results.fail || results.provider.stream.at(-1) !== "finish" || !results.provider.browser_gate ? 1 : 0;
 } finally {
-  child?.kill();
+  if (child) {
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill();
+    await exited;
+  }
   server.close();
-  rmSync(profile, { recursive: true, force: true });
+  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
 process.exit(failed);

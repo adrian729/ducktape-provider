@@ -591,3 +591,89 @@ func TestObserverSeesEvents(t *testing.T) {
 		t.Fatalf("hooks %v", hooks)
 	}
 }
+
+func TestWriteConflictKeepsRefreshedToken(t *testing.T) {
+	f := anthropicFixture(t, "session_profile_write_conflict_keeps_token")
+	dir := t.TempDir()
+	sessionStore(t, f, dir, "/home/u/.config/anthropic")
+	t.Setenv("ANTHROPIC_CONFIG_DIR", dir)
+	t.Setenv("ANTHROPIC_PROFILE", "")
+	creds := filepath.Join(dir, "credentials", "default.json")
+	tr := &scripted{script: f.HTTP}
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/v1/oauth/token") {
+			_ = os.WriteFile(creds, []byte(`{"access_token": "sk-ant-oat01-other-process", "expires_at": 4102444800}`), 0o600)
+		}
+		return tr.RoundTrip(req)
+	})
+	p, err := New("anthropic", Config{Auth: []Credential{Session("anthropic_profile")}, Client: &http.Client{Transport: rt}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, req := requestOf(t, f)
+	r, err := p.Chat(context.Background(), req.Messages, &ChatOptions{Model: req.Model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := doneResponse(t, f)
+	if r.Text() != expected.Content[len(expected.Content)-1].Text {
+		t.Fatalf("text %q", r.Text())
+	}
+	after, _ := os.ReadFile(creds)
+	if !strings.Contains(string(after), "other-process") {
+		t.Fatalf("the conflicting write was overwritten: %s", after)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestCodexKeychainWriteBack(t *testing.T) {
+	f := openaiFixture(t, "session_codex_keychain_write_back")
+	t.Setenv("CODEX_HOME", t.TempDir())
+	var service, stored string
+	for k, v := range f.Keychain {
+		service, stored = strings.SplitN(k, "|", 2)[0], v
+	}
+	var doc map[string]any
+	_ = json.Unmarshal([]byte(stored), &doc)
+	doc["tokens"].(map[string]any)["access_token"] = freshJWT(time.Now().Add(time.Minute))
+	var token map[string]any
+	_ = json.Unmarshal([]byte(*f.HTTP[0].Body), &token)
+	token["access_token"] = freshJWT(time.Now().Add(24 * time.Hour))
+	body := mustJSON(t, token)
+	f.HTTP[0].Body = &body
+	var written [][]string
+	reader := func(ctx context.Context, s, a string) ([]byte, error) {
+		if s == service {
+			return []byte(mustJSON(t, doc)), nil
+		}
+		return nil, nil
+	}
+	writer := func(ctx context.Context, s, a string, value []byte) (bool, error) {
+		written = append(written, []string{s, a, string(value)})
+		return true, nil
+	}
+	p, tr := newProvider(t, f, Config{Auth: []Credential{Session("codex", SessionOptions{Refresh: AuthSourceRefreshWriteBack})}, Keychain: reader, KeychainWrite: writer})
+	_, req := requestOf(t, f)
+	r, err := p.Chat(context.Background(), req.Messages, &ChatOptions{Model: req.Model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := doneResponse(t, f)
+	if r.Text() != expected.Content[len(expected.Content)-1].Text || len(tr.seen) != 2 {
+		t.Fatalf("text %q seen %d", r.Text(), len(tr.seen))
+	}
+	if len(written) != 1 || written[0][0] != "Codex Auth" || !strings.HasPrefix(written[0][1], "cli|") || !strings.Contains(written[0][2], "rt_d") {
+		t.Fatalf("written %v", written)
+	}
+	readerOnly, _ := newProvider(t, f, Config{Auth: []Credential{Session("codex", SessionOptions{Refresh: AuthSourceRefreshWriteBack})}, Keychain: reader})
+	if readerOnly.host.keychainWrite != nil {
+		t.Fatal("a custom reader must not get the default writer")
+	}
+	again, err := readerOnly.Chat(context.Background(), req.Messages, &ChatOptions{Model: req.Model})
+	if err != nil || again.Text() != r.Text() {
+		t.Fatalf("reader-only chat: %v", err)
+	}
+}

@@ -321,3 +321,64 @@ def test_codex_keychain_fallback(monkeypatch, tmp_path):
     assert seen[0].headers["chatgpt-account-id"] == "acct_1"
     with pytest.raises(TypeError):
         Provider("openai", keychain="not callable")
+
+
+def test_write_conflict_keeps_the_refreshed_token(monkeypatch, tmp_path):
+    fixture = load(ANTHROPIC / "session_profile_write_conflict_keeps_token.json")
+    session_store(fixture, tmp_path, "/home/u/.config/anthropic")
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("ANTHROPIC_PROFILE", raising=False)
+    creds = tmp_path / "credentials" / "default.json"
+    inner = scripted(fixture)
+
+    def handler(request):
+        if request.url.path == "/v1/oauth/token":
+            creds.write_text(json.dumps({"access_token": "sk-ant-oat01-other-process", "expires_at": 4102444800}))
+        return inner(request)
+
+    p = Provider("anthropic", auth=dp.session("anthropic_profile"), client=httpx.Client(transport=httpx.MockTransport(handler)))
+    req = request_of(fixture)
+    r = p.chat(req["messages"], model=req["model"])
+    assert r.text == done_response(fixture)["content"][-1]["text"]
+    assert json.loads(creds.read_text())["access_token"] == "sk-ant-oat01-other-process"
+
+
+def test_codex_keychain_write_back_uses_the_writer(monkeypatch, tmp_path):
+    fixture = load(FIXTURES / "wire" / "openai.responses" / "session_codex_keychain_write_back.json")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (service_account, stored), = fixture["keychain"].items()
+    service, _ = service_account.split("|", 1)
+    import time
+
+    def jwt(payload):
+        enc = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+        return f"{enc({'alg': 'RS256'})}.{enc(payload)}.sig"
+
+    doc = json.loads(stored)
+    doc["tokens"]["access_token"] = jwt({"exp": int(time.time()) + 60})
+    fresh = json.loads(fixture["http"][0]["body"])
+    fresh["access_token"] = jwt({"exp": int(time.time()) + 86400})
+    fixture["http"][0]["body"] = json.dumps(fresh)
+    written = []
+    reader = lambda s, a: json.dumps(doc) if s == service else None
+
+    def writer(s, a, value):
+        written.append((s, a, json.loads(value)))
+        return True
+
+    p = Provider(
+        "openai",
+        auth=dp.session("codex", refresh="write_back"),
+        keychain=reader,
+        keychain_write=writer,
+        client=httpx.Client(transport=httpx.MockTransport(scripted(fixture))),
+    )
+    req = request_of(fixture)
+    r = p.chat(req["messages"], model=req["model"])
+    assert r.text == done_response(fixture)["content"][-1]["text"]
+    assert written[0][0] == "Codex Auth" and written[0][1].startswith("cli|") and written[0][2]["tokens"]["refresh_token"] == "rt_d"
+    reader_only = Provider("openai", auth=dp.session("codex", refresh="write_back"), keychain=reader, client=httpx.Client(transport=httpx.MockTransport(scripted(fixture))))
+    assert reader_only.host.keychain_write is None
+    assert reader_only.chat(req["messages"], model=req["model"]).text == r.text
+    with pytest.raises(TypeError):
+        Provider("openai", keychain_write="nope")

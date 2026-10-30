@@ -383,14 +383,13 @@ impl Operation {
                 }
                 if status == 401
                     && !self.refresh_forced
-                    && self.session.as_ref().is_some_and(SessionFlow::can_refresh)
+                    && self.session.as_ref().is_some_and(|f| !f.forced())
                 {
                     self.refresh_forced = true;
-                    let now = self.now_ms;
                     let action = self
                         .session
                         .as_mut()
-                        .map(|f| f.force_refresh(now))
+                        .map(SessionFlow::force_refresh)
                         .unwrap_or(Action::NotFound);
                     return self.session_act(action);
                 }
@@ -408,17 +407,24 @@ impl Operation {
                 self.fail_or_retry(e)
             }
             (State::Sleeping, Input::Slept) => self.send(),
-            (State::Session, Input::Read { found, bytes, .. }) => {
+            (State::Session, Input::Read { found, bytes, etag }) => {
                 let now = self.now_ms;
                 let action = match &mut self.session {
-                    Some(flow) => flow.on_read(found, bytes, now),
+                    Some(flow) => flow.on_read(found, bytes, etag, now),
                     None => Action::NotFound,
                 };
                 self.session_act(action)
             }
-            (State::Session, Input::Written { ok, .. }) => {
+            (State::Session, Input::Written { .. }) => {
                 let action = match &mut self.session {
-                    Some(flow) => flow.on_written(ok),
+                    Some(flow) => flow.on_written(),
+                    None => Action::NotFound,
+                };
+                self.session_act(action)
+            }
+            (State::Session, Input::Slept) => {
+                let action = match &mut self.session {
+                    Some(flow) => flow.on_slept(),
                     None => Action::NotFound,
                 };
                 self.session_act(action)
@@ -720,7 +726,7 @@ impl Operation {
                 );
                 match flow {
                     Ok(mut flow) => {
-                        let action = flow.start(self.now_ms);
+                        let action = flow.start();
                         self.session = Some(flow);
                         self.auth_sources = sources;
                         self.auth_index = index;
@@ -814,14 +820,22 @@ impl Operation {
                 self.state = State::Session;
                 Step::effect(Effect::NeedRead { locator })
             }
-            Action::Write { locator, bytes } => {
+            Action::Write {
+                locator,
+                bytes,
+                expect,
+            } => {
                 self.state = State::Session;
                 Step::effect(Effect::NeedWrite {
                     locator,
                     bytes,
-                    expect: None,
+                    expect,
                     private: true,
                 })
+            }
+            Action::Sleep(ms) => {
+                self.state = State::Session;
+                Step::effect(Effect::NeedSleep { ms })
             }
             Action::Http(request) => {
                 self.state = State::SessionHttp {

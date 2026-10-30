@@ -1,5 +1,6 @@
 """Replays every wire fixture through the native module and checks the golden exchange."""
 import base64
+import hashlib
 import json
 
 import pytest
@@ -30,6 +31,7 @@ def replay(fixture):
     start["clock"] = clock(0)
     op, step = _core.start(start)
     http = iter(fixture["http"])
+    writes = list(fixture.get("writes", []))
     queue = []
     out = []
     tick = 0
@@ -70,8 +72,11 @@ def replay(fixture):
             data = {"type": "read", "found": value is not None}
             if value is not None:
                 data["bytes"] = base64.b64encode(value.encode()).decode()
+                if loc["type"] == "file":
+                    data["etag"] = hashlib.sha256(value.encode()).hexdigest()
         elif kind == "need_write":
-            data = {"type": "written", "ok": True, "conflict": False}
+            w = writes.pop(0) if writes else {"ok": True}
+            data = {"type": "written", "ok": w["ok"], "conflict": w.get("conflict", False)}
         else:
             raise AssertionError(f"unsupported effect in replay: {kind}")
         out.append({"step": step, "input": data})

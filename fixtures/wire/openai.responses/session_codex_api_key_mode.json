@@ -111,7 +111,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJhdXRoX21vZGUiOiAiYXBpa2V5IiwgIk9QRU5BSV9BUElfS0VZIjogInNrLWNvZGV4LWtleSJ9"
+        "bytes": "eyJhdXRoX21vZGUiOiAiYXBpa2V5IiwgIk9QRU5BSV9BUElfS0VZIjogInNrLWNvZGV4LWtleSJ9",
+        "etag": "82327a3c92ecb18e5e01b2c80a287ce0cddca0c3f0c20b3472d4dfbe233eaa6f"
       }
     },
     {

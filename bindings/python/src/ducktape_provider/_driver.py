@@ -8,7 +8,7 @@ from typing import Any, Callable, Generator, Optional
 
 from . import _core
 from ._errors import AuthError, ProviderError, UnsupportedError, error_from_dict
-from ._keychain import read_keychain
+from ._keychain import read_keychain, write_keychain
 
 
 @dataclass
@@ -87,6 +87,7 @@ class Host:
         self.secrets: dict[str, str] = {}
         self.resolvers: dict[str, Callable[[], Any]] = {}
         self.keychain: Callable[[str, str], Any] = read_keychain
+        self.keychain_write: Optional[Callable[[str, str, bytes], Any]] = write_keychain
 
 
 def clock() -> dict[str, Any]:
@@ -121,9 +122,10 @@ def _read(locator: dict[str, Any], host: Host) -> dict[str, Any]:
     if kind == "file":
         try:
             with open(locator["path"], "rb") as f:
-                return {"type": "read", "found": True, "bytes": f.read()}
+                data = f.read()
         except OSError:
             return {"type": "read", "found": False}
+        return {"type": "read", "found": True, "bytes": data, "etag": _etag(data)}
     if kind == "env":
         value = os.environ.get(locator["name"])
         if value is None:
@@ -132,14 +134,37 @@ def _read(locator: dict[str, Any], host: Host) -> dict[str, Any]:
     return {"type": "read", "found": False}
 
 
-def _write(effect: dict[str, Any]) -> dict[str, Any]:
+def _etag(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def _write(effect: dict[str, Any], host: Host) -> dict[str, Any]:
     import base64
 
     locator = effect["locator"]
+    data = base64.b64decode(effect["bytes"])
+    if locator.get("type") == "keychain":
+        if host.keychain_write is None:
+            return {"type": "written", "ok": False}
+        try:
+            ok = bool(host.keychain_write(locator["service"], locator["account"], data))
+        except Exception:
+            ok = False
+        return {"type": "written", "ok": ok}
     if locator.get("type") != "file":
         return {"type": "written", "ok": False}
     path = locator["path"]
-    data = base64.b64decode(effect["bytes"])
+    expect = effect.get("expect")
+    if expect is not None:
+        try:
+            with open(path, "rb") as f:
+                current = _etag(f.read())
+        except OSError:
+            current = None
+        if current != expect:
+            return {"type": "written", "ok": False, "conflict": True}
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         tmp = f"{path}.tmp{os.getpid()}"
@@ -217,7 +242,7 @@ def drive(
         elif kind == "need_read":
             data = _read(effect["locator"], host)
         elif kind == "need_write":
-            data = _write(effect)
+            data = _write(effect, host)
         elif kind == "need_user_action":
             if handle_action is None:
                 raise UnsupportedError("this call cannot ask the user for anything")

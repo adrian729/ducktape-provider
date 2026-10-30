@@ -162,7 +162,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJ2ZXJzaW9uIjogIjEuMCIsICJhdXRoZW50aWNhdGlvbiI6IHsidHlwZSI6ICJ1c2VyX29hdXRoIiwgImNsaWVudF9pZCI6ICJjaWRfMSJ9LCAid29ya3NwYWNlX2lkIjogIndzXzEifQ=="
+        "bytes": "eyJ2ZXJzaW9uIjogIjEuMCIsICJhdXRoZW50aWNhdGlvbiI6IHsidHlwZSI6ICJ1c2VyX29hdXRoIiwgImNsaWVudF9pZCI6ICJjaWRfMSJ9LCAid29ya3NwYWNlX2lkIjogIndzXzEifQ==",
+        "etag": "8f0532787c381a1e05cf3ff1e66f84ff7af95af086031f622f343b1db1f03e37"
       }
     },
     {
@@ -178,7 +179,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJhY2Nlc3NfdG9rZW4iOiAic2stYW50LW9hdDAxLXNvb24iLCAiZXhwaXJlc19hdCI6IDE3NjE2OTYxMDAsICJyZWZyZXNoX3Rva2VuIjogInJ0XzEifQ=="
+        "bytes": "eyJhY2Nlc3NfdG9rZW4iOiAic2stYW50LW9hdDAxLXNvb24iLCAiZXhwaXJlc19hdCI6IDE3NjE2OTYxMDAsICJyZWZyZXNoX3Rva2VuIjogInJ0XzEifQ==",
+        "etag": "a9906f3b62b73b58cf3e1427dd34627690c906ed1ea87fa0a6a68af94f97c821"
       }
     },
     {

@@ -148,7 +148,8 @@
       "input": {
         "type": "read",
         "found": true,
-        "bytes": "eyJhdXRoZW50aWNhdGlvbiI6IHsidHlwZSI6ICJvaWRjX2ZlZGVyYXRpb24iLCAiZmVkZXJhdGlvbl9ydWxlX2lkIjogImZyXzEifX0="
+        "bytes": "eyJhdXRoZW50aWNhdGlvbiI6IHsidHlwZSI6ICJvaWRjX2ZlZGVyYXRpb24iLCAiZmVkZXJhdGlvbl9ydWxlX2lkIjogImZyXzEifX0=",
+        "etag": "722f3592c45217e9e244c57139a1e2c10f855f8df821abc6821ac3e7972531fb"
       }
     },
     {

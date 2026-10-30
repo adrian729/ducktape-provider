@@ -38,7 +38,7 @@
       const index = await (await fetch("/fixtures.json")).json();
       for (const f of index) {
         const fixture = await (await fetch(f.path)).json();
-        const problem = mismatch(replay(core, fixture), fixture.exchange);
+        const problem = mismatch(await replay(core, fixture), fixture.exchange);
         if (problem) { results.fail += 1; results.failures.push(`${f.wire}/${f.name}: ${problem}`); say(`✖ ${f.wire}/${f.name}: ${problem}`, "fail"); }
         else results.pass += 1;
       }

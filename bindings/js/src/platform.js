@@ -37,6 +37,12 @@ export async function writeFile(path, bytes, isPrivate) {
   }
 }
 
+/** Lower-case hex SHA-256 of bytes, the etag hosts report for file reads. */
+export async function etagOf(bytes) {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Random bytes from the runtime. */
 export function randomBytes(n) {
   const out = new Uint8Array(n);
